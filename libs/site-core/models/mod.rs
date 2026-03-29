@@ -1,0 +1,12 @@
+pub mod agent;
+pub mod profile;
+pub mod experience;
+pub mod skill;
+pub mod education;
+pub mod project;
+pub mod article;
+pub mod link;
+pub mod faq;
+pub mod values;
+pub mod gaps;
+pub mod instructions;

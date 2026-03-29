@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = [
+    "cmd/server",
+    "libs/site-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Peter Manahan", "Claude <noreply@anthropic.com>"]
+license = "MIT"
+
+[workspace.dependencies]
+site-core = { path = "libs/site-core" }
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tower-http = { version = "0.6", features = ["cors"] }
+uuid = { version = "1", features = ["v4"] }
+rust-embed = { version = "8", features = ["include-exclude"] }
+mime_guess = "2"
+rig-core = "0.33"
+futures = "0.3"
+tokio-stream = "0.1"
+schemars = "0.8"
+dotenvy = "0.15.7"
+clap = { version = "4", features = ["derive"] }
+argon2 = "0.5.3"
+hex = "0.4.3"
+rand = "0.10.0"
+axum-test = "19"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1

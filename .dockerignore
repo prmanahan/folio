@@ -1,0 +1,15 @@
+target/
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+.git/
+.worktrees/
+.superpowers/
+data/*.db
+docs/
+tests/
+e2e/
+ai_docs/
+.claude/
+*.md
+justfile

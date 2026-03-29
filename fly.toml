@@ -1,0 +1,33 @@
+app = "folio-prmanahan"
+primary_region = "yyz"
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[mounts]
+  source = "site_data"
+  destination = "/app/data"
+
+[env]
+  PORT = "8080"
+  DATABASE_URL = "/app/data/site.db"
+  CORS_ORIGIN = "https://peter.manahan.io"
+  TRUSTED_IP_HEADER = "fly-client-ip"
+
+[[http_service.checks]]
+  grace_period = "15s"
+  interval = "30s"
+  method = "GET"
+  path = "/api/health"
+  protocol = "http"
+  timeout = "5s"
+
+[vm]
+  size = "shared-cpu-1x"
+  memory = "256mb"

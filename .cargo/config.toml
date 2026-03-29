@@ -1,0 +1,7 @@
+# Use lld linker for faster builds where available
+# Falls back to default linker if lld is not installed
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

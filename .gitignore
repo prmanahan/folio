@@ -1,0 +1,17 @@
+target/
+data/*.db
+.worktrees/
+frontend/build/
+frontend/node_modules/
+.env
+node_modules/
+playwright-report/
+test-results/
+data/*.db-shm
+data/*.db-wal
+.superpowers/
+# Internal docs, planning, and tooling (not for publishing)
+agent_docs/
+sbom/
+MERGE_MESSAGE
+.claude/

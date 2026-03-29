@@ -1,0 +1,71 @@
+# Deploy workflow — triggers on push to main, runs tests first, then deploys.
+#
+# Design: Single workflow with two jobs (test -> deploy) rather than two separate
+# workflow files. This eliminates the race condition that workflow_run introduces:
+# with workflow_run, a push triggers both workflows simultaneously and the deploy
+# workflow waits for the test workflow to complete by name — but if two pushes land
+# close together, the deploy can pair with the wrong test run. A single file with
+# needs: [test] is unambiguous: this deploy runs after these tests, full stop.
+#
+# The test job duplicates test.yml intentionally. On PRs, only test.yml runs.
+# On push to main, this workflow runs the full test+deploy sequence.
+# test.yml gives PR authors fast feedback without deploy side effects.
+#
+# Required secret: FLY_API_TOKEN (repo secret, generate with: fly tokens create deploy)
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test and Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2.9.1
+
+      - name: Install Node 22
+        uses: actions/setup-node@v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        run: cd frontend && npm ci && npm run build
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Run Clippy
+        run: cargo clippy -- -D warnings
+
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-latest
+    needs: [test]
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@1.5
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only
+
+      - name: Post-deploy health check
+        run: curl --retry 5 --retry-delay 5 --fail https://peter.manahan.io/api/health

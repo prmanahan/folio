@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: ironworks;
+}
+
+@plugin "daisyui/theme" {
+  name: "ironworks";
+  default: true;
+  color-scheme: dark;
+
+  --color-base-100: oklch(12% 0.015 45);
+  --color-base-200: oklch(17% 0.018 45);
+  --color-base-300: oklch(21% 0.020 45);
+  --color-base-content: oklch(90% 0.015 60);
+
+  --color-primary: oklch(60% 0.08 65);
+  --color-primary-content: oklch(12% 0.015 45);
+
+  --color-secondary: oklch(56% 0.07 42);
+  --color-secondary-content: oklch(90% 0.010 60);
+
+  --color-accent: oklch(54% 0.06 195);
+  --color-accent-content: oklch(12% 0.015 45);
+
+  --color-neutral: oklch(35% 0.025 45);
+  --color-neutral-content: oklch(80% 0.015 55);
+
+  --color-info:    oklch(54% 0.06 195);
+  --color-success: oklch(52% 0.07 160);
+  --color-warning: oklch(70% 0.10 65);
+  --color-error:   oklch(50% 0.10 20);
+
+  --radius-selector: 0.125rem;
+  --radius-field:    0.125rem;
+  --radius-box:      0.1875rem;
+  --border:          1px;
+  --depth:           1;
+}
+
+@plugin "@tailwindcss/typography";
+
+/* -------------------------------------------------------
+   Notebook (Warm Sepia) palette — admin shell variables
+   Scoped to .admin-shell to avoid bleeding into section pages.
+   All admin layout components use these via var(--nb-*)
+------------------------------------------------------- */
+.admin-shell {
+  --nb-bg:         #1a1612;
+  --nb-bg2:        #201c18;
+  --nb-bg3:        #272320;
+  --nb-bg4:        #2f2b27;
+  --nb-border:     #35302c;
+  --nb-text:       #e8e0d6;
+  --nb-text2:      #9a9088;
+  --nb-text3:      #5e5850;
+  --nb-gold:       #b89a50;
+  --nb-gold-dim:   #7a6535;
+  --nb-green:      #4a8f65;
+  --nb-green-dim:  #2a5040;
+  --nb-amber:      #c07830;
+  --nb-red:        #8f4040;
+  --nb-red-text:   #c87070;
+  --nb-blue:       #4878a0;
+
+  background-color: var(--nb-bg);
+  color: var(--nb-text);
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* -------------------------------------------------------
+   Shared notebook form classes
+------------------------------------------------------- */
+.admin-shell .nb-input {
+  width: 100%;
+  background: var(--nb-bg);
+  border: 1px solid var(--nb-border);
+  border-radius: 0.3125rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--nb-text);
+  font-size: 0.875rem;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+
+.admin-shell .nb-input:focus {
+  border-color: var(--nb-gold);
+  outline: none;
+}
+
+.admin-shell .nb-label {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--nb-text3);
+  display: block;
+  margin-bottom: 0.3125rem;
+}
