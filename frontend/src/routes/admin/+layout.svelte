@@ -1,7 +1,9 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { logout } from '$lib/admin-api';
+  import { logout, getDashboard } from '$lib/admin-api';
+  import type { DashboardCounts } from '$lib/admin-types';
+  import { onMount } from 'svelte';
   import '../../admin.css';
 
   let { children } = $props();
@@ -13,10 +15,16 @@
     label: string;
     icon: string;
     exact?: boolean;
+    count?: number;
   }
 
-  const navLinks: NavLink[] = [
-    { href: '/admin',            label: 'Dashboard',  icon: '▦', exact: true },
+  let counts = $state<DashboardCounts | null>(null);
+
+  const overviewLinks: NavLink[] = [
+    { href: '/admin', label: 'Dashboard', icon: '▦', exact: true },
+  ];
+
+  const contentLinks: NavLink[] = [
     { href: '/admin/profile',    label: 'Profile',    icon: '◈' },
     { href: '/admin/experience', label: 'Experience', icon: '◉' },
     { href: '/admin/skills',     label: 'Skills',     icon: '◆' },
@@ -28,6 +36,20 @@
     { href: '/admin/agents',     label: 'Agents',     icon: '◈' },
   ];
 
+  function getCount(link: NavLink): number | null {
+    if (!counts) return null;
+    const countMap: Record<string, number> = {
+      '/admin/experience': counts.experiences,
+      '/admin/skills':     counts.skills,
+      '/admin/education':  counts.education,
+      '/admin/projects':   counts.projects,
+      '/admin/articles':   counts.articles,
+      '/admin/links':      counts.links,
+    };
+    const val = countMap[link.href];
+    return val !== undefined ? val : null;
+  }
+
   function isActive(link: NavLink): boolean {
     if (link.exact) return page.url.pathname === link.href;
     return page.url.pathname.startsWith(link.href);
@@ -37,6 +59,16 @@
     await logout();
     goto('/admin/login');
   }
+
+  onMount(async () => {
+    if (!isLogin) {
+      try {
+        counts = await getDashboard();
+      } catch {
+        // counts stay null — badges just won't show
+      }
+    }
+  });
 </script>
 
 {#if isLogin}
@@ -79,22 +111,20 @@
         ">Portfolio Admin</div>
       </div>
 
-      <!-- Nav section label -->
-      <div style="
-        padding: 0.75rem 0.875rem 0.25rem;
-      ">
+      <!-- Overview section label -->
+      <div style="padding: 0.75rem 0.875rem 0.25rem;">
         <span style="
           font-size: 0.6rem;
           font-weight: 500;
           color: var(--nb-text3);
           letter-spacing: 0.12em;
           text-transform: uppercase;
-        ">Content</span>
+        ">Overview</span>
       </div>
 
-      <!-- Nav links -->
-      <nav style="flex: 1; padding: 0 0.5rem;">
-        {#each navLinks as link}
+      <!-- Overview nav links -->
+      <nav style="padding: 0 0.5rem;">
+        {#each overviewLinks as link}
           {@const active = isActive(link)}
           <a
             href={link.href}
@@ -110,11 +140,53 @@
               transition: background 0.12s, color 0.12s;
               background: {active ? 'var(--nb-bg4)' : 'transparent'};
               color: {active ? 'var(--nb-gold)' : 'var(--nb-text2)'};
-              border-left: 2px solid {active ? 'var(--nb-gold)' : 'transparent'};
+              font-weight: {active ? '500' : '400'};
             "
           >
             <span style="font-size: 0.7rem; opacity: 0.7;">{link.icon}</span>
             <span>{link.label}</span>
+          </a>
+        {/each}
+      </nav>
+
+      <!-- Content section label -->
+      <div style="padding: 0.75rem 0.875rem 0.25rem;">
+        <span style="
+          font-size: 0.6rem;
+          font-weight: 500;
+          color: var(--nb-text3);
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+        ">Content</span>
+      </div>
+
+      <!-- Content nav links -->
+      <nav style="flex: 1; padding: 0 0.5rem;">
+        {#each contentLinks as link}
+          {@const active = isActive(link)}
+          {@const count = getCount(link)}
+          <a
+            href={link.href}
+            style="
+              display: flex;
+              align-items: center;
+              gap: 0.5rem;
+              padding: 0.375rem 0.625rem;
+              border-radius: 0.25rem;
+              margin-bottom: 0.125rem;
+              font-size: 0.8125rem;
+              text-decoration: none;
+              transition: background 0.12s, color 0.12s;
+              background: {active ? 'var(--nb-bg4)' : 'transparent'};
+              color: {active ? 'var(--nb-gold)' : 'var(--nb-text2)'};
+              font-weight: {active ? '500' : '400'};
+            "
+          >
+            <span style="font-size: 0.7rem; opacity: 0.7;">{link.icon}</span>
+            <span>{link.label}</span>
+            {#if count !== null}
+              <span style="margin-left: auto; font-size: 0.6875rem; color: var(--nb-text3); font-family: 'IBM Plex Mono', monospace;">{count}</span>
+            {/if}
           </a>
         {/each}
       </nav>

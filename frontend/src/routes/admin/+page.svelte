@@ -34,25 +34,75 @@
   });
 </script>
 
-<div style="padding: 2rem 2rem 3rem;">
+<div style="padding: 0;">
   <!-- Page header -->
-  <div style="margin-bottom: 2rem; border-bottom: 1px solid var(--nb-border); padding-bottom: 1.25rem;">
+  <div style="padding: 1.5rem 2rem 0; border-bottom: 1px solid var(--nb-border); margin-bottom: 0;">
     <h1 style="
-      font-size: 1.25rem;
-      font-weight: 600;
+      font-size: 1.125rem;
+      font-weight: 500;
       color: var(--nb-text);
-      margin: 0 0 0.25rem;
-      letter-spacing: 0.01em;
+      margin: 0 0 0.1875rem;
+      letter-spacing: -0.01em;
     ">Dashboard</h1>
     <p style="
-      font-size: 0.8125rem;
-      color: var(--nb-text2);
-      margin: 0;
+      font-size: 0.75rem;
+      color: var(--nb-text3);
+      margin: 0 0 1rem;
     ">Overview of your portfolio content</p>
   </div>
 
-  <!-- Quick actions -->
-  <div style="margin-bottom: 2rem;">
+  <div style="padding: 2rem 2rem 3rem;">
+    <!-- Quick actions -->
+    <div style="margin-bottom: 2rem;">
+      <div style="
+        font-size: 0.625rem;
+        font-weight: 500;
+        color: var(--nb-text3);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        margin-bottom: 0.625rem;
+      ">Quick Actions</div>
+      <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+        {#each quickActions as action, i}
+          <a
+            href={action.href}
+            style="
+              padding: 0.375rem 0.875rem;
+              background: {i === 0 ? 'var(--nb-gold-dim)' : 'var(--nb-bg3)'};
+              border: 1px solid {i === 0 ? 'var(--nb-gold)' : 'var(--nb-border)'};
+              border-radius: 0.25rem;
+              color: {i === 0 ? 'var(--nb-text)' : 'var(--nb-text2)'};
+              font-size: 0.8125rem;
+              font-weight: {i === 0 ? '600' : '400'};
+              text-decoration: none;
+              transition: border-color 0.12s, color 0.12s, background 0.12s;
+            "
+            onmouseenter={(e) => {
+              const el = e.currentTarget as HTMLAnchorElement;
+              if (i === 0) {
+                el.style.background = 'var(--nb-gold)';
+                el.style.color = 'var(--nb-bg)';
+              } else {
+                el.style.borderColor = 'var(--nb-gold-dim)';
+                el.style.color = 'var(--nb-gold)';
+              }
+            }}
+            onmouseleave={(e) => {
+              const el = e.currentTarget as HTMLAnchorElement;
+              if (i === 0) {
+                el.style.background = 'var(--nb-gold-dim)';
+                el.style.color = 'var(--nb-text)';
+              } else {
+                el.style.borderColor = 'var(--nb-border)';
+                el.style.color = 'var(--nb-text2)';
+              }
+            }}
+          >{action.label}</a>
+        {/each}
+      </div>
+    </div>
+
+    <!-- Stats section label -->
     <div style="
       font-size: 0.625rem;
       font-weight: 500;
@@ -60,106 +110,72 @@
       letter-spacing: 0.12em;
       text-transform: uppercase;
       margin-bottom: 0.625rem;
-    ">Quick Actions</div>
-    <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
-      {#each quickActions as action}
-        <a
-          href={action.href}
-          style="
-            padding: 0.375rem 0.875rem;
-            background: var(--nb-bg3);
-            border: 1px solid var(--nb-border);
-            border-radius: 0.25rem;
-            color: var(--nb-text2);
-            font-size: 0.8125rem;
-            text-decoration: none;
-            transition: border-color 0.12s, color 0.12s;
-          "
-          onmouseenter={(e) => {
-            const el = e.currentTarget as HTMLAnchorElement;
-            el.style.borderColor = 'var(--nb-gold-dim)';
-            el.style.color = 'var(--nb-gold)';
-          }}
-          onmouseleave={(e) => {
-            const el = e.currentTarget as HTMLAnchorElement;
-            el.style.borderColor = 'var(--nb-border)';
-            el.style.color = 'var(--nb-text2)';
-          }}
-        >{action.label}</a>
-      {/each}
-    </div>
+    ">Content Counts</div>
+
+    {#if error}
+      <div style="
+        padding: 0.75rem 1rem;
+        background: color-mix(in srgb, var(--nb-red) 12%, transparent);
+        border: 1px solid var(--nb-red);
+        border-radius: 0.25rem;
+        color: var(--nb-red-text);
+        font-size: 0.875rem;
+        margin-bottom: 1rem;
+      ">{error}</div>
+    {:else if !counts}
+      <div style="color: var(--nb-text3); font-size: 0.875rem; padding: 1rem 0;">Loading…</div>
+    {:else}
+      <div style="
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 0.75rem;
+      ">
+        {#each cards as card}
+          <a
+            href={card.href}
+            style="
+              display: block;
+              background: var(--nb-bg2);
+              border: 1px solid var(--nb-border);
+              border-radius: 0.5rem;
+              padding: 1rem 1.125rem;
+              text-decoration: none;
+              transition: border-color 0.12s, background 0.12s;
+            "
+            onmouseenter={(e) => {
+              const el = e.currentTarget as HTMLAnchorElement;
+              el.style.borderColor = 'var(--nb-gold-dim)';
+              el.style.background = 'var(--nb-bg3)';
+            }}
+            onmouseleave={(e) => {
+              const el = e.currentTarget as HTMLAnchorElement;
+              el.style.borderColor = 'var(--nb-border)';
+              el.style.background = 'var(--nb-bg2)';
+            }}
+          >
+            <div style="
+              font-size: 0.6rem;
+              font-weight: 500;
+              color: var(--nb-text3);
+              letter-spacing: 0.12em;
+              text-transform: uppercase;
+              margin-bottom: 0.375rem;
+            ">{card.label}</div>
+            <div style="
+              font-size: 1.75rem;
+              font-weight: 400;
+              color: var(--nb-gold);
+              font-family: 'IBM Plex Mono', monospace;
+              line-height: 1;
+            ">{counts[card.key]}</div>
+            <div style="
+              font-size: 0.6875rem;
+              color: var(--nb-text3);
+              margin-top: 0.375rem;
+            ">→ Manage</div>
+          </a>
+        {/each}
+      </div>
+    {/if}
   </div>
-
-  <!-- Stats section label -->
-  <div style="
-    font-size: 0.625rem;
-    font-weight: 500;
-    color: var(--nb-text3);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    margin-bottom: 0.625rem;
-  ">Content Counts</div>
-
-  {#if error}
-    <div style="
-      padding: 0.75rem 1rem;
-      background: color-mix(in srgb, var(--nb-red) 12%, transparent);
-      border: 1px solid var(--nb-red);
-      border-radius: 0.25rem;
-      color: var(--nb-red-text);
-      font-size: 0.875rem;
-      margin-bottom: 1rem;
-    ">{error}</div>
-  {:else if !counts}
-    <div style="display: flex; align-items: center; gap: 0.5rem; color: var(--nb-text3); font-size: 0.875rem; padding: 1rem 0;">
-      <span>Loading…</span>
-    </div>
-  {:else}
-    <div style="
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 0.75rem;
-    ">
-      {#each cards as card}
-        <a
-          href={card.href}
-          style="
-            display: block;
-            background: var(--nb-bg2);
-            border: 1px solid var(--nb-border);
-            border-radius: 0.25rem;
-            padding: 1rem 1.125rem;
-            text-decoration: none;
-            transition: border-color 0.12s, background 0.12s;
-          "
-          onmouseenter={(e) => {
-            const el = e.currentTarget as HTMLAnchorElement;
-            el.style.borderColor = 'var(--nb-gold-dim)';
-            el.style.background = 'var(--nb-bg3)';
-          }}
-          onmouseleave={(e) => {
-            const el = e.currentTarget as HTMLAnchorElement;
-            el.style.borderColor = 'var(--nb-border)';
-            el.style.background = 'var(--nb-bg2)';
-          }}
-        >
-          <div style="
-            font-size: 0.6rem;
-            font-weight: 500;
-            color: var(--nb-text3);
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            margin-bottom: 0.375rem;
-          ">{card.label}</div>
-          <div style="
-            font-size: 1.75rem;
-            font-weight: 600;
-            color: var(--nb-gold);
-            font-family: 'IBM Plex Mono', monospace;
-            line-height: 1;
-          ">{counts[card.key]}</div>
-        </a>
-      {/each}
-    </div>
-  {/if}
 </div>

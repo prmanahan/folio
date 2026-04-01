@@ -23,42 +23,35 @@
 
 <div
   class="admin-shell"
-  style="min-height: 100dvh; display: flex; align-items: center; justify-content: center;"
+  style="min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center;"
 >
+  <!-- Identity block — outside and above the card -->
+  <div style="margin-bottom: 2.5rem; text-align: center;">
+    <div style="
+      font-size: 1.25rem;
+      font-weight: 300;
+      color: var(--nb-text);
+      letter-spacing: 0.04em;
+      line-height: 1.2;
+    ">Peter Manahan</div>
+    <div style="
+      font-size: 0.6875rem;
+      font-weight: 500;
+      color: var(--nb-gold);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      margin-top: 0.4rem;
+    ">Portfolio Admin</div>
+  </div>
+
   <div style="
     width: 100%;
     max-width: 22rem;
     background: var(--nb-bg2);
     border: 1px solid var(--nb-border);
-    border-radius: 0.375rem;
+    border-radius: 0.625rem;
     padding: 2.5rem 2rem;
   ">
-    <!-- Site identity -->
-    <div style="text-align: center; margin-bottom: 2rem;">
-      <div style="
-        font-size: 1.4rem;
-        font-weight: 600;
-        color: var(--nb-text);
-        letter-spacing: 0.01em;
-        line-height: 1.2;
-      ">Peter Manahan</div>
-      <div style="
-        font-size: 0.625rem;
-        font-weight: 500;
-        color: var(--nb-gold);
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        margin-top: 0.4rem;
-      ">Portfolio Admin</div>
-      <div style="
-        width: 2rem;
-        height: 1px;
-        background: var(--nb-gold-dim);
-        margin: 0.875rem auto 0;
-        opacity: 0.6;
-      "></div>
-    </div>
-
     <form onsubmit={handleLogin}>
       <div style="margin-bottom: 0.75rem;">
         <input
@@ -102,20 +95,20 @@
         style="
           width: 100%;
           padding: 0.625rem 1rem;
-          background: var(--nb-gold-dim);
+          background: var(--nb-gold);
           border: 1px solid var(--nb-gold);
           border-radius: 0.25rem;
-          color: var(--nb-text);
+          color: var(--nb-bg);
           font-size: 0.875rem;
           font-weight: 500;
           font-family: inherit;
           cursor: {loading ? 'not-allowed' : 'pointer'};
           opacity: {loading ? '0.6' : '1'};
-          transition: background 0.12s;
+          transition: opacity 0.12s;
           letter-spacing: 0.03em;
         "
-        onmouseenter={(e) => { if (!loading) (e.currentTarget as HTMLButtonElement).style.background = 'var(--nb-gold)'; }}
-        onmouseleave={(e) => (e.currentTarget as HTMLButtonElement).style.background = 'var(--nb-gold-dim)'}
+        onmouseenter={(e) => { if (!loading) (e.currentTarget as HTMLButtonElement).style.opacity = '0.9'; }}
+        onmouseleave={(e) => (e.currentTarget as HTMLButtonElement).style.opacity = loading ? '0.6' : '1'}
       >
         {loading ? 'Signing in…' : 'Sign in'}
       </button>

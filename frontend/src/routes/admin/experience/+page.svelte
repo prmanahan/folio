@@ -14,6 +14,8 @@
   let saving = $state(false);
   let toastMessage = $state('');
   let toastType = $state<'success' | 'error'>('success');
+  let isDirty = $state(false);
+  let deletingId = $state<number | null>(null);
 
   function emptyForm(): ExperienceInput {
     return {
@@ -59,6 +61,7 @@
     form = emptyForm();
     editingId = null;
     creatingNew = true;
+    isDirty = false;
   }
 
   function startEdit(item: ExperienceFull) {
@@ -87,6 +90,7 @@
       manager_would_say: item.manager_would_say,
       reports_would_say: item.reports_would_say,
     };
+    isDirty = false;
   }
 
   async function handleSave() {
@@ -100,6 +104,7 @@
       await loadItems();
       editingId = null;
       creatingNew = false;
+      isDirty = false;
       toastMessage = editingId !== null ? 'Experience updated' : 'Experience created';
       toastType = 'success';
     } catch (err) {
@@ -111,13 +116,14 @@
   }
 
   async function handleDelete(id: number) {
-    if (!confirm('Delete this experience?')) return;
     try {
       await deleteExperience(id);
       if (editingId === id) {
         editingId = null;
         creatingNew = false;
+        isDirty = false;
       }
+      deletingId = null;
       await loadItems();
       toastMessage = 'Experience deleted';
       toastType = 'success';
@@ -130,6 +136,7 @@
   function cancel() {
     editingId = null;
     creatingNew = false;
+    isDirty = false;
   }
 
   const cardStyle = 'background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.5rem; padding: 1rem 1.25rem; display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 0.5rem; cursor: pointer; transition: border-color 0.15s, background 0.15s;';
@@ -164,7 +171,8 @@
             <button style="padding: 0.375rem 0.75rem; background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 600; cursor: pointer;" onclick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
-        <div style="padding: 1.25rem;">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div style="padding: 1.25rem;" oninput={() => isDirty = true}>
           <FormSection title="Public Information" tier="public">
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
               <div>
@@ -188,7 +196,7 @@
                 <input id="new-end-date" class="nb-input" placeholder="e.g. 2023-06" bind:value={form.end_date} disabled={form.is_current} />
               </div>
               <div style="grid-column: 1 / -1; display: flex; align-items: center; gap: 0.5rem;">
-                <input type="checkbox" id="new-is-current" bind:checked={form.is_current} />
+                <input type="checkbox" id="new-is-current" bind:checked={form.is_current} onchange={() => isDirty = true} />
                 <label class="nb-label" for="new-is-current" style="margin-bottom: 0;">Currently working here</label>
               </div>
               <div style="grid-column: 1 / -1;">
@@ -261,6 +269,12 @@
         <div style="padding: 0.875rem 1.25rem; background: var(--nb-bg2); border-top: 1px solid var(--nb-border); display: flex; align-items: center; border-radius: 0 0 0.5rem 0.5rem;">
           <button style="padding: 0.375rem 0.75rem; background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 600; cursor: pointer; margin-right: 0.5rem;" onclick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
           <button style="padding: 0.375rem 0.75rem; background: transparent; border: 1px solid var(--nb-border); border-radius: 0.25rem; color: var(--nb-text2); font-size: 0.75rem; cursor: pointer;" onclick={cancel}>Discard</button>
+          {#if isDirty}
+            <span style="margin-left: auto; display: flex; align-items: center; gap: 0.375rem;">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--nb-amber);"></span>
+              <span style="font-size: 0.6875rem; color: var(--nb-text3);">Unsaved changes</span>
+            </span>
+          {/if}
         </div>
       </div>
     {/if}
@@ -276,14 +290,26 @@
             {/if}
           </div>
           <div style={cardActionsStyle}>
-            <button
-              style={actionBtnStyle}
-              onclick={() => editingId === item.id ? cancel() : startEdit(item)}
-            >{editingId === item.id ? 'Close' : 'Edit'}</button>
-            <button
-              style="{actionBtnStyle} color: var(--nb-red-text);"
-              onclick={() => handleDelete(item.id)}
-            >Delete</button>
+            {#if deletingId === item.id}
+              <span style="font-size: 0.75rem; color: var(--nb-text2);">Are you sure?</span>
+              <button
+                style="{actionBtnStyle} border-color: var(--nb-red); color: var(--nb-red-text);"
+                onclick={() => handleDelete(item.id)}
+              >Yes, delete</button>
+              <button
+                style={actionBtnStyle}
+                onclick={() => deletingId = null}
+              >Cancel</button>
+            {:else}
+              <button
+                style={actionBtnStyle}
+                onclick={() => editingId === item.id ? cancel() : startEdit(item)}
+              >{editingId === item.id ? 'Close' : 'Edit'}</button>
+              <button
+                style="{actionBtnStyle} color: var(--nb-red-text);"
+                onclick={() => deletingId = item.id}
+              >Delete</button>
+            {/if}
           </div>
         </div>
 
@@ -296,7 +322,8 @@
                 <button style="padding: 0.375rem 0.75rem; background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 600; cursor: pointer;" onclick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
               </div>
             </div>
-            <div style="padding: 1.25rem;">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div style="padding: 1.25rem;" oninput={() => isDirty = true}>
               <FormSection title="Public Information" tier="public">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
                   <div>
@@ -320,7 +347,7 @@
                     <input id="edit-end-date-{item.id}" class="nb-input" placeholder="e.g. 2023-06" bind:value={form.end_date} disabled={form.is_current} />
                   </div>
                   <div style="grid-column: 1 / -1; display: flex; align-items: center; gap: 0.5rem;">
-                    <input type="checkbox" id="edit-is-current-{item.id}" bind:checked={form.is_current} />
+                    <input type="checkbox" id="edit-is-current-{item.id}" bind:checked={form.is_current} onchange={() => isDirty = true} />
                     <label class="nb-label" for="edit-is-current-{item.id}" style="margin-bottom: 0;">Currently working here</label>
                   </div>
                   <div style="grid-column: 1 / -1;">
@@ -393,6 +420,12 @@
             <div style="padding: 0.875rem 1.25rem; background: var(--nb-bg2); border-top: 1px solid var(--nb-border); display: flex; align-items: center; border-radius: 0 0 0.5rem 0.5rem;">
               <button style="padding: 0.375rem 0.75rem; background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 600; cursor: pointer; margin-right: 0.5rem;" onclick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
               <button style="padding: 0.375rem 0.75rem; background: transparent; border: 1px solid var(--nb-border); border-radius: 0.25rem; color: var(--nb-text2); font-size: 0.75rem; cursor: pointer;" onclick={cancel}>Discard</button>
+              {#if isDirty}
+                <span style="margin-left: auto; display: flex; align-items: center; gap: 0.375rem;">
+                  <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--nb-amber);"></span>
+                  <span style="font-size: 0.6875rem; color: var(--nb-text3);">Unsaved changes</span>
+                </span>
+              {/if}
             </div>
           </div>
         {/if}

@@ -17,7 +17,8 @@
 <div class="grid grid-cols-2 gap-4 min-h-[300px]">
   <textarea
     id="markdown-editor"
-    class="textarea textarea-bordered w-full h-full font-mono text-sm"
+    class="nb-input"
+    style="font-family: 'IBM Plex Mono', monospace; font-size: 0.8125rem; height: 100%; resize: vertical;"
     bind:value
     placeholder="Write markdown..."
   ></textarea>

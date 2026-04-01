@@ -25,16 +25,22 @@
   }
 </script>
 
-<div class="flex flex-wrap gap-2 p-2 bg-base-300 rounded-lg min-h-[2.5rem]">
+<div style="display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem; background: var(--nb-bg3); border: 1px solid var(--nb-border); border-radius: 0.25rem; min-height: 2.5rem;">
   {#each value as tag, i}
-    <span class="badge badge-lg gap-1">
+    <span style="display: inline-flex; align-items: center; gap: 0.25rem; background: var(--nb-bg4); border: 1px solid var(--nb-border); border-radius: 0.25rem; padding: 0.125rem 0.5rem; font-size: 0.75rem; color: var(--nb-text2);">
       {tag}
-      <button class="btn btn-ghost btn-xs" onclick={() => removeTag(i)}>&times;</button>
+      <button
+        style="background: transparent; border: none; color: var(--nb-text3); font-size: 0.75rem; cursor: pointer; padding: 0.125rem 0.25rem; line-height: 1;"
+        onmouseenter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--nb-red-text)'; }}
+        onmouseleave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--nb-text3)'; }}
+        onclick={() => removeTag(i)}
+      >&times;</button>
     </span>
   {/each}
   <input
     type="text"
-    class="input input-sm input-ghost flex-1 min-w-[120px]"
+    class="nb-input"
+    style="flex: 1; min-width: 120px; padding: 0.125rem 0.25rem; font-size: 0.8125rem; background: transparent; border-color: transparent;"
     {placeholder}
     bind:value={input}
     onkeydown={addTag}

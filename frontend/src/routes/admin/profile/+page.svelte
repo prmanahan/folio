@@ -33,6 +33,7 @@
   let saving = $state(false);
   let toastMessage = $state('');
   let toastType = $state<'success' | 'error'>('success');
+  let isDirty = $state(false);
 
   onMount(async () => {
     try {
@@ -72,6 +73,7 @@
     saving = true;
     try {
       await updateProfile(form);
+      isDirty = false;
       toastMessage = 'Profile saved';
       toastType = 'success';
     } catch (err) {
@@ -100,106 +102,109 @@
   {#if loading}
     <div style="color: var(--nb-text3); font-size: 0.875rem; padding: 1rem 0;">Loading…</div>
   {:else}
-    <FormSection title="Public Information" tier="public">
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
-        <div>
-          <label class="nb-label" for="field-name">Name</label>
-          <input id="field-name" class="nb-input" bind:value={form.name} />
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div oninput={() => isDirty = true}>
+      <FormSection title="Public Information" tier="public">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
+          <div>
+            <label class="nb-label" for="field-name">Name</label>
+            <input id="field-name" class="nb-input" bind:value={form.name} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-email">Email</label>
+            <input id="field-email" class="nb-input" type="email" bind:value={form.email} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-title">Title</label>
+            <input id="field-title" class="nb-input" bind:value={form.title} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-location">Location</label>
+            <input id="field-location" class="nb-input" bind:value={form.location} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-phone">Phone</label>
+            <input id="field-phone" class="nb-input" bind:value={form.phone} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-linkedin">LinkedIn URL</label>
+            <input id="field-linkedin" class="nb-input" bind:value={form.linkedin_url} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-github">GitHub URL</label>
+            <input id="field-github" class="nb-input" bind:value={form.github_url} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-twitter">Twitter URL</label>
+            <input id="field-twitter" class="nb-input" bind:value={form.twitter_url} />
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label class="nb-label" for="field-elevator-pitch">Elevator Pitch</label>
+            <textarea id="field-elevator-pitch" class="nb-input" rows="4" bind:value={form.elevator_pitch}></textarea>
+          </div>
+          <div>
+            <label class="nb-label" for="field-availability-status">Availability Status</label>
+            <input id="field-availability-status" class="nb-input" bind:value={form.availability_status} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-availability-date">Availability Date</label>
+            <input id="field-availability-date" class="nb-input" bind:value={form.availability_date} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-remote-preference">Remote Preference</label>
+            <input id="field-remote-preference" class="nb-input" bind:value={form.remote_preference} />
+          </div>
         </div>
-        <div>
-          <label class="nb-label" for="field-email">Email</label>
-          <input id="field-email" class="nb-input" type="email" bind:value={form.email} />
-        </div>
-        <div>
-          <label class="nb-label" for="field-title">Title</label>
-          <input id="field-title" class="nb-input" bind:value={form.title} />
-        </div>
-        <div>
-          <label class="nb-label" for="field-location">Location</label>
-          <input id="field-location" class="nb-input" bind:value={form.location} />
-        </div>
-        <div>
-          <label class="nb-label" for="field-phone">Phone</label>
-          <input id="field-phone" class="nb-input" bind:value={form.phone} />
-        </div>
-        <div>
-          <label class="nb-label" for="field-linkedin">LinkedIn URL</label>
-          <input id="field-linkedin" class="nb-input" bind:value={form.linkedin_url} />
-        </div>
-        <div>
-          <label class="nb-label" for="field-github">GitHub URL</label>
-          <input id="field-github" class="nb-input" bind:value={form.github_url} />
-        </div>
-        <div>
-          <label class="nb-label" for="field-twitter">Twitter URL</label>
-          <input id="field-twitter" class="nb-input" bind:value={form.twitter_url} />
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label class="nb-label" for="field-elevator-pitch">Elevator Pitch</label>
-          <textarea id="field-elevator-pitch" class="nb-input" rows="4" bind:value={form.elevator_pitch}></textarea>
-        </div>
-        <div>
-          <label class="nb-label" for="field-availability-status">Availability Status</label>
-          <input id="field-availability-status" class="nb-input" bind:value={form.availability_status} />
-        </div>
-        <div>
-          <label class="nb-label" for="field-availability-date">Availability Date</label>
-          <input id="field-availability-date" class="nb-input" bind:value={form.availability_date} />
-        </div>
-        <div>
-          <label class="nb-label" for="field-remote-preference">Remote Preference</label>
-          <input id="field-remote-preference" class="nb-input" bind:value={form.remote_preference} />
-        </div>
-      </div>
-    </FormSection>
+      </FormSection>
 
-    <FormSection title="AI Context" tier="ai">
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
-        <div style="grid-column: 1 / -1;">
-          <label class="nb-label" for="field-target-titles">Target Titles</label>
-          <TagInput bind:value={form.target_titles} placeholder="Add title" />
+      <FormSection title="AI Context" tier="ai">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
+          <div style="grid-column: 1 / -1;">
+            <label class="nb-label" for="field-target-titles">Target Titles</label>
+            <TagInput bind:value={form.target_titles} placeholder="Add title" />
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label class="nb-label" for="field-target-stages">Target Company Stages</label>
+            <TagInput bind:value={form.target_company_stages} placeholder="Add stage" />
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label class="nb-label" for="field-career-narrative">Career Narrative</label>
+            <textarea id="field-career-narrative" class="nb-input" rows="4" bind:value={form.career_narrative}></textarea>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label class="nb-label" for="field-looking-for">Looking For</label>
+            <textarea id="field-looking-for" class="nb-input" rows="3" bind:value={form.looking_for}></textarea>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label class="nb-label" for="field-not-looking-for">Not Looking For</label>
+            <textarea id="field-not-looking-for" class="nb-input" rows="3" bind:value={form.not_looking_for}></textarea>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label class="nb-label" for="field-management-style">Management Style</label>
+            <textarea id="field-management-style" class="nb-input" rows="3" bind:value={form.management_style}></textarea>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label class="nb-label" for="field-work-style">Work Style</label>
+            <textarea id="field-work-style" class="nb-input" rows="3" bind:value={form.work_style}></textarea>
+          </div>
         </div>
-        <div style="grid-column: 1 / -1;">
-          <label class="nb-label" for="field-target-stages">Target Company Stages</label>
-          <TagInput bind:value={form.target_company_stages} placeholder="Add stage" />
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label class="nb-label" for="field-career-narrative">Career Narrative</label>
-          <textarea id="field-career-narrative" class="nb-input" rows="4" bind:value={form.career_narrative}></textarea>
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label class="nb-label" for="field-looking-for">Looking For</label>
-          <textarea id="field-looking-for" class="nb-input" rows="3" bind:value={form.looking_for}></textarea>
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label class="nb-label" for="field-not-looking-for">Not Looking For</label>
-          <textarea id="field-not-looking-for" class="nb-input" rows="3" bind:value={form.not_looking_for}></textarea>
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label class="nb-label" for="field-management-style">Management Style</label>
-          <textarea id="field-management-style" class="nb-input" rows="3" bind:value={form.management_style}></textarea>
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label class="nb-label" for="field-work-style">Work Style</label>
-          <textarea id="field-work-style" class="nb-input" rows="3" bind:value={form.work_style}></textarea>
-        </div>
-      </div>
-    </FormSection>
+      </FormSection>
 
-    <FormSection title="Private Information" tier="private" collapsed>
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; margin-top: 0.75rem;">
-        <div>
-          <label class="nb-label" for="field-salary-min">Salary Minimum</label>
-          <input id="field-salary-min" type="number" class="nb-input" bind:value={form.salary_min} />
+      <FormSection title="Private Information" tier="private" collapsed>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; margin-top: 0.75rem;">
+          <div>
+            <label class="nb-label" for="field-salary-min">Salary Minimum</label>
+            <input id="field-salary-min" type="number" class="nb-input" bind:value={form.salary_min} />
+          </div>
+          <div>
+            <label class="nb-label" for="field-salary-max">Salary Maximum</label>
+            <input id="field-salary-max" type="number" class="nb-input" bind:value={form.salary_max} />
+          </div>
         </div>
-        <div>
-          <label class="nb-label" for="field-salary-max">Salary Maximum</label>
-          <input id="field-salary-max" type="number" class="nb-input" bind:value={form.salary_max} />
-        </div>
-      </div>
-    </FormSection>
+      </FormSection>
+    </div>
 
-    <div style="margin-top: 1rem;">
+    <div style="margin-top: 1rem; display: flex; align-items: center; gap: 0.75rem;">
       <button
         style="background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; font-weight: 600; cursor: pointer;"
         onclick={handleSave}
@@ -207,6 +212,12 @@
       >
         {saving ? 'Saving…' : 'Save Profile'}
       </button>
+      {#if isDirty}
+        <span style="display: flex; align-items: center; gap: 0.375rem;">
+          <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--nb-amber);"></span>
+          <span style="font-size: 0.6875rem; color: var(--nb-text3);">Unsaved changes</span>
+        </span>
+      {/if}
     </div>
   {/if}
 </div>
