@@ -32,6 +32,7 @@
   });
   let valuesLoading = $state(true);
   let valuesSaving = $state(false);
+  let valuesIsDirty = $state(false);
 
   // --- Gaps tab state ---
   let gapItems = $state<GapWeakness[]>([]);
@@ -39,6 +40,8 @@
   let gapEditingId = $state<number | null>(null);
   let gapForm = $state<GapWeaknessInput>(emptyGapForm());
   let gapSaving = $state(false);
+  let gapIsDirty = $state(false);
+  let gapDeletingId = $state<number | null>(null);
 
   function emptyGapForm(): GapWeaknessInput {
     return { gap_type: 'skill', description: '', why_its_a_gap: '', interest_in_learning: false };
@@ -50,6 +53,8 @@
   let faqEditingId = $state<number | null>(null);
   let faqForm = $state<FaqInput>(emptyFaqForm());
   let faqSaving = $state(false);
+  let faqIsDirty = $state(false);
+  let faqDeletingId = $state<number | null>(null);
 
   function emptyFaqForm(): FaqInput {
     return { question: '', answer: '', is_common_question: false };
@@ -61,6 +66,8 @@
   let instrEditingId = $state<number | null>(null);
   let instrForm = $state<AiInstructionInput>(emptyInstrForm());
   let instrSaving = $state(false);
+  let instrIsDirty = $state(false);
+  let instrDeletingId = $state<number | null>(null);
 
   function emptyInstrForm(): AiInstructionInput {
     return { instruction_type: '', instruction: '', priority: 0 };
@@ -97,6 +104,7 @@
     valuesSaving = true;
     try {
       await updateValues(valuesForm);
+      valuesIsDirty = false;
       toastMessage = 'Values & Culture saved';
       toastType = 'success';
     } catch (err) {
@@ -111,6 +119,7 @@
   function startGapCreate() {
     gapForm = emptyGapForm();
     gapEditingId = null;
+    gapIsDirty = false;
     gapMode = 'edit';
   }
 
@@ -122,6 +131,7 @@
       why_its_a_gap: item.why_its_a_gap,
       interest_in_learning: item.interest_in_learning,
     };
+    gapIsDirty = false;
     gapMode = 'edit';
   }
 
@@ -135,6 +145,7 @@
       }
       gapItems = await listGaps();
       gapMode = 'list';
+      gapIsDirty = false;
       toastMessage = gapEditingId ? 'Gap updated' : 'Gap created';
       toastType = 'success';
     } catch (err) {
@@ -146,9 +157,9 @@
   }
 
   async function handleGapDelete(id: number) {
-    if (!confirm('Delete this gap?')) return;
     try {
       await deleteGap(id);
+      gapDeletingId = null;
       gapItems = await listGaps();
       toastMessage = 'Gap deleted';
       toastType = 'success';
@@ -160,12 +171,14 @@
 
   function cancelGap() {
     gapMode = 'list';
+    gapIsDirty = false;
   }
 
   // --- FAQ handlers ---
   function startFaqCreate() {
     faqForm = emptyFaqForm();
     faqEditingId = null;
+    faqIsDirty = false;
     faqMode = 'edit';
   }
 
@@ -176,6 +189,7 @@
       answer: item.answer,
       is_common_question: item.is_common_question,
     };
+    faqIsDirty = false;
     faqMode = 'edit';
   }
 
@@ -189,6 +203,7 @@
       }
       faqItems = await listFaq();
       faqMode = 'list';
+      faqIsDirty = false;
       toastMessage = faqEditingId ? 'FAQ updated' : 'FAQ created';
       toastType = 'success';
     } catch (err) {
@@ -200,9 +215,9 @@
   }
 
   async function handleFaqDelete(id: number) {
-    if (!confirm('Delete this FAQ?')) return;
     try {
       await deleteFaq(id);
+      faqDeletingId = null;
       faqItems = await listFaq();
       toastMessage = 'FAQ deleted';
       toastType = 'success';
@@ -214,12 +229,14 @@
 
   function cancelFaq() {
     faqMode = 'list';
+    faqIsDirty = false;
   }
 
   // --- Instruction handlers ---
   function startInstrCreate() {
     instrForm = emptyInstrForm();
     instrEditingId = null;
+    instrIsDirty = false;
     instrMode = 'edit';
   }
 
@@ -230,6 +247,7 @@
       instruction: item.instruction,
       priority: item.priority,
     };
+    instrIsDirty = false;
     instrMode = 'edit';
   }
 
@@ -243,6 +261,7 @@
       }
       instrItems = await listInstructions();
       instrMode = 'list';
+      instrIsDirty = false;
       toastMessage = instrEditingId ? 'Instruction updated' : 'Instruction created';
       toastType = 'success';
     } catch (err) {
@@ -254,9 +273,9 @@
   }
 
   async function handleInstrDelete(id: number) {
-    if (!confirm('Delete this instruction?')) return;
     try {
       await deleteInstruction(id);
+      instrDeletingId = null;
       instrItems = await listInstructions();
       toastMessage = 'Instruction deleted';
       toastType = 'success';
@@ -268,6 +287,7 @@
 
   function cancelInstr() {
     instrMode = 'list';
+    instrIsDirty = false;
   }
 
   const tabs: { key: 'values' | 'gaps' | 'faq' | 'instructions'; label: string }[] = [
@@ -305,7 +325,8 @@
     </div>
 
     {#if activeTab === 'values'}
-      <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;" oninput={() => valuesIsDirty = true}>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
           <div style="grid-column: 1 / -1;">
             <label class="nb-label" for="field-must-haves">Must Haves</label>
@@ -337,12 +358,18 @@
           </div>
         </div>
       </div>
-      <div>
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
         <button
           style="background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; font-weight: 600; cursor: pointer;"
           onclick={handleValuesSave}
           disabled={valuesSaving}
         >{valuesSaving ? 'Saving…' : 'Save'}</button>
+        {#if valuesIsDirty}
+          <span style="margin-left: auto; display: flex; align-items: center; gap: 0.375rem;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--nb-amber);"></span>
+            <span style="font-size: 0.6875rem; color: var(--nb-text3);">Unsaved changes</span>
+          </span>
+        {/if}
       </div>
 
     {:else if activeTab === 'gaps'}
@@ -364,17 +391,30 @@
               {/if}
             </div>
             <div style={cardActionsStyle}>
-              <button style={actionBtnStyle} onclick={() => startGapEdit(item)}>Edit</button>
-              <button style="{actionBtnStyle} color: var(--nb-red-text);" onclick={() => handleGapDelete(item.id)}>Delete</button>
+              {#if gapDeletingId === item.id}
+                <span style="font-size: 0.75rem; color: var(--nb-text2);">Are you sure?</span>
+                <button
+                  style="{actionBtnStyle} border-color: var(--nb-red); color: var(--nb-red-text);"
+                  onclick={() => handleGapDelete(item.id)}
+                >Yes, delete</button>
+                <button
+                  style={actionBtnStyle}
+                  onclick={() => gapDeletingId = null}
+                >Cancel</button>
+              {:else}
+                <button style={actionBtnStyle} onclick={() => startGapEdit(item)}>Edit</button>
+                <button style="{actionBtnStyle} color: var(--nb-red-text);" onclick={() => gapDeletingId = item.id}>Delete</button>
+              {/if}
             </div>
           </div>
         {/each}
       {:else}
-        <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;" oninput={() => gapIsDirty = true}>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
             <div style="grid-column: 1 / -1;">
               <label class="nb-label" for="field-gap-type">Gap Type</label>
-              <select id="field-gap-type" class="nb-input" bind:value={gapForm.gap_type}>
+              <select id="field-gap-type" class="nb-input" bind:value={gapForm.gap_type} onchange={() => gapIsDirty = true}>
                 <option value="skill">Skill</option>
                 <option value="experience">Experience</option>
                 <option value="environment">Environment</option>
@@ -390,14 +430,20 @@
               <textarea id="field-why-gap" class="nb-input" rows="4" bind:value={gapForm.why_its_a_gap}></textarea>
             </div>
             <div style="grid-column: 1 / -1; display: flex; align-items: center; gap: 0.5rem;">
-              <input type="checkbox" id="field-interest-in-learning" bind:checked={gapForm.interest_in_learning} />
+              <input type="checkbox" id="field-interest-in-learning" bind:checked={gapForm.interest_in_learning} onchange={() => gapIsDirty = true} />
               <label class="nb-label" for="field-interest-in-learning" style="margin-bottom: 0;">Interest in Learning</label>
             </div>
           </div>
         </div>
-        <div style="display: flex; gap: 0.5rem;">
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
           <button style="background: transparent; border: 1px solid var(--nb-border); color: var(--nb-text2); border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; cursor: pointer;" onclick={cancelGap}>Cancel</button>
           <button style="background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; font-weight: 600; cursor: pointer;" onclick={handleGapSave} disabled={gapSaving}>{gapSaving ? 'Saving…' : 'Save'}</button>
+          {#if gapIsDirty}
+            <span style="margin-left: auto; display: flex; align-items: center; gap: 0.375rem;">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--nb-amber);"></span>
+              <span style="font-size: 0.6875rem; color: var(--nb-text3);">Unsaved changes</span>
+            </span>
+          {/if}
         </div>
       {/if}
 
@@ -419,13 +465,26 @@
               {/if}
             </div>
             <div style={cardActionsStyle}>
-              <button style={actionBtnStyle} onclick={() => startFaqEdit(item)}>Edit</button>
-              <button style="{actionBtnStyle} color: var(--nb-red-text);" onclick={() => handleFaqDelete(item.id)}>Delete</button>
+              {#if faqDeletingId === item.id}
+                <span style="font-size: 0.75rem; color: var(--nb-text2);">Are you sure?</span>
+                <button
+                  style="{actionBtnStyle} border-color: var(--nb-red); color: var(--nb-red-text);"
+                  onclick={() => handleFaqDelete(item.id)}
+                >Yes, delete</button>
+                <button
+                  style={actionBtnStyle}
+                  onclick={() => faqDeletingId = null}
+                >Cancel</button>
+              {:else}
+                <button style={actionBtnStyle} onclick={() => startFaqEdit(item)}>Edit</button>
+                <button style="{actionBtnStyle} color: var(--nb-red-text);" onclick={() => faqDeletingId = item.id}>Delete</button>
+              {/if}
             </div>
           </div>
         {/each}
       {:else}
-        <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;" oninput={() => faqIsDirty = true}>
           <div style="display: grid; grid-template-columns: 1fr; gap: 0.875rem;">
             <div>
               <label class="nb-label" for="field-faq-question">Question</label>
@@ -436,14 +495,20 @@
               <MarkdownEditor bind:value={faqForm.answer} />
             </div>
             <div style="display: flex; align-items: center; gap: 0.5rem;">
-              <input type="checkbox" id="field-common-question" bind:checked={faqForm.is_common_question} />
+              <input type="checkbox" id="field-common-question" bind:checked={faqForm.is_common_question} onchange={() => faqIsDirty = true} />
               <label class="nb-label" for="field-common-question" style="margin-bottom: 0;">Common Question</label>
             </div>
           </div>
         </div>
-        <div style="display: flex; gap: 0.5rem;">
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
           <button style="background: transparent; border: 1px solid var(--nb-border); color: var(--nb-text2); border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; cursor: pointer;" onclick={cancelFaq}>Cancel</button>
           <button style="background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; font-weight: 600; cursor: pointer;" onclick={handleFaqSave} disabled={faqSaving}>{faqSaving ? 'Saving…' : 'Save'}</button>
+          {#if faqIsDirty}
+            <span style="margin-left: auto; display: flex; align-items: center; gap: 0.375rem;">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--nb-amber);"></span>
+              <span style="font-size: 0.6875rem; color: var(--nb-text3);">Unsaved changes</span>
+            </span>
+          {/if}
         </div>
       {/if}
 
@@ -464,13 +529,26 @@
               <span style={tagPillStyle}>priority: {item.priority}</span>
             </div>
             <div style={cardActionsStyle}>
-              <button style={actionBtnStyle} onclick={() => startInstrEdit(item)}>Edit</button>
-              <button style="{actionBtnStyle} color: var(--nb-red-text);" onclick={() => handleInstrDelete(item.id)}>Delete</button>
+              {#if instrDeletingId === item.id}
+                <span style="font-size: 0.75rem; color: var(--nb-text2);">Are you sure?</span>
+                <button
+                  style="{actionBtnStyle} border-color: var(--nb-red); color: var(--nb-red-text);"
+                  onclick={() => handleInstrDelete(item.id)}
+                >Yes, delete</button>
+                <button
+                  style={actionBtnStyle}
+                  onclick={() => instrDeletingId = null}
+                >Cancel</button>
+              {:else}
+                <button style={actionBtnStyle} onclick={() => startInstrEdit(item)}>Edit</button>
+                <button style="{actionBtnStyle} color: var(--nb-red-text);" onclick={() => instrDeletingId = item.id}>Delete</button>
+              {/if}
             </div>
           </div>
         {/each}
       {:else}
-        <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;" oninput={() => instrIsDirty = true}>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
             <div>
               <label class="nb-label" for="field-instr-type">Instruction Type</label>
@@ -486,9 +564,15 @@
             </div>
           </div>
         </div>
-        <div style="display: flex; gap: 0.5rem;">
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
           <button style="background: transparent; border: 1px solid var(--nb-border); color: var(--nb-text2); border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; cursor: pointer;" onclick={cancelInstr}>Cancel</button>
           <button style="background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; font-weight: 600; cursor: pointer;" onclick={handleInstrSave} disabled={instrSaving}>{instrSaving ? 'Saving…' : 'Save'}</button>
+          {#if instrIsDirty}
+            <span style="margin-left: auto; display: flex; align-items: center; gap: 0.375rem;">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--nb-amber);"></span>
+              <span style="font-size: 0.6875rem; color: var(--nb-text3);">Unsaved changes</span>
+            </span>
+          {/if}
         </div>
       {/if}
     {/if}

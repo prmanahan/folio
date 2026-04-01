@@ -13,6 +13,8 @@
   let saving = $state(false);
   let toastMessage = $state('');
   let toastType = $state<'success' | 'error'>('success');
+  let isDirty = $state(false);
+  let deletingId = $state<number | null>(null);
 
   function emptyForm(): SkillInput {
     return {
@@ -39,6 +41,7 @@
   function startCreate() {
     form = emptyForm();
     editingId = null;
+    isDirty = false;
     mode = 'edit';
   }
 
@@ -53,6 +56,7 @@
       evidence: item.evidence,
       honest_notes: item.honest_notes,
     };
+    isDirty = false;
     mode = 'edit';
   }
 
@@ -66,6 +70,7 @@
       }
       await loadItems();
       mode = 'list';
+      isDirty = false;
       toastMessage = editingId ? 'Skill updated' : 'Skill created';
       toastType = 'success';
     } catch (err) {
@@ -77,9 +82,9 @@
   }
 
   async function handleDelete(id: number) {
-    if (!confirm('Delete this skill?')) return;
     try {
       await deleteSkill(id);
+      deletingId = null;
       await loadItems();
       toastMessage = 'Skill deleted';
       toastType = 'success';
@@ -91,6 +96,7 @@
 
   function cancel() {
     mode = 'list';
+    isDirty = false;
   }
 
   const cardStyle = 'background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.5rem; padding: 1rem 1.25rem; display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 0.5rem; cursor: pointer; transition: border-color 0.15s, background 0.15s;';
@@ -126,8 +132,20 @@
           {/if}
         </div>
         <div style={cardActionsStyle}>
-          <button style={actionBtnStyle} onclick={() => startEdit(item)}>Edit</button>
-          <button style="{actionBtnStyle} color: var(--nb-red-text);" onclick={() => handleDelete(item.id)}>Delete</button>
+          {#if deletingId === item.id}
+            <span style="font-size: 0.75rem; color: var(--nb-text2);">Are you sure?</span>
+            <button
+              style="{actionBtnStyle} border-color: var(--nb-red); color: var(--nb-red-text);"
+              onclick={() => handleDelete(item.id)}
+            >Yes, delete</button>
+            <button
+              style={actionBtnStyle}
+              onclick={() => deletingId = null}
+            >Cancel</button>
+          {:else}
+            <button style={actionBtnStyle} onclick={() => startEdit(item)}>Edit</button>
+            <button style="{actionBtnStyle} color: var(--nb-red-text);" onclick={() => deletingId = item.id}>Delete</button>
+          {/if}
         </div>
       </div>
     {/each}
@@ -136,7 +154,8 @@
       <h1 style="font-size: 1.125rem; font-weight: 500; color: var(--nb-text); letter-spacing: -0.01em;">{editingId ? 'Edit Skill' : 'New Skill'}</h1>
     </div>
 
-    <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div style="background: var(--nb-bg2); border: 1px solid var(--nb-border); border-radius: 0.625rem; padding: 1.25rem; margin-bottom: 1rem;" oninput={() => isDirty = true}>
       <FormSection title="Public Information" tier="public">
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
           <div>
@@ -176,7 +195,7 @@
       </FormSection>
     </div>
 
-    <div style="display: flex; gap: 0.5rem;">
+    <div style="display: flex; gap: 0.5rem; align-items: center;">
       <button
         style="background: transparent; border: 1px solid var(--nb-border); color: var(--nb-text2); border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; cursor: pointer;"
         onclick={cancel}
@@ -186,6 +205,12 @@
         onclick={handleSave}
         disabled={saving}
       >{saving ? 'Saving…' : 'Save'}</button>
+      {#if isDirty}
+        <span style="margin-left: auto; display: flex; align-items: center; gap: 0.375rem;">
+          <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--nb-amber);"></span>
+          <span style="font-size: 0.6875rem; color: var(--nb-text3);">Unsaved changes</span>
+        </span>
+      {/if}
     </div>
   {/if}
 </div>
