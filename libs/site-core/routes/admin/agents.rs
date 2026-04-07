@@ -87,6 +87,7 @@ mod tests {
             admin_password_hash: String::new(),
             rig_client: None,
             trusted_ip_header: None,
+            page_hit_salt: "test-salt".to_string(),
         })
     }
 

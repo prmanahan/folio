@@ -10,3 +10,4 @@ pub mod faq;
 pub mod values;
 pub mod gaps;
 pub mod instructions;
+pub mod page_hits;

@@ -5,6 +5,7 @@ use rusqlite::Connection;
 const MIGRATIONS: &[(i32, &str, &str)] = &[
     (1, "initial_schema", include_str!("../../../migrations/001_initial_schema.sql")),
     (2, "agents", include_str!("../../../migrations/002_agents.sql")),
+    (3, "page_hits", include_str!("../../../migrations/003_page_hits.sql")),
 ];
 
 /// Ensure the migrations tracking table exists.
