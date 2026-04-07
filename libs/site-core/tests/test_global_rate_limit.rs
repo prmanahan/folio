@@ -21,6 +21,7 @@ fn rate_limit_test_app() -> (axum_test::TestServer, GlobalRateLimitState) {
         admin_password_hash: password_hash,
         rig_client: None,
         trusted_ip_header: Some("x-test-ip".to_string()),
+        page_hit_salt: "test-salt".to_string(),
     });
 
     let global_rl = GlobalRateLimitState::new();
@@ -98,6 +99,7 @@ async fn http_request_over_limit_returns_429() {
         admin_password_hash: password_hash,
         rig_client: None,
         trusted_ip_header: Some("x-test-ip".to_string()),
+        page_hit_salt: "test-salt".to_string(),
     });
 
     let global_rl = GlobalRateLimitState::new();

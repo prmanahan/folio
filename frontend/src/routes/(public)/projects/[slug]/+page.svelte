@@ -37,7 +37,7 @@
 			</div>
 		{/if}
 		{#if project.url}
-			<p class="project-url"><a href={project.url} target="_blank" rel="noopener noreferrer">View project &rarr;</a></p>
+			<p class="project-url"><a href={project.url} target="_blank" rel="noopener noreferrer">View project ({project.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}) &rarr;</a></p>
 		{/if}
 		<div class="prose">
 			{@html DOMPurify.sanitize(marked.parse(project.description) as string)}

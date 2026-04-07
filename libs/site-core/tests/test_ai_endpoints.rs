@@ -24,6 +24,7 @@ fn ai_test_app() -> axum_test::TestServer {
         admin_password_hash: password_hash,
         rig_client: None,
         trusted_ip_header: None,
+        page_hit_salt: "test-salt".to_string(),
     });
 
     let app = axum::Router::new()

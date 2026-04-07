@@ -2,10 +2,9 @@ use site_core::auth;
 use site_core::config::Config;
 use site_core::db;
 use site_core::middleware::global_rate_limit::{GlobalRateLimitState, global_rate_limit_middleware};
+use site_core::middleware::page_hits::page_hits_middleware;
 use site_core::routes;
 use site_core::state::{AppState, DbState};
-use site_core::static_files;
-
 use axum::{routing::get, Router};
 use axum::extract::Path;
 use axum::http::{header, StatusCode};
@@ -92,6 +91,7 @@ async fn serve_avatar(Path(filename): Path<String>) -> Response {
 
 async fn run_server() {
     let config = Config::from_env();
+    site_core::static_files::validate_static_dir(&config.static_dir);
     tracing::info!(port = config.port, "starting server");
     let conn = db::connect(&config.database_url).expect("Failed to connect to database");
 
@@ -108,6 +108,7 @@ async fn run_server() {
         admin_password_hash: password_hash,
         rig_client,
         trusted_ip_header: config.trusted_ip_header.clone(),
+        page_hit_salt: config.page_hit_salt.clone(),
     });
 
     let cors = CorsLayer::new()
@@ -137,13 +138,16 @@ async fn run_server() {
         .with_state(db_state.clone())
         .layer(axum::middleware::from_fn_with_state(
             db_state.clone(),
+            page_hits_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            db_state.clone(),
             global_rate_limit_middleware,
         ))
         .layer(axum::Extension(global_rate_limit))
         .layer(cors)
         .layer(axum::middleware::from_fn(security_headers))
-        .route("/{*path}", get(static_files::static_handler))
-        .fallback(get(static_files::index_handler));
+        .fallback_service(site_core::static_files::static_file_service(&config.static_dir));
 
     let listener = tokio::net::TcpListener::bind(
         format!("0.0.0.0:{}", config.port)
