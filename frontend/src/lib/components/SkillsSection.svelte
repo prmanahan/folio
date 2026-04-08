@@ -125,11 +125,13 @@
 		font-family: var(--font-body);
 		font-weight: 500;
 		color: var(--color-text);
+		min-width: 0;
 	}
 
 	.skill-meta {
 		font-family: var(--font-mono);
 		font-size: 0.75rem;
 		color: var(--color-text-ghost);
+		flex-shrink: 0;
 	}
 </style>

@@ -41,13 +41,13 @@
 	}
 
 	h1 {
-		font-size: 2rem;
+		font-size: clamp(1.5rem, 5vw, 2rem);
 		margin-bottom: 2rem;
 	}
 
 	.grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
 		gap: 1.5rem;
 	}
 

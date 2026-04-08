@@ -608,7 +608,9 @@
 	}
 
 	/* ── Responsive ── */
-	@media (max-width: 600px) {
+	@media (max-width: 767px) {
+		.page-header p { margin-bottom: 1.5rem; }
+		.brass-rule { margin-bottom: 1.5rem; }
 		.responsibilities { grid-template-columns: 1fr; }
 		.dossier-card { grid-template-columns: 1fr; }
 		.portrait-col {
