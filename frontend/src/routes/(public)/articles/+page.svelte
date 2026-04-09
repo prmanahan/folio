@@ -39,7 +39,7 @@
 	}
 
 	h1 {
-		font-size: 2rem;
+		font-size: clamp(1.5rem, 5vw, 2rem);
 		margin-bottom: 1rem;
 	}
 

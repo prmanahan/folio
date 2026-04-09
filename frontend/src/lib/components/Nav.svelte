@@ -112,6 +112,13 @@
 	}
 
 	@media (max-width: 767px) {
-		.nav-links { display: none; }
+		.nav-inner { flex-wrap: wrap; height: auto; padding: 0.5rem 0; gap: 0.5rem; }
+		.nav-links {
+			display: flex; width: 100%; overflow-x: auto;
+			-webkit-overflow-scrolling: touch; gap: 0; padding-bottom: 0.25rem;
+			scrollbar-width: none;
+		}
+		.nav-links::-webkit-scrollbar { display: none; }
+		.nav-links a { padding: 0.5rem 0.875rem; white-space: nowrap; flex-shrink: 0; }
 	}
 </style>

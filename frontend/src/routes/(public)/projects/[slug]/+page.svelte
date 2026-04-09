@@ -55,12 +55,14 @@
 	.back {
 		font-size: 0.9rem;
 		color: var(--color-text-muted);
-		display: inline-block;
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
 		margin-bottom: 1rem;
 	}
 
 	h1 {
-		font-size: 2rem;
+		font-size: clamp(1.5rem, 5vw, 2rem);
 		margin-bottom: 0.75rem;
 	}
 
@@ -96,6 +98,8 @@
 	.prose :global(code) { font-family: var(--font-mono); background: var(--color-surface); padding: 0.15rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
 	.prose :global(pre) { background: var(--color-surface); padding: 1rem; border-radius: 6px; overflow-x: auto; margin-bottom: 1rem; }
 	.prose :global(pre code) { background: none; padding: 0; }
+	.prose :global(img) { max-width: 100%; height: auto; }
+	.prose :global(table) { display: block; overflow-x: auto; width: 100%; }
 
 	.loading, .error {
 		color: var(--color-text-muted);

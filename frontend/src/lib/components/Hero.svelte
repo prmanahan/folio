@@ -149,4 +149,8 @@
 			transparent 100%
 		);
 	}
+
+	@media (max-width: 767px) {
+		.hero { padding: 2.5rem 0 2rem; }
+	}
 </style>

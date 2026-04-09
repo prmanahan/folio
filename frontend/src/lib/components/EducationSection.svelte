@@ -68,4 +68,8 @@
 		font-size: 0.9rem;
 		margin-top: 0.15rem;
 	}
+
+	@media (max-width: 767px) {
+		.edu-header { flex-direction: column; gap: 0.125rem; }
+	}
 </style>

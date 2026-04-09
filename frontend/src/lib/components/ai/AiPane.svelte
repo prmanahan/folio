@@ -147,6 +147,11 @@
 		border-radius: var(--radius-sm);
 		line-height: 1;
 		transition: color 0.15s;
+		min-width: 44px;
+		min-height: 44px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 	}
 
 	.close-btn:hover {
@@ -166,7 +171,7 @@
 		flex-direction: column;
 	}
 
-	@media (max-width: 480px) {
+	@media (max-width: 767px) {
 		.ai-pane {
 			width: 100vw;
 		}
