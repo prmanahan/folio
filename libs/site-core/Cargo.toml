@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [lib]
-path = "lib.rs"
+path = "./site_core.rs"
 
 [dependencies]
 axum = { workspace = true }
