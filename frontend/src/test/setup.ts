@@ -11,4 +11,4 @@ class MockIntersectionObserver {
 	takeRecords(): IntersectionObserverEntry[] { return []; }
 }
 
-global.IntersectionObserver = MockIntersectionObserver as unknown as typeof IntersectionObserver;
+(globalThis as Record<string, unknown>).IntersectionObserver = MockIntersectionObserver;
