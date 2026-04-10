@@ -6,17 +6,18 @@ export default defineConfig({
 	plugins: [
 		svelte({ hot: !process.env.VITEST }),
 	],
-	test: {
-		include: ['src/**/*.{test,spec}.{js,ts}'],
-		globals: true,
-		environment: 'jsdom',
-		setupFiles: ['src/test/setup.ts'],
+	resolve: {
+		conditions: ['browser'],
 		alias: {
 			$lib: path.resolve(__dirname, './src/lib'),
 			$app: path.resolve(__dirname, './src/test/mocks/app'),
 		},
 	},
-	resolve: {
+	test: {
+		include: ['src/**/*.{test,spec}.{js,ts}'],
+		globals: true,
+		environment: 'jsdom',
+		setupFiles: ['src/test/setup.ts'],
 		alias: {
 			$lib: path.resolve(__dirname, './src/lib'),
 			$app: path.resolve(__dirname, './src/test/mocks/app'),
