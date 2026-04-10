@@ -68,9 +68,10 @@
 
 	/* Typography */
 	--font-heading: 'Cinzel', Georgia, serif;
-	--font-body:    'Lato', system-ui, sans-serif;
+	/* Body font experiment: Source Sans 3 replaces Lato (hero redesign, 2026-04-09) */
+	--font-body:    'Source Sans 3', 'Lato', system-ui, sans-serif;
 	--font-mono:    'IBM Plex Mono', 'Courier New', monospace;
-	--font-sans:    'Lato', system-ui, sans-serif;
+	--font-sans:    'Source Sans 3', 'Lato', system-ui, sans-serif;
 
 	/* Shape — industrial: minimal radius */
 	--radius-sm:  2px;

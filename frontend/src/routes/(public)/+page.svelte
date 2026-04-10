@@ -34,7 +34,7 @@
 		<p class="error">{error}</p>
 	</div>
 {:else if profile}
-	<Hero {profile} {links} />
+	<Hero {profile} {links} {skills} />
 	{#if skills.length > 0}
 		<SkillsSection {skills} />
 	{/if}
