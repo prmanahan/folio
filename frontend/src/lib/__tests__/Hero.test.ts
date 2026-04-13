@@ -70,13 +70,44 @@ describe('Hero hub layout', () => {
 		expect(articlesCard).toHaveAttribute('href', '/articles');
 	});
 
+	it('renders Resume nav card linking to /resume', () => {
+		render(Hero, { props: { profile: mockProfile, links: mockLinks, skills: mockSkills } });
+		const resumeCard = screen.getByTestId('card-resume');
+		expect(resumeCard).toHaveAttribute('href', '/resume');
+	});
+
 	it('renders Contact card with link icons', () => {
 		render(Hero, { props: { profile: mockProfile, links: mockLinks, skills: mockSkills } });
-		// Contact card should contain links for GitHub, LinkedIn, Resume, Email
+		// Contact card should contain links for GitHub, LinkedIn, Resume PDF, Email
 		const githubLink = screen.getByRole('link', { name: /github/i });
 		expect(githubLink).toHaveAttribute('href', 'https://github.com/pmanahan');
 		const linkedinLink = screen.getByRole('link', { name: /linkedin/i });
 		expect(linkedinLink).toHaveAttribute('href', 'https://linkedin.com/in/pmanahan');
+	});
+
+	it('renders Contact card as a full-width zone below the nav row', () => {
+		const { container } = render(Hero, { props: { profile: mockProfile, links: mockLinks, skills: mockSkills } });
+		const contactCard = container.querySelector('[data-testid="card-contact"]');
+		expect(contactCard).toBeInTheDocument();
+		// Contact card is outside the nav-cards div
+		const navCards = container.querySelector('.nav-cards');
+		expect(navCards).not.toContain(contactCard);
+	});
+
+	it('labels "Resume" link in Contact card as "Resume PDF" to avoid collision with hub card', () => {
+		render(Hero, { props: { profile: mockProfile, links: mockLinks, skills: mockSkills } });
+		// The API link label is "Resume" but must render as "Resume PDF" in the Contact card
+		const resumePdfLink = screen.getByRole('link', { name: /resume pdf/i });
+		expect(resumePdfLink).toBeInTheDocument();
+		// The hub Resume nav card links to /resume — confirm it exists
+		const resumeNavCard = screen.getByTestId('card-resume');
+		expect(resumeNavCard).toHaveAttribute('href', '/resume');
+		// No contact-link should have the plain "Resume" aria-label
+		const allLinks = screen.getAllByRole('link');
+		const contactLinks = allLinks.filter(el => el.classList.contains('contact-link'));
+		for (const link of contactLinks) {
+			expect(link).not.toHaveAttribute('aria-label', 'Resume');
+		}
 	});
 
 	it('fires onToggleAi when Ask AI card is clicked', async () => {
