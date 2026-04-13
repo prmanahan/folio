@@ -106,7 +106,7 @@
 		width: max-content;
 		height: 100%;
 		/* Uses translateX — no layout recalculation, GPU composited */
-		animation: conveyor 60s linear infinite;
+		animation: conveyor 120s linear infinite;
 		will-change: transform;
 	}
 
@@ -158,7 +158,7 @@
 		}
 
 		.banner-track {
-			animation-duration: 45s;
+			animation-duration: 90s;
 		}
 
 		.skill-name {
@@ -169,7 +169,7 @@
 	/* Desktop: faster scroll */
 	@media (min-width: 1024px) {
 		.banner-track {
-			animation-duration: 40s;
+			animation-duration: 80s;
 		}
 	}
 
