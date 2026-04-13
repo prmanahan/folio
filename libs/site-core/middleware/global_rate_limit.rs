@@ -34,7 +34,9 @@ impl GlobalRateLimitState {
         let record = store.entry(ip.to_string()).or_default();
 
         // Remove timestamps outside the sliding window.
-        record.timestamps.retain(|&t| now.duration_since(t) < window);
+        record
+            .timestamps
+            .retain(|&t| now.duration_since(t) < window);
 
         if record.timestamps.len() < limit {
             record.timestamps.push(now);
@@ -51,7 +53,9 @@ impl GlobalRateLimitState {
         let mut store = self.0.lock().expect("global rate limit lock poisoned");
         let now = Instant::now();
         store.retain(|_, record| {
-            record.timestamps.retain(|&t| now.duration_since(t) < window);
+            record
+                .timestamps
+                .retain(|&t| now.duration_since(t) < window);
             !record.timestamps.is_empty()
         });
     }
@@ -115,7 +119,9 @@ pub async fn global_rate_limit_middleware(
         return (
             StatusCode::TOO_MANY_REQUESTS,
             [("Retry-After", "60")],
-            axum::Json(serde_json::json!({ "error": "Too many requests. Please wait before retrying." })),
+            axum::Json(
+                serde_json::json!({ "error": "Too many requests. Please wait before retrying." }),
+            ),
         )
             .into_response();
     }

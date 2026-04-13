@@ -97,10 +97,7 @@ mod tests {
         }
         // The next request (limit + 1) should fail
         let result = check_rate_limit(&conn, "10.0.0.2", "/api/chat", limit);
-        assert!(
-            result.is_err(),
-            "Request at limit+1 should return an error"
-        );
+        assert!(result.is_err(), "Request at limit+1 should return an error");
         match result {
             Err(AppError::RateLimited(msg)) => {
                 assert_eq!(msg, "Rate limit exceeded");

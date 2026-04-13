@@ -29,8 +29,9 @@ mod tests {
         let conn = Connection::open_in_memory().expect("in-memory db");
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
-             PRAGMA foreign_keys=ON;"
-        ).expect("pragmas");
+             PRAGMA foreign_keys=ON;",
+        )
+        .expect("pragmas");
         db::schema::run_migrations(&conn).expect("migrations");
         conn
     }

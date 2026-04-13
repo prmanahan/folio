@@ -39,7 +39,7 @@ pub fn list_public(conn: &Connection) -> Result<Vec<ExperiencePublic>, rusqlite:
     let mut stmt = conn.prepare(
         "SELECT id, company_name, title, location, start_date, end_date,
                 is_current, summary, bullet_points, display_order
-         FROM experiences ORDER BY display_order ASC"
+         FROM experiences ORDER BY display_order ASC",
     )?;
     let rows = stmt.query_map([], ExperiencePublic::from_row)?;
     rows.collect()
@@ -156,11 +156,13 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<ExperienceFull, rusqlite:
     )
 }
 
-pub fn create(conn: &Connection, input: &ExperienceInput) -> Result<ExperienceFull, rusqlite::Error> {
-    let bp_str = serde_json::to_string(&input.bullet_points)
-        .unwrap_or_else(|_| "[]".to_string());
-    let qi_str = serde_json::to_string(&input.quantified_impact)
-        .unwrap_or_else(|_| "{}".to_string());
+pub fn create(
+    conn: &Connection,
+    input: &ExperienceInput,
+) -> Result<ExperienceFull, rusqlite::Error> {
+    let bp_str = serde_json::to_string(&input.bullet_points).unwrap_or_else(|_| "[]".to_string());
+    let qi_str =
+        serde_json::to_string(&input.quantified_impact).unwrap_or_else(|_| "{}".to_string());
     conn.execute(
         "INSERT INTO experiences (
             company_name, title, location, start_date, end_date, is_current,
@@ -196,11 +198,14 @@ pub fn create(conn: &Connection, input: &ExperienceInput) -> Result<ExperienceFu
     get_by_id(conn, id)
 }
 
-pub fn update(conn: &Connection, id: i64, input: &ExperienceInput) -> Result<ExperienceFull, rusqlite::Error> {
-    let bp_str = serde_json::to_string(&input.bullet_points)
-        .unwrap_or_else(|_| "[]".to_string());
-    let qi_str = serde_json::to_string(&input.quantified_impact)
-        .unwrap_or_else(|_| "{}".to_string());
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    input: &ExperienceInput,
+) -> Result<ExperienceFull, rusqlite::Error> {
+    let bp_str = serde_json::to_string(&input.bullet_points).unwrap_or_else(|_| "[]".to_string());
+    let qi_str =
+        serde_json::to_string(&input.quantified_impact).unwrap_or_else(|_| "{}".to_string());
     conn.execute(
         "UPDATE experiences SET
             company_name = ?1, title = ?2, location = ?3, start_date = ?4,
@@ -239,7 +244,10 @@ pub fn update(conn: &Connection, id: i64, input: &ExperienceInput) -> Result<Exp
 }
 
 pub fn delete(conn: &Connection, id: i64) -> Result<(), rusqlite::Error> {
-    conn.execute("DELETE FROM experiences WHERE id = ?1", rusqlite::params![id])?;
+    conn.execute(
+        "DELETE FROM experiences WHERE id = ?1",
+        rusqlite::params![id],
+    )?;
     if conn.changes() == 0 {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }

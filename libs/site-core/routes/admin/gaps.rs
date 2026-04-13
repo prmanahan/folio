@@ -1,17 +1,18 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
 use crate::error::AppError;
 use crate::models::gaps::{self, GapWeakness, GapWeaknessInput};
 use crate::state::DbState;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
+};
 
-async fn list_gaps(
-    State(state): State<DbState>,
-) -> Result<Json<Vec<GapWeakness>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+async fn list_gaps(State(state): State<DbState>) -> Result<Json<Vec<GapWeakness>>, AppError> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let items = gaps::list_all(&conn)?;
     Ok(Json(items))
 }
@@ -20,7 +21,10 @@ async fn get_gap(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<Json<GapWeakness>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = gaps::get_by_id(&conn, id).map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Gap {} not found", id)),
         other => AppError::Internal(other.to_string()),
@@ -32,7 +36,10 @@ async fn create_gap(
     State(state): State<DbState>,
     Json(input): Json<GapWeaknessInput>,
 ) -> Result<(StatusCode, Json<GapWeakness>), AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = gaps::create(&conn, &input)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -42,7 +49,10 @@ async fn update_gap(
     Path(id): Path<i64>,
     Json(input): Json<GapWeaknessInput>,
 ) -> Result<Json<GapWeakness>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = gaps::update(&conn, id, &input).map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Gap {} not found", id)),
         other => AppError::Internal(other.to_string()),
@@ -54,7 +64,10 @@ async fn delete_gap(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     gaps::delete(&conn, id)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -100,7 +113,8 @@ mod tests {
         let fetched = gaps::get_by_id(&conn, a.id).unwrap();
         assert_eq!(fetched.gap_type, "skill");
 
-        let updated = gaps::update(&conn, a.id, &make_input("ML/AI (getting better)", false)).unwrap();
+        let updated =
+            gaps::update(&conn, a.id, &make_input("ML/AI (getting better)", false)).unwrap();
         assert_eq!(updated.description, "ML/AI (getting better)");
         assert_eq!(updated.interest_in_learning, false);
 

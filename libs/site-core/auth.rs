@@ -1,8 +1,8 @@
 use axum::{
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::Response,
-    Json,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -31,9 +31,9 @@ pub fn generate_token() -> String {
 
 /// Hash a password with Argon2id using a random salt. Used at startup.
 pub fn hash_password(password: &str) -> Result<String, AppError> {
-    use argon2::{Argon2, PasswordHasher};
     use argon2::password_hash::SaltString;
     use argon2::password_hash::rand_core::OsRng;
+    use argon2::{Argon2, PasswordHasher};
 
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
@@ -45,12 +45,14 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
 
 /// Verify a password against an Argon2id hash. Constant-time comparison.
 pub fn verify_password(hash: &str, password: &str) -> Result<bool, AppError> {
-    use argon2::{Argon2, PasswordVerifier};
     use argon2::password_hash::PasswordHash;
+    use argon2::{Argon2, PasswordVerifier};
 
     let parsed = PasswordHash::new(hash)
         .map_err(|e| AppError::Internal(format!("Invalid password hash: {}", e)))?;
-    Ok(Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+    Ok(Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok())
 }
 
 pub fn create_session(conn: &Connection, token: &str) -> Result<String, AppError> {
@@ -177,9 +179,10 @@ pub async fn login(
     // but only failed attempts increment the counter (below).
     let ip = extract_client_ip(&headers, state.trusted_ip_header.as_deref());
     {
-        let conn = state.db.lock().map_err(|_| {
-            AppError::Internal("Failed to acquire database lock".to_string())
-        })?;
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Internal("Failed to acquire database lock".to_string()))?;
         // Read-only check: reject if already over limit
         let count: i64 = conn.query_row(
             "SELECT COALESCE(
@@ -198,26 +201,25 @@ pub async fn login(
 
     if !verify_password(&state.admin_password_hash, &payload.password)? {
         // Only increment rate limit counter on failed attempts
-        let conn = state.db.lock().map_err(|_| {
-            AppError::Internal("Failed to acquire database lock".to_string())
-        })?;
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Internal("Failed to acquire database lock".to_string()))?;
         crate::ai::rate_limit::check_rate_limit(&conn, &ip, "login_fail", 5)?;
         return Err(AppError::Unauthorized("Invalid password".to_string()));
     }
 
     let token = generate_token();
 
-    let conn = state.db.lock().map_err(|_| {
-        AppError::Internal("Failed to acquire database lock".to_string())
-    })?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("Failed to acquire database lock".to_string()))?;
 
     let expires_at = create_session(&conn, &token)?;
     drop(conn);
 
-    Ok((
-        StatusCode::OK,
-        Json(LoginResponse { token, expires_at }),
-    ))
+    Ok((StatusCode::OK, Json(LoginResponse { token, expires_at })))
 }
 
 pub async fn logout(
@@ -227,9 +229,10 @@ pub async fn logout(
     let token = extract_token(&headers)
         .ok_or_else(|| AppError::Unauthorized("Missing authorization token".to_string()))?;
 
-    let conn = state.db.lock().map_err(|_| {
-        AppError::Internal("Failed to acquire database lock".to_string())
-    })?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("Failed to acquire database lock".to_string()))?;
 
     delete_session(&conn, &token)?;
     drop(conn);
@@ -266,7 +269,10 @@ fn format_unix_secs(secs: u64) -> String {
     // Convert days since epoch (1970-01-01) to year/month/day
     let (year, month, day) = days_to_ymd(days_since_epoch);
 
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, h, m, s)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, h, m, s
+    )
 }
 
 fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
@@ -281,7 +287,20 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
         year += 1;
     }
     let leap = is_leap(year);
-    let month_days: [u64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days: [u64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut month = 1u64;
     for &md in &month_days {
         if days < md {

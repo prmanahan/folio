@@ -21,7 +21,9 @@ async fn test_dashboard_authenticated() {
         .get("/api/admin/dashboard")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            format!("Bearer {}", token).parse::<axum::http::HeaderValue>().unwrap(),
+            format!("Bearer {}", token)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
         )
         .await;
 

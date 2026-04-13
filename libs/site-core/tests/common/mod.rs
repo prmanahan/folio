@@ -7,8 +7,9 @@ pub fn test_db() -> Connection {
          PRAGMA busy_timeout=5000;
          PRAGMA synchronous=NORMAL;
          PRAGMA cache_size=-64000;
-         PRAGMA temp_store=memory;"
-    ).unwrap();
+         PRAGMA temp_store=memory;",
+    )
+    .unwrap();
     site_core::db::migrate(&conn).unwrap();
     conn
 }
@@ -26,13 +27,14 @@ pub fn test_app() -> axum_test::TestServer {
          PRAGMA busy_timeout=5000;
          PRAGMA synchronous=NORMAL;
          PRAGMA cache_size=-64000;
-         PRAGMA temp_store=memory;"
-    ).unwrap();
+         PRAGMA temp_store=memory;",
+    )
+    .unwrap();
     site_core::db::migrate(&conn).unwrap();
     site_core::db::seed::seed_test_data(&conn).unwrap();
 
-    let password_hash = site_core::auth::hash_password("testpass")
-        .expect("Failed to hash test password");
+    let password_hash =
+        site_core::auth::hash_password("testpass").expect("Failed to hash test password");
     let state: site_core::state::DbState = std::sync::Arc::new(site_core::state::AppState {
         db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
         admin_password_hash: password_hash,
@@ -42,7 +44,10 @@ pub fn test_app() -> axum_test::TestServer {
     });
 
     let app = axum::Router::new()
-        .route("/api/health", axum::routing::get(site_core::routes::health_check))
+        .route(
+            "/api/health",
+            axum::routing::get(site_core::routes::health_check),
+        )
         .merge(site_core::routes::public_router())
         .merge(site_core::routes::admin::admin_router(state.clone()))
         .with_state(state);

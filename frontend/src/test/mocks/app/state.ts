@@ -1,4 +1,5 @@
 // Mock for $app/state (SvelteKit)
+// Mutable so tests can override pathname before rendering
 export const page = {
 	url: { pathname: '/' },
 	params: {},
@@ -9,3 +10,8 @@ export const page = {
 	form: undefined,
 	state: {},
 };
+
+/** Set the mock page pathname for a test. Resets to '/' if not called. */
+export function setMockPathname(pathname: string) {
+	page.url.pathname = pathname;
+}

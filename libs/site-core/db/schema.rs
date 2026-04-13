@@ -3,9 +3,21 @@ use rusqlite::Connection;
 /// All migrations in order. Each tuple is (version, name, sql).
 /// SQL is loaded at compile time from the migrations/ directory.
 const MIGRATIONS: &[(i32, &str, &str)] = &[
-    (1, "initial_schema", include_str!("../../../migrations/001_initial_schema.sql")),
-    (2, "agents", include_str!("../../../migrations/002_agents.sql")),
-    (3, "page_hits", include_str!("../../../migrations/003_page_hits.sql")),
+    (
+        1,
+        "initial_schema",
+        include_str!("../../../migrations/001_initial_schema.sql"),
+    ),
+    (
+        2,
+        "agents",
+        include_str!("../../../migrations/002_agents.sql"),
+    ),
+    (
+        3,
+        "page_hits",
+        include_str!("../../../migrations/003_page_hits.sql"),
+    ),
 ];
 
 /// Ensure the migrations tracking table exists.
@@ -15,7 +27,7 @@ fn ensure_migrations_table(conn: &Connection) -> Result<(), rusqlite::Error> {
             version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );"
+        );",
     )
 }
 

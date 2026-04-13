@@ -10,6 +10,6 @@ async fn test_list_skills_returns_public_fields() {
     assert_eq!(body.len(), 2);
 
     // Verify AI-tier and Private-tier fields are NOT present
-    assert!(body[0].get("self_rating").is_none());   // AI
-    assert!(body[0].get("honest_notes").is_none());  // Private
+    assert!(body[0].get("self_rating").is_none()); // AI
+    assert!(body[0].get("honest_notes").is_none()); // Private
 }

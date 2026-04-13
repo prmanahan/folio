@@ -1,6 +1,9 @@
 mod common;
 
-use axum::{middleware, routing::{get, post}, Router};
+use axum::{
+    Router, middleware,
+    routing::{get, post},
+};
 use site_core::auth;
 use site_core::state::DbState;
 
@@ -8,8 +11,8 @@ fn auth_test_app() -> axum_test::TestServer {
     let conn = common::test_db();
     site_core::db::seed::seed_test_data(&conn).unwrap();
 
-    let password_hash = site_core::auth::hash_password("testpass")
-        .expect("Failed to hash test password");
+    let password_hash =
+        site_core::auth::hash_password("testpass").expect("Failed to hash test password");
     let state: DbState = std::sync::Arc::new(site_core::state::AppState {
         db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
         admin_password_hash: password_hash,
@@ -20,7 +23,10 @@ fn auth_test_app() -> axum_test::TestServer {
 
     let protected = Router::new()
         .route("/api/admin/test", get(|| async { "ok" }))
-        .layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
 
     let app = Router::new()
         .route("/api/admin/login", post(auth::login))
@@ -43,7 +49,10 @@ async fn test_login_success() {
     response.assert_status_ok();
     let body: serde_json::Value = response.json();
     assert!(body["token"].is_string(), "response should have a token");
-    assert!(body["expires_at"].is_string(), "response should have expires_at");
+    assert!(
+        body["expires_at"].is_string(),
+        "response should have expires_at"
+    );
     let token = body["token"].as_str().unwrap();
     assert!(!token.is_empty(), "token should not be empty");
 }
@@ -78,7 +87,9 @@ async fn test_protected_with_valid_token() {
         .get("/api/admin/test")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            format!("Bearer {}", token).parse::<axum::http::HeaderValue>().unwrap(),
+            format!("Bearer {}", token)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
         )
         .await;
 
@@ -102,7 +113,9 @@ async fn test_protected_with_invalid_token() {
         .get("/api/admin/test")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            "Bearer not-a-real-token".parse::<axum::http::HeaderValue>().unwrap(),
+            "Bearer not-a-real-token"
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
         )
         .await;
 
@@ -127,7 +140,9 @@ async fn test_logout_invalidates_token() {
         .post("/api/admin/logout")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            format!("Bearer {}", token).parse::<axum::http::HeaderValue>().unwrap(),
+            format!("Bearer {}", token)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
         )
         .await;
     logout_response.assert_status(axum::http::StatusCode::NO_CONTENT);
@@ -137,7 +152,9 @@ async fn test_logout_invalidates_token() {
         .get("/api/admin/test")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            format!("Bearer {}", token).parse::<axum::http::HeaderValue>().unwrap(),
+            format!("Bearer {}", token)
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
         )
         .await;
 

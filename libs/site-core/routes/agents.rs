@@ -1,10 +1,13 @@
-use axum::{extract::State, routing::get, Json, Router};
 use crate::error::AppError;
 use crate::models::agent::{self, AgentPublic};
 use crate::state::DbState;
+use axum::{Json, Router, extract::State, routing::get};
 
 async fn list_agents(State(state): State<DbState>) -> Result<Json<Vec<AgentPublic>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let agents = agent::list_published(&conn)?;
     Ok(Json(agents))
 }
@@ -15,10 +18,10 @@ pub fn routes() -> Router<DbState> {
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
     use crate::db;
     use crate::models::agent::{self, AgentInput};
     use crate::state::{AppState, DbState};
+    use axum_test::TestServer;
     use std::sync::{Arc, Mutex};
 
     fn make_db_state() -> DbState {

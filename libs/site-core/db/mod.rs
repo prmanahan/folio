@@ -16,7 +16,7 @@ pub fn connect(database_url: &str) -> Result<Connection, rusqlite::Error> {
          PRAGMA busy_timeout=5000;
          PRAGMA synchronous=NORMAL;
          PRAGMA cache_size=-64000;
-         PRAGMA temp_store=memory;"
+         PRAGMA temp_store=memory;",
     )?;
     migrate(&conn)?;
     tracing::info!("migrations complete");

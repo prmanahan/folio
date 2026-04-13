@@ -1,12 +1,13 @@
-use axum::{extract::State, routing::get, Json, Router};
 use crate::error::AppError;
 use crate::models::values::{self, ValuesCulture, ValuesCultureInput};
 use crate::state::DbState;
+use axum::{Json, Router, extract::State, routing::get};
 
-async fn get_values(
-    State(state): State<DbState>,
-) -> Result<Json<ValuesCulture>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+async fn get_values(State(state): State<DbState>) -> Result<Json<ValuesCulture>, AppError> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = values::get(&conn)?;
     Ok(Json(item))
 }
@@ -15,7 +16,10 @@ async fn update_values(
     State(state): State<DbState>,
     Json(input): Json<ValuesCultureInput>,
 ) -> Result<Json<ValuesCulture>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = values::update(&conn, &input)?;
     Ok(Json(item))
 }

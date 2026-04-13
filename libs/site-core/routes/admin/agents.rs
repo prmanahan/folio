@@ -1,17 +1,18 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
 use crate::error::AppError;
 use crate::models::agent::{self, AgentFull, AgentInput};
 use crate::state::DbState;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
+};
 
-async fn list_agents(
-    State(state): State<DbState>,
-) -> Result<Json<Vec<AgentFull>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+async fn list_agents(State(state): State<DbState>) -> Result<Json<Vec<AgentFull>>, AppError> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let items = agent::list_all(&conn)?;
     Ok(Json(items))
 }
@@ -20,9 +21,14 @@ async fn get_agent(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<Json<AgentFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = agent::get_by_id(&conn, id).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Agent {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Agent {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -32,7 +38,10 @@ async fn create_agent(
     State(state): State<DbState>,
     Json(input): Json<AgentInput>,
 ) -> Result<(StatusCode, Json<AgentFull>), AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = agent::create(&conn, &input)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -42,9 +51,14 @@ async fn update_agent(
     Path(id): Path<i64>,
     Json(input): Json<AgentInput>,
 ) -> Result<Json<AgentFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = agent::update(&conn, id, &input).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Agent {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Agent {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -54,9 +68,14 @@ async fn delete_agent(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     agent::delete(&conn, id).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Agent {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Agent {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(StatusCode::NO_CONTENT)
@@ -73,11 +92,11 @@ pub fn routes() -> Router<DbState> {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::StatusCode;
-    use axum_test::TestServer;
     use crate::db;
     use crate::models::agent::AgentInput;
     use crate::state::{AppState, DbState};
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
     use std::sync::{Arc, Mutex};
 
     fn make_db_state() -> DbState {

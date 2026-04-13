@@ -1,9 +1,11 @@
 mod common;
 
-use axum::{routing::get, Router};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::{Router, routing::get};
 use rusqlite::Connection;
-use site_core::middleware::global_rate_limit::{GlobalRateLimitState, global_rate_limit_middleware};
+use site_core::middleware::global_rate_limit::{
+    GlobalRateLimitState, global_rate_limit_middleware,
+};
 use site_core::state::{AppState, DbState};
 use std::sync::{Arc, Mutex};
 
@@ -140,8 +142,8 @@ async fn http_request_over_limit_returns_429() {
 /// Integration test: verify that IP extraction uses trusted header over XFF.
 #[tokio::test]
 async fn trusted_header_takes_priority_over_xff() {
-    use site_core::middleware::global_rate_limit::extract_ip_for_rate_limit;
     use axum::http::HeaderMap;
+    use site_core::middleware::global_rate_limit::extract_ip_for_rate_limit;
 
     let mut headers = HeaderMap::new();
     headers.insert("x-forwarded-for", "1.1.1.1".parse().unwrap());
@@ -154,8 +156,5 @@ async fn trusted_header_takes_priority_over_xff() {
     );
 
     // Without trusted header configured — falls back to XFF
-    assert_eq!(
-        extract_ip_for_rate_limit(&headers, None),
-        "1.1.1.1"
-    );
+    assert_eq!(extract_ip_for_rate_limit(&headers, None), "1.1.1.1");
 }

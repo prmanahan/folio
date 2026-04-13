@@ -12,8 +12,8 @@ async fn test_get_profile_returns_public_fields() {
     assert_eq!(body["availability_status"], "open");
 
     // Verify AI-tier and Private-tier fields are NOT present
-    assert!(body.get("salary_min").is_none());       // Private
-    assert!(body.get("salary_max").is_none());       // Private
-    assert!(body.get("career_narrative").is_none());  // AI
-    assert!(body.get("looking_for").is_none());       // AI
+    assert!(body.get("salary_min").is_none()); // Private
+    assert!(body.get("salary_max").is_none()); // Private
+    assert!(body.get("career_narrative").is_none()); // AI
+    assert!(body.get("looking_for").is_none()); // AI
 }

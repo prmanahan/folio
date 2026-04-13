@@ -19,8 +19,7 @@ pub struct AgentPublic {
 impl AgentPublic {
     fn from_row(row: &Row) -> Result<Self, rusqlite::Error> {
         let resp_str: String = row.get("responsibilities")?;
-        let responsibilities: Vec<String> =
-            serde_json::from_str(&resp_str).unwrap_or_default();
+        let responsibilities: Vec<String> = serde_json::from_str(&resp_str).unwrap_or_default();
         Ok(Self {
             id: row.get("id")?,
             name: row.get("name")?,
@@ -57,8 +56,7 @@ pub struct AgentFull {
 impl AgentFull {
     fn from_row(row: &Row) -> Result<Self, rusqlite::Error> {
         let resp_str: String = row.get("responsibilities")?;
-        let responsibilities: Vec<String> =
-            serde_json::from_str(&resp_str).unwrap_or_default();
+        let responsibilities: Vec<String> = serde_json::from_str(&resp_str).unwrap_or_default();
         Ok(Self {
             id: row.get("id")?,
             created_at: row.get("created_at")?,
@@ -125,13 +123,19 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<AgentFull, rusqlite::Erro
 }
 
 pub fn create(conn: &Connection, input: &AgentInput) -> Result<AgentFull, rusqlite::Error> {
-    let resp_str = serde_json::to_string(&input.responsibilities)
-        .unwrap_or_else(|_| "[]".to_string());
+    let resp_str =
+        serde_json::to_string(&input.responsibilities).unwrap_or_else(|_| "[]".to_string());
     if input.is_featured {
-        conn.execute("UPDATE agents SET is_featured = 0 WHERE is_featured = 1", [])?;
+        conn.execute(
+            "UPDATE agents SET is_featured = 0 WHERE is_featured = 1",
+            [],
+        )?;
     }
     if input.is_review_gate {
-        conn.execute("UPDATE agents SET is_review_gate = 0 WHERE is_review_gate = 1", [])?;
+        conn.execute(
+            "UPDATE agents SET is_review_gate = 0 WHERE is_review_gate = 1",
+            [],
+        )?;
     }
     conn.execute(
         "INSERT INTO agents (name, role, short_role, model, personality_blurb,
@@ -156,9 +160,13 @@ pub fn create(conn: &Connection, input: &AgentInput) -> Result<AgentFull, rusqli
     get_by_id(conn, id)
 }
 
-pub fn update(conn: &Connection, id: i64, input: &AgentInput) -> Result<AgentFull, rusqlite::Error> {
-    let resp_str = serde_json::to_string(&input.responsibilities)
-        .unwrap_or_else(|_| "[]".to_string());
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    input: &AgentInput,
+) -> Result<AgentFull, rusqlite::Error> {
+    let resp_str =
+        serde_json::to_string(&input.responsibilities).unwrap_or_else(|_| "[]".to_string());
     if input.is_featured {
         conn.execute(
             "UPDATE agents SET is_featured = 0 WHERE is_featured = 1 AND id != ?1",
@@ -208,8 +216,8 @@ pub fn delete(conn: &Connection, id: i64) -> Result<(), rusqlite::Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::db;
     use super::*;
+    use crate::db;
 
     fn make_input(name: &str, order: i64) -> AgentInput {
         AgentInput {
@@ -280,7 +288,10 @@ mod tests {
         assert!(b.is_featured);
 
         let a_refetched = get_by_id(&conn, a.id).unwrap();
-        assert!(!a_refetched.is_featured, "Alpha should no longer be featured");
+        assert!(
+            !a_refetched.is_featured,
+            "Alpha should no longer be featured"
+        );
     }
 
     #[test]
@@ -299,6 +310,9 @@ mod tests {
         update(&conn, b.id, &input_b_update).unwrap();
 
         let a_refetched = get_by_id(&conn, a.id).unwrap();
-        assert!(!a_refetched.is_featured, "Alpha should no longer be featured after Beta updated");
+        assert!(
+            !a_refetched.is_featured,
+            "Alpha should no longer be featured after Beta updated"
+        );
     }
 }

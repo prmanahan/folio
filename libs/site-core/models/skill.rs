@@ -25,7 +25,7 @@ impl SkillPublic {
 pub fn list_public(conn: &Connection) -> Result<Vec<SkillPublic>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, skill_name, category, years_experience, last_used
-         FROM skills ORDER BY category ASC, years_experience DESC"
+         FROM skills ORDER BY category ASC, years_experience DESC",
     )?;
     let rows = stmt.query_map([], SkillPublic::from_row)?;
     rows.collect()
@@ -110,7 +110,11 @@ pub fn create(conn: &Connection, input: &SkillInput) -> Result<SkillFull, rusqli
     get_by_id(conn, id)
 }
 
-pub fn update(conn: &Connection, id: i64, input: &SkillInput) -> Result<SkillFull, rusqlite::Error> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    input: &SkillInput,
+) -> Result<SkillFull, rusqlite::Error> {
     conn.execute(
         "UPDATE skills SET skill_name = ?1, category = ?2, years_experience = ?3,
                 last_used = ?4, self_rating = ?5, evidence = ?6, honest_notes = ?7

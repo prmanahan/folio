@@ -1,10 +1,8 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
-use tracing;
 use axum::{
-    Json,
-    Router,
+    Json, Router,
     extract::{ConnectInfo, State},
     http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
@@ -14,6 +12,7 @@ use futures::stream::{Stream, StreamExt};
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
 use rig::streaming::StreamingPrompt;
+use tracing;
 
 use crate::ai::context::{build_fit_prompt, build_system_prompt};
 use crate::ai::rate_limit::check_rate_limit;
@@ -64,7 +63,11 @@ pub async fn chat_with_addr(
     headers: HeaderMap,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
-    let ip = extract_ip(&headers, &addr.ip().to_string(), state.trusted_ip_header.as_deref());
+    let ip = extract_ip(
+        &headers,
+        &addr.ip().to_string(),
+        state.trusted_ip_header.as_deref(),
+    );
     chat_inner(state, &ip, payload).await
 }
 
@@ -85,7 +88,9 @@ async fn chat_inner(
     payload: ChatRequest,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, AppError> {
     if payload.message.len() > 10_000 {
-        return Err(AppError::BadRequest("Message too long (max 10,000 characters)".into()));
+        return Err(AppError::BadRequest(
+            "Message too long (max 10,000 characters)".into(),
+        ));
     }
 
     // Lock DB, check rate limit, build system prompt, then drop lock
@@ -147,7 +152,11 @@ async fn chat_inner(
         // If stream errored without producing content, send an error event
         if !sent_content {
             tracing::error!("Chat stream produced no content — sending error to client");
-            let _ = tx.send(Ok(Event::default().event("error").data("AI response failed. Please try again."))).await;
+            let _ = tx
+                .send(Ok(Event::default()
+                    .event("error")
+                    .data("AI response failed. Please try again.")))
+                .await;
         }
 
         // Send the [DONE] sentinel
@@ -167,7 +176,16 @@ pub async fn fit_analysis_with_addr(
     headers: HeaderMap,
     Json(payload): Json<FitRequest>,
 ) -> Result<Json<FitVerdict>, AppError> {
-    fit_analysis_inner(state.clone(), &extract_ip(&headers, &addr.ip().to_string(), state.trusted_ip_header.as_deref()), payload).await
+    fit_analysis_inner(
+        state.clone(),
+        &extract_ip(
+            &headers,
+            &addr.ip().to_string(),
+            state.trusted_ip_header.as_deref(),
+        ),
+        payload,
+    )
+    .await
 }
 
 /// Fit analysis handler without ConnectInfo (for testing).
@@ -177,7 +195,12 @@ pub async fn fit_analysis(
     headers: HeaderMap,
     Json(payload): Json<FitRequest>,
 ) -> Result<Json<FitVerdict>, AppError> {
-    fit_analysis_inner(state.clone(), &extract_ip(&headers, "unknown", state.trusted_ip_header.as_deref()), payload).await
+    fit_analysis_inner(
+        state.clone(),
+        &extract_ip(&headers, "unknown", state.trusted_ip_header.as_deref()),
+        payload,
+    )
+    .await
 }
 
 /// Try to extract JSON from a response that may include markdown code fences or preamble text.
@@ -212,7 +235,9 @@ async fn fit_analysis_inner(
     payload: FitRequest,
 ) -> Result<Json<FitVerdict>, AppError> {
     if payload.job_description.len() > 15_000 {
-        return Err(AppError::BadRequest("Job description too long (max 15,000 characters)".into()));
+        return Err(AppError::BadRequest(
+            "Job description too long (max 15,000 characters)".into(),
+        ));
     }
 
     // Lock DB, check rate limit, build fit prompt, then drop lock
@@ -245,18 +270,20 @@ async fn fit_analysis_inner(
         .map_err(|e| AppError::Internal(format!("AI prompt failed: {}", e)))?;
 
     // Parse the response as JSON into FitVerdict (with fallback extraction)
-    let verdict: FitVerdict = serde_json::from_str(&response_text).or_else(|_| {
-        extract_json(&response_text)
-            .map(serde_json::from_str)
-            .unwrap_or_else(|| Err(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData, "No JSON found"
-            ))))
-    }).map_err(|e| {
-        AppError::Internal(format!(
-            "Failed to parse AI response as FitVerdict: {}",
-            e
-        ))
-    })?;
+    let verdict: FitVerdict = serde_json::from_str(&response_text)
+        .or_else(|_| {
+            extract_json(&response_text)
+                .map(serde_json::from_str)
+                .unwrap_or_else(|| {
+                    Err(serde_json::Error::io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "No JSON found",
+                    )))
+                })
+        })
+        .map_err(|e| {
+            AppError::Internal(format!("Failed to parse AI response as FitVerdict: {}", e))
+        })?;
 
     Ok(Json(verdict))
 }

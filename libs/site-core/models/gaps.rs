@@ -65,7 +65,11 @@ pub fn create(conn: &Connection, input: &GapWeaknessInput) -> Result<GapWeakness
     get_by_id(conn, id)
 }
 
-pub fn update(conn: &Connection, id: i64, input: &GapWeaknessInput) -> Result<GapWeakness, rusqlite::Error> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    input: &GapWeaknessInput,
+) -> Result<GapWeakness, rusqlite::Error> {
     conn.execute(
         "UPDATE gaps_weaknesses SET gap_type = ?1, description = ?2,
                 why_its_a_gap = ?3, interest_in_learning = ?4
@@ -82,7 +86,10 @@ pub fn update(conn: &Connection, id: i64, input: &GapWeaknessInput) -> Result<Ga
 }
 
 pub fn delete(conn: &Connection, id: i64) -> Result<(), rusqlite::Error> {
-    conn.execute("DELETE FROM gaps_weaknesses WHERE id = ?1", rusqlite::params![id])?;
+    conn.execute(
+        "DELETE FROM gaps_weaknesses WHERE id = ?1",
+        rusqlite::params![id],
+    )?;
     if conn.changes() == 0 {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }

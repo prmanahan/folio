@@ -1,17 +1,20 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
 use crate::error::AppError;
 use crate::models::experience::{self, ExperienceInput};
 use crate::state::DbState;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
+};
 
 async fn list_experience(
     State(state): State<DbState>,
 ) -> Result<Json<Vec<experience::ExperienceFull>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let items = experience::list_all(&conn)?;
     Ok(Json(items))
 }
@@ -20,9 +23,14 @@ async fn get_experience(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<Json<experience::ExperienceFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = experience::get_by_id(&conn, id).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Experience {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Experience {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -32,7 +40,10 @@ async fn create_experience(
     State(state): State<DbState>,
     Json(input): Json<ExperienceInput>,
 ) -> Result<(StatusCode, Json<experience::ExperienceFull>), AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = experience::create(&conn, &input)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -42,9 +53,14 @@ async fn update_experience(
     Path(id): Path<i64>,
     Json(input): Json<ExperienceInput>,
 ) -> Result<Json<experience::ExperienceFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = experience::update(&conn, id, &input).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Experience {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Experience {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -54,17 +70,25 @@ async fn delete_experience(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     experience::delete(&conn, id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub fn routes() -> Router<DbState> {
     Router::new()
-        .route("/api/admin/experience", get(list_experience).post(create_experience))
+        .route(
+            "/api/admin/experience",
+            get(list_experience).post(create_experience),
+        )
         .route(
             "/api/admin/experience/{id}",
-            get(get_experience).put(update_experience).delete(delete_experience),
+            get(get_experience)
+                .put(update_experience)
+                .delete(delete_experience),
         )
 }
 
@@ -112,14 +136,26 @@ mod tests {
         // List all — should have 2 (plus any seed data; use distinct IDs)
         let all = experience::list_all(&conn).unwrap();
         // Both created records must be in the list
-        assert!(all.iter().any(|e| e.id == a.id && e.company_name == "Acme Corp"));
-        assert!(all.iter().any(|e| e.id == b.id && e.company_name == "Beta Inc"));
+        assert!(
+            all.iter()
+                .any(|e| e.id == a.id && e.company_name == "Acme Corp")
+        );
+        assert!(
+            all.iter()
+                .any(|e| e.id == b.id && e.company_name == "Beta Inc")
+        );
 
         // Get by id
         let fetched = experience::get_by_id(&conn, a.id).unwrap();
         assert_eq!(fetched.company_name, "Acme Corp");
-        assert_eq!(fetched.bullet_points, serde_json::json!(["Built X", "Scaled Y"]));
-        assert_eq!(fetched.quantified_impact, serde_json::json!({"revenue": "$1M"}));
+        assert_eq!(
+            fetched.bullet_points,
+            serde_json::json!(["Built X", "Scaled Y"])
+        );
+        assert_eq!(
+            fetched.quantified_impact,
+            serde_json::json!({"revenue": "$1M"})
+        );
 
         // Update
         let mut updated_input = make_input("Acme Corp Updated", 1);

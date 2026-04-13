@@ -1,17 +1,18 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
 use crate::error::AppError;
 use crate::models::project::{self, ProjectFull, ProjectInput};
 use crate::state::DbState;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
+};
 
-async fn list_projects(
-    State(state): State<DbState>,
-) -> Result<Json<Vec<ProjectFull>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+async fn list_projects(State(state): State<DbState>) -> Result<Json<Vec<ProjectFull>>, AppError> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let items = project::list_all(&conn)?;
     Ok(Json(items))
 }
@@ -20,9 +21,14 @@ async fn get_project(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<Json<ProjectFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = project::get_by_id(&conn, id).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Project {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Project {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -32,7 +38,10 @@ async fn create_project(
     State(state): State<DbState>,
     Json(input): Json<ProjectInput>,
 ) -> Result<(StatusCode, Json<ProjectFull>), AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = project::create(&conn, &input)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -42,9 +51,14 @@ async fn update_project(
     Path(id): Path<i64>,
     Json(input): Json<ProjectInput>,
 ) -> Result<Json<ProjectFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = project::update(&conn, id, &input).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Project {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Project {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -54,14 +68,20 @@ async fn delete_project(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     project::delete(&conn, id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub fn routes() -> Router<DbState> {
     Router::new()
-        .route("/api/admin/projects", get(list_projects).post(create_project))
+        .route(
+            "/api/admin/projects",
+            get(list_projects).post(create_project),
+        )
         .route(
             "/api/admin/projects/{id}",
             get(get_project).put(update_project).delete(delete_project),

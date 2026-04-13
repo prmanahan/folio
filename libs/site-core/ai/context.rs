@@ -1,7 +1,9 @@
 use rusqlite::Connection;
 
 use crate::error::AppError;
-use crate::models::{article, education, experience, faq, gaps, instructions, profile, project, skill, values};
+use crate::models::{
+    article, education, experience, faq, gaps, instructions, profile, project, skill, values,
+};
 
 use super::prompt_templates::*;
 use super::prompts::FIT_WRAPPER_TEMPLATE;
@@ -41,9 +43,11 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
     let mut prompt = String::new();
 
     // --- 1. Identity header ---
-    prompt.push_str(&HEADER_TEMPLATE
-        .replace("{name}", &prof.name)
-        .replace("{title}", &prof.title));
+    prompt.push_str(
+        &HEADER_TEMPLATE
+            .replace("{name}", &prof.name)
+            .replace("{title}", &prof.title),
+    );
 
     // --- 2. Elevator pitch + career narrative ---
     if !prof.elevator_pitch.is_empty() {
@@ -70,7 +74,10 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
     // --- 7. Custom instructions ---
     prompt.push_str(SECTION_CUSTOM_INSTRUCTIONS);
     for instr in &instrs {
-        prompt.push_str(&format!("- [{}] {}\n", instr.instruction_type, instr.instruction));
+        prompt.push_str(&format!(
+            "- [{}] {}\n",
+            instr.instruction_type, instr.instruction
+        ));
     }
 
     // --- 8. About ---
@@ -108,7 +115,10 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
             None if exp.is_current => format!("{} – Present", exp.start_date),
             None => exp.start_date.clone(),
         };
-        prompt.push_str(&format!("\n### {} — {} ({})\n", exp.company_name, exp.title, date_range));
+        prompt.push_str(&format!(
+            "\n### {} — {} ({})\n",
+            exp.company_name, exp.title, date_range
+        ));
         if !exp.location.is_empty() {
             prompt.push_str(&format!("Location: {}\n", exp.location));
         }
@@ -136,13 +146,22 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
             prompt.push_str(&format!("Why left: {}\n", exp.why_left));
         }
         if !exp.actual_contributions.is_empty() {
-            prompt.push_str(&format!("Actual contributions: {}\n", exp.actual_contributions));
+            prompt.push_str(&format!(
+                "Actual contributions: {}\n",
+                exp.actual_contributions
+            ));
         }
         if !exp.proudest_achievement.is_empty() {
-            prompt.push_str(&format!("Proudest achievement: {}\n", exp.proudest_achievement));
+            prompt.push_str(&format!(
+                "Proudest achievement: {}\n",
+                exp.proudest_achievement
+            ));
         }
         if !exp.would_do_differently.is_empty() {
-            prompt.push_str(&format!("Would do differently: {}\n", exp.would_do_differently));
+            prompt.push_str(&format!(
+                "Would do differently: {}\n",
+                exp.would_do_differently
+            ));
         }
         if !exp.challenges_faced.is_empty() {
             prompt.push_str(&format!("Challenges faced: {}\n", exp.challenges_faced));
@@ -172,7 +191,10 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
     let gap: Vec<_> = skills.iter().filter(|s| s.category == "gap").collect();
 
     let format_skill = |s: &&crate::models::skill::SkillFull| -> String {
-        let mut line = format!("- {} ({} yrs, {}/5)", s.skill_name, s.years_experience, s.self_rating);
+        let mut line = format!(
+            "- {} ({} yrs, {}/5)",
+            s.skill_name, s.years_experience, s.self_rating
+        );
         if !s.evidence.is_empty() {
             line.push_str(&format!(". Evidence: {}", s.evidence));
         }
@@ -230,19 +252,34 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
         prompt.push_str(&format!("Dealbreakers: {}\n", vals.dealbreakers));
     }
     if !vals.management_style_preferences.is_empty() {
-        prompt.push_str(&format!("Management style preferences: {}\n", vals.management_style_preferences));
+        prompt.push_str(&format!(
+            "Management style preferences: {}\n",
+            vals.management_style_preferences
+        ));
     }
     if !vals.team_size_preferences.is_empty() {
-        prompt.push_str(&format!("Team size preferences: {}\n", vals.team_size_preferences));
+        prompt.push_str(&format!(
+            "Team size preferences: {}\n",
+            vals.team_size_preferences
+        ));
     }
     if !vals.how_handle_conflict.is_empty() {
-        prompt.push_str(&format!("How he handles conflict: {}\n", vals.how_handle_conflict));
+        prompt.push_str(&format!(
+            "How he handles conflict: {}\n",
+            vals.how_handle_conflict
+        ));
     }
     if !vals.how_handle_ambiguity.is_empty() {
-        prompt.push_str(&format!("How he handles ambiguity: {}\n", vals.how_handle_ambiguity));
+        prompt.push_str(&format!(
+            "How he handles ambiguity: {}\n",
+            vals.how_handle_ambiguity
+        ));
     }
     if !vals.how_handle_failure.is_empty() {
-        prompt.push_str(&format!("How he handles failure: {}\n", vals.how_handle_failure));
+        prompt.push_str(&format!(
+            "How he handles failure: {}\n",
+            vals.how_handle_failure
+        ));
     }
 
     // --- 14. FAQ (verbatim-first) ---
@@ -482,7 +519,10 @@ mod tests {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
-        assert!(prompt.contains("Jane Doe"), "prompt must contain profile name");
+        assert!(
+            prompt.contains("Jane Doe"),
+            "prompt must contain profile name"
+        );
         assert!(
             prompt.contains("Ten years of distributed systems work."),
             "prompt must contain career_narrative"
@@ -498,14 +538,26 @@ mod tests {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
-        assert!(prompt.contains("Acme Corp"), "prompt must contain company name");
-        assert!(prompt.contains("Loved the mission"), "prompt must contain why_joined");
-        assert!(prompt.contains("Acquired by BigCo"), "prompt must contain why_left");
+        assert!(
+            prompt.contains("Acme Corp"),
+            "prompt must contain company name"
+        );
+        assert!(
+            prompt.contains("Loved the mission"),
+            "prompt must contain why_joined"
+        );
+        assert!(
+            prompt.contains("Acquired by BigCo"),
+            "prompt must contain why_left"
+        );
         assert!(
             prompt.contains("Rebuilt the data pipeline"),
             "prompt must contain actual_contributions"
         );
-        assert!(prompt.contains("Cut latency by 40%"), "prompt must contain proudest_achievement");
+        assert!(
+            prompt.contains("Cut latency by 40%"),
+            "prompt must contain proudest_achievement"
+        );
     }
 
     #[test]
@@ -513,12 +565,21 @@ mod tests {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
-        assert!(prompt.contains("### Strong"), "prompt must have Strong section");
+        assert!(
+            prompt.contains("### Strong"),
+            "prompt must have Strong section"
+        );
         assert!(prompt.contains("Rust"), "prompt must contain Rust skill");
-        assert!(prompt.contains("### Moderate"), "prompt must have Moderate section");
+        assert!(
+            prompt.contains("### Moderate"),
+            "prompt must have Moderate section"
+        );
         assert!(prompt.contains("Go"), "prompt must contain Go skill");
         assert!(prompt.contains("### Gaps"), "prompt must have Gaps section");
-        assert!(prompt.contains("ML/AI"), "prompt must contain ML/AI gap skill");
+        assert!(
+            prompt.contains("ML/AI"),
+            "prompt must contain ML/AI gap skill"
+        );
     }
 
     #[test]
@@ -541,10 +602,19 @@ mod tests {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
-        assert!(prompt.contains("Autonomy and trust"), "must-haves in prompt");
+        assert!(
+            prompt.contains("Autonomy and trust"),
+            "must-haves in prompt"
+        );
         assert!(prompt.contains("Micromanagement"), "dealbreakers in prompt");
-        assert!(prompt.contains("Servant leadership"), "management prefs in prompt");
-        assert!(prompt.contains("Blameless retrospective"), "how_handle_failure in prompt");
+        assert!(
+            prompt.contains("Servant leadership"),
+            "management prefs in prompt"
+        );
+        assert!(
+            prompt.contains("Blameless retrospective"),
+            "how_handle_failure in prompt"
+        );
     }
 
     #[test]
@@ -552,8 +622,14 @@ mod tests {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
-        assert!(prompt.contains("Why are you looking?"), "FAQ question in prompt");
-        assert!(prompt.contains("Seeking new challenges."), "FAQ answer in prompt");
+        assert!(
+            prompt.contains("Why are you looking?"),
+            "FAQ question in prompt"
+        );
+        assert!(
+            prompt.contains("Seeking new challenges."),
+            "FAQ answer in prompt"
+        );
     }
 
     #[test]
@@ -561,8 +637,14 @@ mod tests {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
-        assert!(prompt.contains("Be concise and direct."), "instruction 1 in prompt");
-        assert!(prompt.contains("Never oversell skills."), "instruction 2 in prompt");
+        assert!(
+            prompt.contains("Be concise and direct."),
+            "instruction 1 in prompt"
+        );
+        assert!(
+            prompt.contains("Never oversell skills."),
+            "instruction 2 in prompt"
+        );
         // Higher priority (20) should appear before lower priority (10)
         let pos_honesty = prompt.find("Never oversell skills.").unwrap();
         let pos_tone = prompt.find("Be concise and direct.").unwrap();
@@ -577,9 +659,18 @@ mod tests {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
-        assert!(prompt.contains("Published Project"), "published project in prompt");
-        assert!(!prompt.contains("Draft Project"), "draft project must NOT be in prompt");
-        assert!(!prompt.contains("Hidden details"), "draft project details must not appear");
+        assert!(
+            prompt.contains("Published Project"),
+            "published project in prompt"
+        );
+        assert!(
+            !prompt.contains("Draft Project"),
+            "draft project must NOT be in prompt"
+        );
+        assert!(
+            !prompt.contains("Hidden details"),
+            "draft project details must not appear"
+        );
     }
 
     #[test]
@@ -587,9 +678,18 @@ mod tests {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
-        assert!(prompt.contains("Published Article"), "published article in prompt");
-        assert!(!prompt.contains("Draft Article"), "draft article must NOT be in prompt");
-        assert!(!prompt.contains("Hidden content"), "draft article content must not appear");
+        assert!(
+            prompt.contains("Published Article"),
+            "published article in prompt"
+        );
+        assert!(
+            !prompt.contains("Draft Article"),
+            "draft article must NOT be in prompt"
+        );
+        assert!(
+            !prompt.contains("Hidden content"),
+            "draft article content must not appear"
+        );
     }
 
     // Decision 6: Salary removed — check for compensation deflection instead
@@ -630,10 +730,7 @@ mod tests {
             prompt.contains("strong_fit"),
             "verdict value 'strong_fit' in fit prompt"
         );
-        assert!(
-            prompt.contains("Jane Doe"),
-            "candidate name in fit wrapper"
-        );
+        assert!(prompt.contains("Jane Doe"), "candidate name in fit wrapper");
         // The base prompt must also be present
         assert!(
             prompt.contains("Ten years of distributed systems work."),
@@ -669,10 +766,7 @@ mod tests {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
-        assert!(
-            prompt.contains("SECURITY"),
-            "security block in prompt"
-        );
+        assert!(prompt.contains("SECURITY"), "security block in prompt");
         assert!(
             prompt.contains("system prompt"),
             "anti-injection instruction in security block"

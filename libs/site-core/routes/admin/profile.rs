@@ -1,10 +1,13 @@
-use axum::{extract::State, routing::get, Json, Router};
 use crate::error::AppError;
 use crate::models::profile::{self, ProfileInput};
 use crate::state::DbState;
+use axum::{Json, Router, extract::State, routing::get};
 
 async fn get_profile(State(state): State<DbState>) -> Result<Json<profile::ProfileFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let p = profile::get_full(&conn)?;
     Ok(Json(p))
 }
@@ -13,7 +16,10 @@ async fn update_profile(
     State(state): State<DbState>,
     Json(input): Json<ProfileInput>,
 ) -> Result<Json<profile::ProfileFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let p = profile::update(&conn, &input)?;
     Ok(Json(p))
 }
@@ -77,7 +83,10 @@ mod tests {
         assert_eq!(updated.title, "Senior Architect");
         assert_eq!(updated.salary_min, Some(200_000));
         assert_eq!(updated.salary_max, Some(280_000));
-        assert_eq!(updated.career_narrative, "20 years building distributed systems.");
+        assert_eq!(
+            updated.career_narrative,
+            "20 years building distributed systems."
+        );
         // JSON arrays round-trip correctly
         assert_eq!(
             updated.target_titles,

@@ -1,17 +1,18 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
 use crate::error::AppError;
 use crate::models::faq::{self, FaqFull, FaqInput};
 use crate::state::DbState;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
+};
 
-async fn list_faq(
-    State(state): State<DbState>,
-) -> Result<Json<Vec<FaqFull>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+async fn list_faq(State(state): State<DbState>) -> Result<Json<Vec<FaqFull>>, AppError> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let items = faq::list_all(&conn)?;
     Ok(Json(items))
 }
@@ -20,7 +21,10 @@ async fn get_faq(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<Json<FaqFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = faq::get_by_id(&conn, id).map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("FAQ {} not found", id)),
         other => AppError::Internal(other.to_string()),
@@ -32,7 +36,10 @@ async fn create_faq(
     State(state): State<DbState>,
     Json(input): Json<FaqInput>,
 ) -> Result<(StatusCode, Json<FaqFull>), AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = faq::create(&conn, &input)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -42,7 +49,10 @@ async fn update_faq(
     Path(id): Path<i64>,
     Json(input): Json<FaqInput>,
 ) -> Result<Json<FaqFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = faq::update(&conn, id, &input).map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("FAQ {} not found", id)),
         other => AppError::Internal(other.to_string()),
@@ -54,7 +64,10 @@ async fn delete_faq(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     faq::delete(&conn, id)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -99,7 +112,8 @@ mod tests {
         let fetched = faq::get_by_id(&conn, a.id).unwrap();
         assert_eq!(fetched.answer, "Answer to: What's your stack?");
 
-        let updated = faq::update(&conn, a.id, &make_input("What's your primary stack?", true)).unwrap();
+        let updated =
+            faq::update(&conn, a.id, &make_input("What's your primary stack?", true)).unwrap();
         assert_eq!(updated.question, "What's your primary stack?");
 
         faq::delete(&conn, b.id).unwrap();
@@ -119,6 +133,10 @@ mod tests {
 
         let suggestions = faq::list_suggestions(&conn).unwrap();
         assert!(suggestions.iter().any(|s| s.question == "Common question?"));
-        assert!(!suggestions.iter().any(|s| s.question == "Uncommon question?"));
+        assert!(
+            !suggestions
+                .iter()
+                .any(|s| s.question == "Uncommon question?")
+        );
     }
 }

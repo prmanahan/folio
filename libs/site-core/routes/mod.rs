@@ -1,25 +1,23 @@
 pub mod admin;
 pub mod agents;
 pub mod ai;
-pub mod profile;
-pub mod experience;
-pub mod skills;
-pub mod education;
-pub mod projects;
 pub mod articles;
-pub mod links;
+pub mod education;
+pub mod experience;
 pub mod faq;
+pub mod links;
+pub mod profile;
+pub mod projects;
+pub mod skills;
 
+use crate::state::DbState;
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
-use crate::state::DbState;
 
 /// Health check handler — executes SELECT 1 to verify the DB connection is live.
 /// Returns 200 "ok" on success, 503 "db unavailable" on failure.
-pub async fn health_check(
-    State(state): State<DbState>,
-) -> (StatusCode, &'static str) {
+pub async fn health_check(State(state): State<DbState>) -> (StatusCode, &'static str) {
     let db = state.db.lock().unwrap();
     match db.query_row("SELECT 1", [], |_| Ok(())) {
         Ok(_) => (StatusCode::OK, "ok"),
