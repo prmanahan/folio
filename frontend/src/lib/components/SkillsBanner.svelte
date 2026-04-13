@@ -13,6 +13,22 @@
 		skills.filter((s) => s.category === 'strong' || s.category === 'moderate')
 	);
 
+	// Seamless loop: the track animates translateX(0) → translateX(-50%).
+	// For the loop to be gapless, the first half of the track (= one logical copy)
+	// must be wider than the viewport at all times. With sparse data (e.g. 2 skills),
+	// a single copy is only ~200px — far too narrow for a 1440px+ viewport.
+	//
+	// Fix: repeat the skill set REPS times per half. The track contains 2×REPS copies
+	// total. At -50%, the second half starts exactly where the first half started,
+	// producing a seamless loop regardless of viewport width.
+	//
+	// REPS=10 guarantees coverage: even with 2 skills at ~100px each,
+	// 10×2×100px = 2000px > any common viewport width.
+	const REPS = 10;
+	let trackItems = $derived(
+		Array.from({ length: REPS }, () => bannerSkills).flat()
+	);
+
 	// Intersection Observer to stop/resume scrolling when off-screen.
 	// Default isVisible = true so the animation starts immediately on mount —
 	// the observer only pauses it after the banner has left the viewport.
@@ -52,8 +68,13 @@
 			class="banner-track"
 			class:paused={!isVisible}
 		>
-			<!-- Duplicate the list for seamless infinite loop -->
-			{#each [...bannerSkills, ...bannerSkills] as skill}
+			<!--
+				Track contains 2×REPS copies of bannerSkills.
+				Animation: translateX(0) → translateX(-50%).
+				At -50%, the second REPS copies are in exactly the position
+				the first REPS copies started — seamless loop with no gap.
+			-->
+			{#each [...trackItems, ...trackItems] as skill}
 				<span class="banner-item">
 					<span class="separator">◆</span>
 					<span class="skill-name">{skill.skill_name}</span>
