@@ -89,42 +89,49 @@
 			</div>
 
 			<!-- Ask AI card — primary CTA, filled brass -->
-			<button class="card card-ai" onclick={onToggleAi} aria-label="Ask AI">
+			<button class="card card-ai" onclick={onToggleAi} aria-label="Ask AI" data-testid="card-ask-ai">
 				<span class="card-icon" aria-hidden="true">&#9881;</span>
 				<span class="card-label">Ask AI</span>
 				<span class="card-desc">Chat with an AI about my experience</span>
 			</button>
 
-			<!-- Navigation cards row -->
+			<!-- Navigation cards row: Projects · Articles · Resume -->
 			<div class="nav-cards">
-				<a href="/projects" class="card card-nav">
+				<a href="/projects" class="card card-nav" data-testid="card-projects">
 					<span class="card-label">Projects</span>
 					<span class="card-desc">Things I've built</span>
 				</a>
 
-				<a href="/articles" class="card card-nav">
+				<a href="/articles" class="card card-nav" data-testid="card-articles">
 					<span class="card-label">Articles</span>
 					<span class="card-desc">Thoughts and write-ups</span>
 				</a>
 
-				<div class="card card-nav card-contact">
-					<span class="card-label">Contact</span>
-					{#if safeLinks.length > 0}
-						<div class="contact-links">
-							{#each safeLinks as link}
-								<a
-									href={link.url}
-									target="_blank"
-									rel="noopener noreferrer"
-									class="contact-link"
-									aria-label={link.label}
-								>{link.label}</a>
-							{/each}
-						</div>
-					{:else}
-						<span class="card-desc">Contact links unavailable</span>
-					{/if}
-				</div>
+				<a href="/resume" class="card card-nav" data-testid="card-resume">
+					<span class="card-label">Resume</span>
+					<span class="card-desc">Skills, experience, education</span>
+				</a>
+			</div>
+
+			<!-- Contact card — full-width, brass outline, below nav row -->
+			<!-- Functionally distinct: external links, not an internal route -->
+			<div class="card card-nav card-contact" data-testid="card-contact">
+				<span class="card-label">Contact</span>
+				{#if safeLinks.length > 0}
+					<div class="contact-links">
+						{#each safeLinks as link}
+							<a
+								href={link.url}
+								target="_blank"
+								rel="noopener noreferrer"
+								class="contact-link"
+								aria-label={link.label === 'Resume' ? 'Resume PDF' : link.label}
+							>{link.label === 'Resume' ? 'Resume PDF' : link.label}</a>
+						{/each}
+					</div>
+				{:else}
+					<span class="card-desc">Contact links unavailable</span>
+				{/if}
 			</div>
 		</div>
 	</div>
@@ -369,9 +376,13 @@
 		animation-delay: 1200ms;
 	}
 
-	/* Contact card specific */
+	/* Contact card — full-width, sits below nav row as its own zone */
 	.card-contact {
 		cursor: default;
+		width: 100%;
+		opacity: 0;
+		animation: fade-in 400ms cubic-bezier(0.25, 1, 0.5, 1) forwards;
+		animation-delay: 1300ms;
 	}
 
 	.contact-links {
@@ -431,7 +442,8 @@
 		.hero-meta,
 		.availability-badge,
 		.card-ai,
-		.nav-cards {
+		.nav-cards,
+		.card-contact {
 			opacity: 1;
 			transform: none;
 			animation: none;
@@ -460,8 +472,12 @@
 			min-width: 0;
 		}
 
+		/* Identity column is ~38% of viewport. At 768px that's ~291px.
+		   "Peter Manahan" in Cinzel at 40px + 0.06em tracking overflows.
+		   Preferred value tied to identity column width: 3.8vw keeps the name
+		   on one line across 768–1024px without feeling too small. */
 		.hero-name {
-			font-size: clamp(2.5rem, 5vw, 3.25rem);
+			font-size: clamp(1.75rem, 3.8vw, 3.25rem);
 		}
 
 		.hero-title {

@@ -13,7 +13,9 @@
 		skills.filter((s) => s.category === 'strong' || s.category === 'moderate')
 	);
 
-	// Intersection Observer to stop/resume scrolling when off-screen
+	// Intersection Observer to stop/resume scrolling when off-screen.
+	// Default isVisible = true so the animation starts immediately on mount —
+	// the observer only pauses it after the banner has left the viewport.
 	let bannerEl: HTMLElement | undefined = $state(undefined);
 	let isVisible = $state(true);
 
@@ -24,7 +26,9 @@
 			(entries) => {
 				isVisible = entries[0].isIntersecting;
 			},
-			{ threshold: 0 }
+			// rootMargin keeps the banner "visible" until it's fully off-screen,
+			// preventing an immediate pause on first mount when the hero is tall.
+			{ threshold: 0, rootMargin: '200px 0px 200px 0px' }
 		);
 
 		observer.observe(bannerEl);
