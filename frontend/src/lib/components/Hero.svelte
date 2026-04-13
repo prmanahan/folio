@@ -193,6 +193,7 @@
 		letter-spacing: 0.06em;
 		color: var(--color-gold);
 		line-height: 1.1;
+		white-space: nowrap;
 	}
 
 	.char {
@@ -472,12 +473,12 @@
 			min-width: 0;
 		}
 
-		/* Identity column is ~38% of viewport. At 768px that's ~291px.
-		   "Peter Manahan" in Cinzel at 40px + 0.06em tracking overflows.
-		   Preferred value tied to identity column width: 3.8vw keeps the name
-		   on one line across 768–1024px without feeling too small. */
+		/* Identity column is ~38% of viewport, capped at max-width 360px.
+		   "Peter Manahan" in Cinzel at 2.5rem + 0.06em tracking fits ~320px.
+		   3.8vw at 768px = 29px ≈ 1.8rem; upper bound capped at 2.5rem to
+		   prevent overflow in the fixed-width identity column. */
 		.hero-name {
-			font-size: clamp(1.75rem, 3.8vw, 3.25rem);
+			font-size: clamp(1.75rem, 3.8vw, 2.5rem);
 		}
 
 		.hero-title {
@@ -515,8 +516,10 @@
 			gap: 4rem;
 		}
 
+		/* At 1024px, identity column is still capped at 360px.
+		   2.5rem is the safe upper bound for "Peter Manahan" in Cinzel. */
 		.hero-name {
-			font-size: clamp(2.75rem, 4vw, 3.75rem);
+			font-size: clamp(2rem, 3vw, 2.5rem);
 		}
 
 		.hero-title {
@@ -524,12 +527,7 @@
 		}
 	}
 
-	/* ============================================================
-	   Wide desktop — 1440px+
-	   ============================================================ */
-	@media (min-width: 1440px) {
-		.hero-name {
-			font-size: 3.75rem;
-		}
-	}
+	/* Wide desktop — no additional overrides needed.
+	   hero-name is capped at 2.5rem via clamp at 1024px+ and
+	   identity column max-width: 360px, both are stable at all widths. */
 </style>
