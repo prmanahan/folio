@@ -48,6 +48,9 @@
 			<a href="/articles" class="card card-nav">
 				<span class="card-label">Articles</span>
 			</a>
+			<a href="/resume" class="card card-nav">
+				<span class="card-label">Resume</span>
+			</a>
 			<div class="card card-nav">
 				<span class="card-label">Contact</span>
 				<span class="card-desc">Contact links unavailable</span>

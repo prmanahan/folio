@@ -60,7 +60,9 @@
 <style>
 	.hero-skeleton {
 		position: relative;
-		min-height: 100svh;
+		/* Match Hero.svelte min-height to prevent layout shift on skeleton→hero transition.
+		   Header is always rendered, so subtract nav height from the viewport. */
+		min-height: calc(100svh - var(--nav-height));
 		display: flex;
 		flex-direction: column;
 		justify-content: center;

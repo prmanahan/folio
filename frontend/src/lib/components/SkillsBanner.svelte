@@ -22,11 +22,13 @@
 	// total. At -50%, the second half starts exactly where the first half started,
 	// producing a seamless loop regardless of viewport width.
 	//
-	// REPS=10 guarantees coverage: even with 2 skills at ~100px each,
-	// 10×2×100px = 2000px > any common viewport width.
-	const REPS = 10;
+	// REPS=4 covers realistic data without exploding the DOM:
+	// with ~30 strong+moderate skills at ~100px each, 4×30×100 = 12000px per half —
+	// well beyond any desktop viewport. For very sparse data (<6 skills), REPS bumps
+	// to 10 to cover wide viewports without a visible seam.
+	let reps = $derived(bannerSkills.length < 6 ? 10 : 4);
 	let trackItems = $derived(
-		Array.from({ length: REPS }, () => bannerSkills).flat()
+		Array.from({ length: reps }, () => bannerSkills).flat()
 	);
 
 	// Intersection Observer to stop/resume scrolling when off-screen.
@@ -55,7 +57,7 @@
 
 <!--
   SkillsBanner — conveyor belt marquee at the bottom of the hero
-  aria-hidden: SkillsSection below the fold handles AT users with a clean list.
+  aria-hidden: accessible skills surface lives on /resume (SkillsPillMatrix).
   This is purely decorative/visual brand reinforcement.
 -->
 <div

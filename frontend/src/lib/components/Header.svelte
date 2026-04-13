@@ -129,6 +129,13 @@
 		50%       { opacity: 1; }
 	}
 
+	@media (prefers-reduced-motion: reduce) {
+		.monogram.skeleton {
+			animation: none;
+			opacity: 0.6;
+		}
+	}
+
 	.breadcrumb {
 		min-width: 0;
 	}

@@ -161,19 +161,15 @@ describe('Resume page', () => {
 		});
 	});
 
-	it('no aria-hidden on Resume destination content', async () => {
+	it('no aria-hidden on Resume destination content sections', async () => {
 		const { container } = render(ResumePage);
 		await waitFor(() => {
 			expect(screen.getByTestId('resume-section-skills')).toBeInTheDocument();
 		});
-		const hiddenEls = container.querySelectorAll('[aria-hidden="true"]');
-		// No content-bearing elements should be aria-hidden
-		for (const el of hiddenEls) {
-			// Decorative elements (e.g., gear icons in ExperienceSection) are ok
-			expect(el.getAttribute('aria-hidden')).toBe('true');
-		}
-		// The main sections themselves must not be hidden
+		// The main content-bearing section anchors must not be aria-hidden.
+		// Decorative descendants (e.g., gear icons) may carry aria-hidden; that's fine.
 		expect(container.querySelector('[data-testid="resume-section-skills"]')?.getAttribute('aria-hidden')).toBeNull();
 		expect(container.querySelector('[data-testid="resume-section-experience"]')?.getAttribute('aria-hidden')).toBeNull();
+		expect(container.querySelector('[data-testid="resume-section-education"]')?.getAttribute('aria-hidden')).toBeNull();
 	});
 });

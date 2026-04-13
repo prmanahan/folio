@@ -16,20 +16,24 @@
 	//   string    = initials derived from profile name
 	let initials: string | null | undefined = $state(undefined);
 
-	// Listen for toggle-ai-pane custom event from Hero's Ask AI card
-	onMount(async () => {
+	// Listen for toggle-ai-pane custom event from Hero's Ask AI card.
+	// NOTE: onMount must be synchronous — an async callback returns a Promise,
+	// which Svelte cannot use as a cleanup function (the listener would leak).
+	// Fire the profile fetch as a detached promise inside the sync body.
+	onMount(() => {
 		function handleToggleAi() {
 			aiPaneOpen = !aiPaneOpen;
 		}
 		document.addEventListener('toggle-ai-pane', handleToggleAi);
 
-		// Load profile for monogram initials
-		try {
-			const profile = await api.getProfile();
-			initials = getInitials(profile.name);
-		} catch {
-			initials = null;
-		}
+		// Fire-and-forget profile fetch for monogram initials — no cleanup needed here
+		api.getProfile()
+			.then((profile) => {
+				initials = getInitials(profile.name);
+			})
+			.catch(() => {
+				initials = null;
+			});
 
 		return () => document.removeEventListener('toggle-ai-pane', handleToggleAi);
 	});
