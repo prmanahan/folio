@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test';
+import { mockPublicApi, PROFILE_NAME } from './fixtures';
 
 test.describe('AI chat pane', () => {
   test.beforeEach(async ({ page }) => {
+    await mockPublicApi(page);
     await page.goto('/');
     // Wait for hub to load
-    await expect(page.getByRole('heading', { name: /Peter Manahan/i })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: PROFILE_NAME })).toBeVisible({ timeout: 10000 });
   });
 
   test('Ask AI card exists on home page', async ({ page }) => {
@@ -40,7 +42,7 @@ test.describe('AI chat pane', () => {
     await page.waitForTimeout(2000);
 
     // App should not crash: hub content still present
-    await expect(page.getByRole('heading', { name: /Peter Manahan/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: PROFILE_NAME })).toBeVisible();
 
     // Either a response is streaming OR an error message is shown — both are acceptable
     const hasError = await page.locator('[role="alert"]').isVisible();

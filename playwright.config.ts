@@ -4,9 +4,12 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 30000,
   retries: 0,
+  // Run sequentially (1 worker) to avoid hitting the backend rate limiter (60 req/min)
+  // when running against a dev server where all requests share the same IP bucket.
+  workers: 1,
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
-    baseURL: 'http://localhost:8080',
+    baseURL: 'http://localhost:5173',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
