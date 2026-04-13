@@ -1,6 +1,6 @@
 # folio
 
-Personal portfolio and resume site. Rust/Axum backend with a SvelteKit frontend embedded into the binary at compile time via rust-embed.
+Personal portfolio and resume site. Rust/Axum backend serving a SvelteKit frontend as static files at runtime via `tower-http`'s `ServeDir`. The Docker multi-stage build compiles the backend and the frontend in separate stages, then copies both into the final image — the binary and the frontend assets are packaged together at image-build time, not at compile time.
 
 ## Tech Stack
 
@@ -8,7 +8,7 @@ Personal portfolio and resume site. Rust/Axum backend with a SvelteKit frontend 
 - **Frontend**: SvelteKit (Svelte 5), Tailwind CSS v4, DaisyUI v5
 - **Database**: SQLite via rusqlite
 - **AI features**: rig-core (Anthropic Claude), optional
-- **Embedding**: rust-embed (SPA baked into the binary at compile time)
+- **Static serving**: tower-http `ServeDir` (runtime, reads from `STATIC_DIR`, default `frontend/build`)
 
 ## Prerequisites
 
