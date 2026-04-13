@@ -30,21 +30,28 @@
 			<div class="skeleton-block skeleton-pulse ai-card-block"></div>
 
 			<!-- Static nav cards — rendered immediately, not skeletonized -->
+			<!-- Zone 2: nav row — Projects · Articles · Resume -->
 			<div class="nav-cards">
-				<a href="/projects" class="card card-nav">
+				<a href="/projects" class="card card-nav" data-testid="skeleton-card-projects">
 					<span class="card-label">Projects</span>
 					<span class="card-desc">Things I've built</span>
 				</a>
 
-				<a href="/articles" class="card card-nav">
+				<a href="/articles" class="card card-nav" data-testid="skeleton-card-articles">
 					<span class="card-label">Articles</span>
 					<span class="card-desc">Thoughts and write-ups</span>
 				</a>
 
-				<div class="card card-nav">
-					<span class="card-label">Contact</span>
-					<span class="card-desc">Links loading...</span>
-				</div>
+				<a href="/resume" class="card card-nav" data-testid="skeleton-card-resume">
+					<span class="card-label">Resume</span>
+					<span class="card-desc">Skills, experience, education</span>
+				</a>
+			</div>
+
+			<!-- Zone 3: Contact — full-width, below nav row -->
+			<div class="card card-nav card-contact" data-testid="skeleton-card-contact">
+				<span class="card-label">Contact</span>
+				<span class="card-desc">Links loading...</span>
 			</div>
 		</div>
 	</div>
@@ -153,6 +160,12 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
+	}
+
+	/* Contact card full-width below nav row */
+	.card-contact {
+		cursor: default;
+		width: 100%;
 	}
 
 	.card {
