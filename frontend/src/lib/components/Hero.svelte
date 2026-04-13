@@ -146,7 +146,8 @@
 	   ============================================================ */
 	.hero {
 		position: relative;
-		min-height: 100svh;
+		/* Header is now always present — hero fills remaining viewport */
+		min-height: calc(100svh - var(--nav-height));
 		display: flex;
 		flex-direction: column;
 		justify-content: center;

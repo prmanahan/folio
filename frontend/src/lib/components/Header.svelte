@@ -1,6 +1,15 @@
 <script lang="ts">
 	import { page } from '$app/state';
 
+	interface Props {
+		/** Monogram initials derived from the profile name (e.g. "PM", "AR").
+		 *  Undefined while profile is loading — shows skeleton placeholder.
+		 *  Null on error — shows "?" fallback. */
+		initials?: string | null;
+	}
+
+	let { initials = undefined }: Props = $props();
+
 	// Derive breadcrumb segments from the current URL path
 	let segments = $derived(
 		page.url.pathname === '/'
@@ -24,11 +33,19 @@
 	let parentSegment = $derived(
 		segments.length > 1 ? segments[segments.length - 2] : null
 	);
+
+	// Resolved display text: skeleton (loading), fallback (error), or initials
+	let monogramText = $derived(
+		initials === undefined ? '' : (initials === null ? '?' : initials)
+	);
+	let isLoadingMonogram = $derived(initials === undefined);
 </script>
 
 <header class="site-header">
 	<div class="header-inner container">
-		<a href="/" class="monogram" aria-label="Home">PM</a>
+		<a href="/" class="monogram" class:skeleton={isLoadingMonogram} aria-label="Home">
+			{#if !isLoadingMonogram}{monogramText}{/if}
+		</a>
 
 		{#if !isHome && segments.length > 0}
 			<nav aria-label="Breadcrumb" class="breadcrumb">
@@ -88,11 +105,28 @@
 		color: var(--color-gold);
 		text-decoration: none;
 		flex-shrink: 0;
+		min-width: 2ch;
 	}
 
 	.monogram:hover {
 		color: var(--color-gold);
 		text-decoration: none;
+	}
+
+	/* Loading state: skeleton placeholder matching monogram dimensions */
+	.monogram.skeleton {
+		display: inline-block;
+		width: 2.2rem;
+		height: 1.2rem;
+		background: rgba(176, 141, 87, 0.20);
+		border-radius: var(--radius-sm);
+		animation: skeleton-pulse 1.4s ease-in-out infinite;
+		vertical-align: middle;
+	}
+
+	@keyframes skeleton-pulse {
+		0%, 100% { opacity: 0.5; }
+		50%       { opacity: 1; }
 	}
 
 	.breadcrumb {
