@@ -237,7 +237,7 @@ test.describe('Accessibility — AI pane', () => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: PROFILE_NAME })).toBeVisible({ timeout: 10000 });
     await page.getByRole('button', { name: /ask ai/i }).click();
-    const sendBtn = page.getByRole('button', { name: /send/i });
+    const sendBtn = page.getByRole('button', { name: /transmit message/i });
     await expect(sendBtn).toBeVisible({ timeout: 5000 });
   });
 });

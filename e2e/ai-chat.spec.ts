@@ -27,17 +27,17 @@ test.describe('AI chat pane', () => {
 
   test('chat input field is visible', async ({ page }) => {
     await page.getByRole('button', { name: /ask ai/i }).click();
-    const textarea = page.getByPlaceholder(/ask a question/i);
+    const textarea = page.getByPlaceholder(/type your transmission/i);
     await expect(textarea).toBeVisible({ timeout: 5000 });
   });
 
   test('sending a message does not crash the app', async ({ page }) => {
     await page.getByRole('button', { name: /ask ai/i }).click();
 
-    const textarea = page.getByPlaceholder(/ask a question/i);
+    const textarea = page.getByPlaceholder(/type your transmission/i);
     await expect(textarea).toBeVisible({ timeout: 5000 });
     await textarea.fill('What is Peter\'s background?');
-    await page.getByRole('button', { name: /send/i }).click();
+    await page.getByRole('button', { name: /transmit message/i }).click();
 
     await page.waitForTimeout(2000);
 
