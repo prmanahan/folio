@@ -18,7 +18,7 @@ impl FaqSuggestion {
 
 pub fn list_suggestions(conn: &Connection) -> Result<Vec<FaqSuggestion>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, question FROM faq_responses WHERE is_common_question = 1 ORDER BY id ASC"
+        "SELECT id, question FROM faq_responses WHERE is_common_question = 1 ORDER BY id ASC",
     )?;
     let rows = stmt.query_map([], FaqSuggestion::from_row)?;
     rows.collect()
@@ -98,7 +98,10 @@ pub fn update(conn: &Connection, id: i64, input: &FaqInput) -> Result<FaqFull, r
 }
 
 pub fn delete(conn: &Connection, id: i64) -> Result<(), rusqlite::Error> {
-    conn.execute("DELETE FROM faq_responses WHERE id = ?1", rusqlite::params![id])?;
+    conn.execute(
+        "DELETE FROM faq_responses WHERE id = ?1",
+        rusqlite::params![id],
+    )?;
     if conn.changes() == 0 {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }

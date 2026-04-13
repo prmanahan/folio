@@ -1,7 +1,7 @@
 mod common;
 
-use site_core::state::{AppState, DbState};
 use rusqlite::Connection;
+use site_core::state::{AppState, DbState};
 use std::sync::{Arc, Mutex};
 
 /// Build a test app that includes the AI routes (without ConnectInfo).
@@ -12,13 +12,14 @@ fn ai_test_app() -> axum_test::TestServer {
          PRAGMA busy_timeout=5000;
          PRAGMA synchronous=NORMAL;
          PRAGMA cache_size=-64000;
-         PRAGMA temp_store=memory;"
-    ).unwrap();
+         PRAGMA temp_store=memory;",
+    )
+    .unwrap();
     site_core::db::migrate(&conn).unwrap();
     site_core::db::seed::seed_test_data(&conn).unwrap();
 
-    let password_hash = site_core::auth::hash_password("testpass")
-        .expect("Failed to hash test password");
+    let password_hash =
+        site_core::auth::hash_password("testpass").expect("Failed to hash test password");
     let state: DbState = Arc::new(AppState {
         db: Arc::new(Mutex::new(conn)),
         admin_password_hash: password_hash,
@@ -90,10 +91,7 @@ async fn test_chat_rate_limit_exceeded_returns_429() {
     response.assert_status(axum::http::StatusCode::TOO_MANY_REQUESTS);
     let body: serde_json::Value = response.json();
     assert!(
-        body["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("Rate limit"),
+        body["error"].as_str().unwrap_or("").contains("Rate limit"),
         "Error should mention rate limit, got: {:?}",
         body
     );
@@ -157,10 +155,7 @@ async fn test_fit_rate_limit_exceeded_returns_429() {
     response.assert_status(axum::http::StatusCode::TOO_MANY_REQUESTS);
     let body: serde_json::Value = response.json();
     assert!(
-        body["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("Rate limit"),
+        body["error"].as_str().unwrap_or("").contains("Rate limit"),
         "Error should mention rate limit, got: {:?}",
         body
     );

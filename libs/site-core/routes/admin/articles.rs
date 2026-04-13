@@ -1,17 +1,18 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
 use crate::error::AppError;
 use crate::models::article::{self, ArticleFull, ArticleInput};
 use crate::state::DbState;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
+};
 
-async fn list_articles(
-    State(state): State<DbState>,
-) -> Result<Json<Vec<ArticleFull>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+async fn list_articles(State(state): State<DbState>) -> Result<Json<Vec<ArticleFull>>, AppError> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let items = article::list_all(&conn)?;
     Ok(Json(items))
 }
@@ -20,9 +21,14 @@ async fn get_article(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<Json<ArticleFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = article::get_by_id(&conn, id).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Article {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Article {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -32,7 +38,10 @@ async fn create_article(
     State(state): State<DbState>,
     Json(input): Json<ArticleInput>,
 ) -> Result<(StatusCode, Json<ArticleFull>), AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = article::create(&conn, &input)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -42,9 +51,14 @@ async fn update_article(
     Path(id): Path<i64>,
     Json(input): Json<ArticleInput>,
 ) -> Result<Json<ArticleFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = article::update(&conn, id, &input).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Article {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Article {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -54,14 +68,20 @@ async fn delete_article(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     article::delete(&conn, id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub fn routes() -> Router<DbState> {
     Router::new()
-        .route("/api/admin/articles", get(list_articles).post(create_article))
+        .route(
+            "/api/admin/articles",
+            get(list_articles).post(create_article),
+        )
         .route(
             "/api/admin/articles/{id}",
             get(get_article).put(update_article).delete(delete_article),
@@ -103,7 +123,8 @@ mod tests {
         let fetched = article::get_by_id(&conn, a.id).unwrap();
         assert_eq!(fetched.tags, serde_json::json!(["rust", "backend"]));
 
-        let updated = article::update(&conn, a.id, &make_input("Hello World Updated", true)).unwrap();
+        let updated =
+            article::update(&conn, a.id, &make_input("Hello World Updated", true)).unwrap();
         assert_eq!(updated.title, "Hello World Updated");
         assert_eq!(updated.slug, "hello-world-updated");
         assert_eq!(updated.published, true);

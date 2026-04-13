@@ -34,7 +34,7 @@ impl Project {
 pub fn list_published(conn: &Connection) -> Result<Vec<Project>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, title, slug, summary, description, tech_stack, url, sort_order
-         FROM projects WHERE published = 1 ORDER BY sort_order ASC"
+         FROM projects WHERE published = 1 ORDER BY sort_order ASC",
     )?;
     let rows = stmt.query_map([], Project::from_row)?;
     rows.collect()
@@ -43,7 +43,7 @@ pub fn list_published(conn: &Connection) -> Result<Vec<Project>, rusqlite::Error
 pub fn get_by_slug(conn: &Connection, slug: &str) -> Result<Option<Project>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, title, slug, summary, description, tech_stack, url, sort_order
-         FROM projects WHERE slug = ?1 AND published = 1"
+         FROM projects WHERE slug = ?1 AND published = 1",
     )?;
     let mut rows = stmt.query_map([slug], Project::from_row)?;
     match rows.next() {
@@ -120,8 +120,7 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<ProjectFull, rusqlite::Er
 
 pub fn create(conn: &Connection, input: &ProjectInput) -> Result<ProjectFull, rusqlite::Error> {
     let slug = input.slug.clone().unwrap_or_else(|| slugify(&input.title));
-    let ts_str = serde_json::to_string(&input.tech_stack)
-        .unwrap_or_else(|_| "[]".to_string());
+    let ts_str = serde_json::to_string(&input.tech_stack).unwrap_or_else(|_| "[]".to_string());
     conn.execute(
         "INSERT INTO projects (title, slug, summary, description, tech_stack, url, sort_order, published)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -140,10 +139,13 @@ pub fn create(conn: &Connection, input: &ProjectInput) -> Result<ProjectFull, ru
     get_by_id(conn, id)
 }
 
-pub fn update(conn: &Connection, id: i64, input: &ProjectInput) -> Result<ProjectFull, rusqlite::Error> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    input: &ProjectInput,
+) -> Result<ProjectFull, rusqlite::Error> {
     let slug = input.slug.clone().unwrap_or_else(|| slugify(&input.title));
-    let ts_str = serde_json::to_string(&input.tech_stack)
-        .unwrap_or_else(|_| "[]".to_string());
+    let ts_str = serde_json::to_string(&input.tech_stack).unwrap_or_else(|_| "[]".to_string());
     conn.execute(
         "UPDATE projects SET title = ?1, slug = ?2, summary = ?3, description = ?4,
                 tech_stack = ?5, url = ?6, sort_order = ?7, published = ?8

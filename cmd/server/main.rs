@@ -1,15 +1,17 @@
+use axum::extract::Path;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::{Router, routing::get};
+use clap::{Parser, Subcommand};
 use site_core::auth;
 use site_core::config::Config;
 use site_core::db;
-use site_core::middleware::global_rate_limit::{GlobalRateLimitState, global_rate_limit_middleware};
+use site_core::middleware::global_rate_limit::{
+    GlobalRateLimitState, global_rate_limit_middleware,
+};
 use site_core::middleware::page_hits::page_hits_middleware;
 use site_core::routes;
 use site_core::state::{AppState, DbState};
-use axum::{routing::get, Router};
-use axum::extract::Path;
-use axum::http::{header, StatusCode};
-use axum::response::{IntoResponse, Response};
-use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
@@ -59,15 +61,16 @@ async fn security_headers(
 async fn serve_avatar(Path(filename): Path<String>) -> Response {
     // Sanitize: only allow alphanumeric, dash, underscore, dot
     // Also reject dotfiles and path traversal attempts
-    if !filename.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    if !filename
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
         || filename.starts_with('.')
         || filename.contains("..")
     {
         return (StatusCode::BAD_REQUEST, "Invalid filename").into_response();
     }
 
-    let avatar_dir = std::env::var("AVATAR_DIR")
-        .unwrap_or_else(|_| "data/avatars".to_string());
+    let avatar_dir = std::env::var("AVATAR_DIR").unwrap_or_else(|_| "data/avatars".to_string());
     let path = std::path::Path::new(&avatar_dir).join(&filename);
 
     match tokio::fs::read(&path).await {
@@ -96,12 +99,13 @@ async fn run_server() {
     let conn = db::connect(&config.database_url).expect("Failed to connect to database");
 
     // Hash the admin password with Argon2id at startup
-    let password_hash = auth::hash_password(&config.admin_password)
-        .expect("Failed to hash admin password");
+    let password_hash =
+        auth::hash_password(&config.admin_password).expect("Failed to hash admin password");
 
-    let rig_client = config.anthropic_api_key.as_ref().and_then(|key| {
-        rig::providers::anthropic::Client::new(key).ok()
-    });
+    let rig_client = config
+        .anthropic_api_key
+        .as_ref()
+        .and_then(|key| rig::providers::anthropic::Client::new(key).ok());
 
     let db_state: DbState = Arc::new(AppState {
         db: Arc::new(Mutex::new(conn)),
@@ -147,14 +151,21 @@ async fn run_server() {
         .layer(axum::Extension(global_rate_limit))
         .layer(cors)
         .layer(axum::middleware::from_fn(security_headers))
-        .fallback_service(site_core::static_files::static_file_service(&config.static_dir));
+        .fallback_service(site_core::static_files::static_file_service(
+            &config.static_dir,
+        ));
 
-    let listener = tokio::net::TcpListener::bind(
-        format!("0.0.0.0:{}", config.port)
-    ).await.expect("Failed to bind to port");
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.port))
+        .await
+        .expect("Failed to bind to port");
 
     tracing::info!(port = config.port, "listening");
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.expect("Server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("Server error");
 }
 
 #[tokio::main]
@@ -162,8 +173,7 @@ async fn main() {
     // Initialize tracing — respects RUST_LOG env var, defaults to info
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"))
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 

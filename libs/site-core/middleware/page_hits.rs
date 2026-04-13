@@ -1,6 +1,6 @@
 use axum::extract::State;
 use axum::response::Response;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 use crate::middleware::global_rate_limit::extract_ip_for_rate_limit;
 use crate::models::page_hits;
@@ -8,10 +8,8 @@ use crate::state::DbState;
 
 /// Routes worth tracking for unique visitor counts.
 fn should_track(path: &str) -> bool {
-    matches!(
-        path,
-        "/" | "/projects" | "/articles" | "/agents"
-    ) || path.starts_with("/projects/")
+    matches!(path, "/" | "/projects" | "/articles" | "/agents")
+        || path.starts_with("/projects/")
         || path.starts_with("/articles/")
 }
 
@@ -36,10 +34,8 @@ pub async fn page_hits_middleware(
     let path = request.uri().path().to_string();
 
     if should_track(&path) {
-        let ip = extract_ip_for_rate_limit(
-            request.headers(),
-            db_state.trusted_ip_header.as_deref(),
-        );
+        let ip =
+            extract_ip_for_rate_limit(request.headers(), db_state.trusted_ip_header.as_deref());
         let ip_hash = hash_ip(&ip, &db_state.page_hit_salt);
         let db = db_state.db.clone();
 

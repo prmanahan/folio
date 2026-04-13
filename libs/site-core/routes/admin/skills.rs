@@ -1,17 +1,20 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
 use crate::error::AppError;
 use crate::models::skill::{self, SkillInput};
 use crate::state::DbState;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
+};
 
 async fn list_skills(
     State(state): State<DbState>,
 ) -> Result<Json<Vec<skill::SkillFull>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let items = skill::list_all(&conn)?;
     Ok(Json(items))
 }
@@ -20,9 +23,14 @@ async fn get_skill(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<Json<skill::SkillFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = skill::get_by_id(&conn, id).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Skill {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Skill {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -32,7 +40,10 @@ async fn create_skill(
     State(state): State<DbState>,
     Json(input): Json<SkillInput>,
 ) -> Result<(StatusCode, Json<skill::SkillFull>), AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = skill::create(&conn, &input)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -42,9 +53,14 @@ async fn update_skill(
     Path(id): Path<i64>,
     Json(input): Json<SkillInput>,
 ) -> Result<Json<skill::SkillFull>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = skill::update(&conn, id, &input).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Skill {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Skill {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -54,7 +70,10 @@ async fn delete_skill(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     skill::delete(&conn, id)?;
     Ok(StatusCode::NO_CONTENT)
 }

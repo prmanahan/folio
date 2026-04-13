@@ -66,7 +66,11 @@ pub fn create(conn: &Connection, input: &EducationInput) -> Result<Education, ru
     get_by_id(conn, id)
 }
 
-pub fn update(conn: &Connection, id: i64, input: &EducationInput) -> Result<Education, rusqlite::Error> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    input: &EducationInput,
+) -> Result<Education, rusqlite::Error> {
     conn.execute(
         "UPDATE education SET degree = ?1, institution = ?2, location = ?3,
                 start_year = ?4, end_year = ?5

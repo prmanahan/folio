@@ -1,10 +1,17 @@
-use axum::{extract::{Path, State}, routing::get, Json, Router};
 use crate::error::AppError;
 use crate::models::project::{self, Project};
 use crate::state::DbState;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    routing::get,
+};
 
 async fn list_projects(State(state): State<DbState>) -> Result<Json<Vec<Project>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let projects = project::list_published(&conn)?;
     Ok(Json(projects))
 }
@@ -13,7 +20,10 @@ async fn get_project(
     State(state): State<DbState>,
     Path(slug): Path<String>,
 ) -> Result<Json<Project>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     match project::get_by_slug(&conn, &slug)? {
         Some(p) => Ok(Json(p)),
         None => Err(AppError::NotFound(format!("Project '{}' not found", slug))),

@@ -32,7 +32,7 @@ impl Article {
 pub fn list_published(conn: &Connection) -> Result<Vec<Article>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, title, slug, summary, content, tags, published_at
-         FROM articles WHERE published = 1 ORDER BY published_at DESC"
+         FROM articles WHERE published = 1 ORDER BY published_at DESC",
     )?;
     let rows = stmt.query_map([], Article::from_row)?;
     rows.collect()
@@ -41,7 +41,7 @@ pub fn list_published(conn: &Connection) -> Result<Vec<Article>, rusqlite::Error
 pub fn get_by_slug(conn: &Connection, slug: &str) -> Result<Option<Article>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT id, title, slug, summary, content, tags, published_at
-         FROM articles WHERE slug = ?1 AND published = 1"
+         FROM articles WHERE slug = ?1 AND published = 1",
     )?;
     let mut rows = stmt.query_map([slug], Article::from_row)?;
     match rows.next() {
@@ -115,8 +115,7 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<ArticleFull, rusqlite::Er
 
 pub fn create(conn: &Connection, input: &ArticleInput) -> Result<ArticleFull, rusqlite::Error> {
     let slug = input.slug.clone().unwrap_or_else(|| slugify(&input.title));
-    let tags_str = serde_json::to_string(&input.tags)
-        .unwrap_or_else(|_| "[]".to_string());
+    let tags_str = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".to_string());
     conn.execute(
         "INSERT INTO articles (title, slug, summary, content, tags, published_at, published)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -134,10 +133,13 @@ pub fn create(conn: &Connection, input: &ArticleInput) -> Result<ArticleFull, ru
     get_by_id(conn, id)
 }
 
-pub fn update(conn: &Connection, id: i64, input: &ArticleInput) -> Result<ArticleFull, rusqlite::Error> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    input: &ArticleInput,
+) -> Result<ArticleFull, rusqlite::Error> {
     let slug = input.slug.clone().unwrap_or_else(|| slugify(&input.title));
-    let tags_str = serde_json::to_string(&input.tags)
-        .unwrap_or_else(|_| "[]".to_string());
+    let tags_str = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".to_string());
     conn.execute(
         "UPDATE articles SET title = ?1, slug = ?2, summary = ?3, content = ?4,
                 tags = ?5, published_at = ?6, published = ?7

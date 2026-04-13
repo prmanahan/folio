@@ -12,9 +12,9 @@ pub mod projects;
 pub mod skills;
 pub mod values;
 
-use axum::{middleware, routing::post, Router};
 use crate::auth;
 use crate::state::DbState;
+use axum::{Router, middleware, routing::post};
 
 pub fn admin_router(state: DbState) -> Router<DbState> {
     let protected = Router::new()

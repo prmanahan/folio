@@ -1,17 +1,18 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
 use crate::error::AppError;
 use crate::models::education::{self, Education, EducationInput};
 use crate::state::DbState;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
+};
 
-async fn list_education(
-    State(state): State<DbState>,
-) -> Result<Json<Vec<Education>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+async fn list_education(State(state): State<DbState>) -> Result<Json<Vec<Education>>, AppError> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let items = education::list(&conn)?;
     Ok(Json(items))
 }
@@ -20,9 +21,14 @@ async fn get_education(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<Json<Education>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = education::get_by_id(&conn, id).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Education {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Education {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -32,7 +38,10 @@ async fn create_education(
     State(state): State<DbState>,
     Json(input): Json<EducationInput>,
 ) -> Result<(StatusCode, Json<Education>), AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = education::create(&conn, &input)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -42,9 +51,14 @@ async fn update_education(
     Path(id): Path<i64>,
     Json(input): Json<EducationInput>,
 ) -> Result<Json<Education>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let item = education::update(&conn, id, &input).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(format!("Education {} not found", id)),
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound(format!("Education {} not found", id))
+        }
         other => AppError::Internal(other.to_string()),
     })?;
     Ok(Json(item))
@@ -54,17 +68,25 @@ async fn delete_education(
     State(state): State<DbState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     education::delete(&conn, id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub fn routes() -> Router<DbState> {
     Router::new()
-        .route("/api/admin/education", get(list_education).post(create_education))
+        .route(
+            "/api/admin/education",
+            get(list_education).post(create_education),
+        )
         .route(
             "/api/admin/education/{id}",
-            get(get_education).put(update_education).delete(delete_education),
+            get(get_education)
+                .put(update_education)
+                .delete(delete_education),
         )
 }
 
@@ -100,7 +122,8 @@ mod tests {
         let fetched = education::get_by_id(&conn, a.id).unwrap();
         assert_eq!(fetched.institution, "State University");
 
-        let updated = education::update(&conn, a.id, &make_input("BS CS (Honors)", "2000")).unwrap();
+        let updated =
+            education::update(&conn, a.id, &make_input("BS CS (Honors)", "2000")).unwrap();
         assert_eq!(updated.degree, "BS CS (Honors)");
 
         education::delete(&conn, b.id).unwrap();

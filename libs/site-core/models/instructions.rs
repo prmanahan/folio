@@ -47,7 +47,10 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<AiInstruction, rusqlite::
     )
 }
 
-pub fn create(conn: &Connection, input: &AiInstructionInput) -> Result<AiInstruction, rusqlite::Error> {
+pub fn create(
+    conn: &Connection,
+    input: &AiInstructionInput,
+) -> Result<AiInstruction, rusqlite::Error> {
     conn.execute(
         "INSERT INTO ai_instructions (instruction_type, instruction, priority)
          VALUES (?1, ?2, ?3)",
@@ -57,17 +60,29 @@ pub fn create(conn: &Connection, input: &AiInstructionInput) -> Result<AiInstruc
     get_by_id(conn, id)
 }
 
-pub fn update(conn: &Connection, id: i64, input: &AiInstructionInput) -> Result<AiInstruction, rusqlite::Error> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    input: &AiInstructionInput,
+) -> Result<AiInstruction, rusqlite::Error> {
     conn.execute(
         "UPDATE ai_instructions SET instruction_type = ?1, instruction = ?2, priority = ?3
          WHERE id = ?4",
-        rusqlite::params![input.instruction_type, input.instruction, input.priority, id],
+        rusqlite::params![
+            input.instruction_type,
+            input.instruction,
+            input.priority,
+            id
+        ],
     )?;
     get_by_id(conn, id)
 }
 
 pub fn delete(conn: &Connection, id: i64) -> Result<(), rusqlite::Error> {
-    conn.execute("DELETE FROM ai_instructions WHERE id = ?1", rusqlite::params![id])?;
+    conn.execute(
+        "DELETE FROM ai_instructions WHERE id = ?1",
+        rusqlite::params![id],
+    )?;
     if conn.changes() == 0 {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }

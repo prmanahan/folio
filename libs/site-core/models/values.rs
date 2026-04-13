@@ -51,7 +51,10 @@ pub fn get(conn: &Connection) -> Result<ValuesCulture, rusqlite::Error> {
     )
 }
 
-pub fn update(conn: &Connection, input: &ValuesCultureInput) -> Result<ValuesCulture, rusqlite::Error> {
+pub fn update(
+    conn: &Connection,
+    input: &ValuesCultureInput,
+) -> Result<ValuesCulture, rusqlite::Error> {
     conn.execute(
         "UPDATE values_culture SET
             must_haves = ?1, dealbreakers = ?2, management_style_preferences = ?3,

@@ -150,10 +150,10 @@ pub fn get_full(conn: &Connection) -> Result<ProfileFull, rusqlite::Error> {
 }
 
 pub fn update(conn: &Connection, input: &ProfileInput) -> Result<ProfileFull, rusqlite::Error> {
-    let target_titles_str = serde_json::to_string(&input.target_titles)
-        .unwrap_or_else(|_| "[]".to_string());
-    let target_company_stages_str = serde_json::to_string(&input.target_company_stages)
-        .unwrap_or_else(|_| "[]".to_string());
+    let target_titles_str =
+        serde_json::to_string(&input.target_titles).unwrap_or_else(|_| "[]".to_string());
+    let target_company_stages_str =
+        serde_json::to_string(&input.target_company_stages).unwrap_or_else(|_| "[]".to_string());
     conn.execute(
         "UPDATE candidate_profile SET
             updated_at = datetime('now'),

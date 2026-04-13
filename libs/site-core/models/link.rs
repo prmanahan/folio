@@ -23,9 +23,8 @@ impl Link {
 }
 
 pub fn list(conn: &Connection) -> Result<Vec<Link>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
-        "SELECT id, label, url, icon, sort_order FROM links ORDER BY sort_order ASC"
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, label, url, icon, sort_order FROM links ORDER BY sort_order ASC")?;
     let rows = stmt.query_map([], Link::from_row)?;
     rows.collect()
 }
