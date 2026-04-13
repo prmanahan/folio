@@ -16,9 +16,9 @@ COPY cmd/server/Cargo.toml cmd/server/Cargo.toml
 COPY libs/site-core/Cargo.toml libs/site-core/Cargo.toml
 RUN mkdir -p cmd/server libs/site-core \
     && echo 'fn main() {}' > cmd/server/main.rs \
-    && echo '' > libs/site-core/lib.rs
+    && echo '' > libs/site-core/site_core.rs
 RUN cargo build --release
-RUN rm -rf cmd/server/main.rs libs/site-core/lib.rs
+RUN rm -rf cmd/server/main.rs libs/site-core/site_core.rs
 
 # Copy real source + frontend build output
 COPY cmd/ cmd/
