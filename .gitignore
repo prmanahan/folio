@@ -9,6 +9,9 @@ playwright-report/
 test-results/
 data/*.db-shm
 data/*.db-wal
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
 .superpowers/
 # Internal docs, planning, and tooling (not for publishing)
 agent_docs/
