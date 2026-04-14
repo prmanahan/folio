@@ -4,6 +4,7 @@
 	import type { Profile, Link, Skill } from '$lib/types';
 	import Hero from '$lib/components/Hero.svelte';
 	import HeroSkeleton from '$lib/components/HeroSkeleton.svelte';
+	import SkillsBanner from '$lib/components/SkillsBanner.svelte';
 
 	let profile: Profile | null = $state(null);
 	let links: Link[] = $state([]);
@@ -58,7 +59,12 @@
 		</div>
 	</div>
 {:else if profile}
-	<Hero {profile} {links} {skills} onToggleAi={handleToggleAi} />
+	<!-- Hero and SkillsBanner are DOM siblings per spec R2: the banner is no
+	     longer absolutely positioned inside .hero, so its placement on the
+	     page comes from document flow, not from anchoring to the hero box.
+	     This is the structural fix for the vertical-overflow bug. -->
+	<Hero {profile} {links} onToggleAi={handleToggleAi} />
+	<SkillsBanner {skills} />
 {/if}
 
 <style>

@@ -1,0 +1,16 @@
+{
+  "_comment": "Captured 2026-04-13 from https://peter.manahan.io/api/profile via curl. Static — NOT re-fetched at runtime. Used by the bounds tests for the hero vertical-overflow regression. Loaded by db::seed::seed_live_profile() when the FOLIO_SEED=live env var is set, or via the `live-profile-seed` cargo feature. The pitch_short field is intentionally empty here — Peter writes that as content work after the migration lands. The pitch_long field is the original elevator_pitch from the live profile (700+ chars) which is exactly the long-form bug repro the spec calls for.",
+  "name": "Peter Manahan",
+  "email": "prmanahan@pm.me",
+  "title": "Software Architect",
+  "location": "Fredericton, NB, Canada",
+  "phone": "506.292.4897",
+  "linkedin_url": "https://www.linkedin.com/in/peter-manahan-4181839/",
+  "github_url": "https://github.com/prmanahan",
+  "twitter_url": "",
+  "pitch_short": "",
+  "pitch_long": "15+ years across the full software delivery chain: developer, tester, release lead, installation architect, development manager, product owner, TPM, software architect. Led Agile teams building back-end services for security intelligence platforms. Took teams from daily broken builds to predictable, high-frequency delivery. Built developer productivity tooling including Backstage-based hubs, launched cloud-based offerings, designed automated systems that replaced manual quality gates, and delivered installation infrastructure used by 160 IBM products.",
+  "availability_status": "available",
+  "availability_date": "",
+  "remote_preference": "Remote or Fredericton, NB, Canada"
+}

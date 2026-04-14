@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api';
-	import type { Skill, Experience, Education } from '$lib/types';
+	import type { Profile, Skill, Experience, Education } from '$lib/types';
 	import SkillsPillMatrix from '$lib/components/SkillsPillMatrix.svelte';
 	import ExperienceSection from '$lib/components/ExperienceSection.svelte';
 	import EducationSection from '$lib/components/EducationSection.svelte';
 
+	let profile: Profile | null = $state(null);
 	let skills: Skill[] = $state([]);
 	let experiences: Experience[] = $state([]);
 	let education: Education[] = $state([]);
@@ -14,7 +15,8 @@
 
 	onMount(async () => {
 		try {
-			[skills, experiences, education] = await Promise.all([
+			[profile, skills, experiences, education] = await Promise.all([
+				api.getProfile(),
 				api.getSkills(),
 				api.getExperience(),
 				api.getEducation(),
@@ -43,11 +45,23 @@
 			</div>
 		{:else}
 			<!--
-				Section order per amendment: Skills → Experience → Education.
-				Each section has an `id` anchor for deep linking (#skills, #experience, #education).
+				Section order per amendment: Bio → Skills → Experience → Education.
+				Each section has an `id` anchor for deep linking.
 				ExperienceSection and EducationSection render their own <section> + <h2> internally —
 				the .section-anchor wrapper provides the ID target without creating nested sections.
 			-->
+
+			<!-- Section 0: Bio (pitch_long) — rendered only if non-empty per spec
+			     bounds expectation "empty pitch_long: /resume renders without
+			     a broken bio section". -->
+			{#if profile && profile.pitch_long && profile.pitch_long.trim().length > 0}
+				<div class="section-anchor" id="bio" data-testid="resume-section-bio">
+					<section aria-labelledby="bio-heading">
+						<h2 id="bio-heading" class="section-heading">Bio</h2>
+						<p class="bio-text">{profile.pitch_long}</p>
+					</section>
+				</div>
+			{/if}
 
 			<!-- Section 1: Skills -->
 			<div class="section-anchor" id="skills" data-testid="resume-section-skills">
@@ -128,5 +142,14 @@
 		color: var(--color-text-ghost);
 		font-size: 0.875rem;
 		padding: 1rem 0;
+	}
+
+	.bio-text {
+		font-size: 1rem;
+		line-height: 1.7;
+		color: var(--color-text);
+		max-width: 64ch;
+		white-space: pre-line;
+		margin-bottom: 2.5rem;
 	}
 </style>

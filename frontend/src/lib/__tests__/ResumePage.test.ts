@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/svelte';
 // Mock the api module before imports that reference it
 vi.mock('$lib/api', () => ({
 	api: {
+		getProfile: vi.fn(),
 		getSkills: vi.fn(),
 		getExperience: vi.fn(),
 		getEducation: vi.fn(),
@@ -12,7 +13,23 @@ vi.mock('$lib/api', () => ({
 
 import ResumePage from '../../routes/(public)/resume/+page.svelte';
 import { api } from '$lib/api';
-import type { Skill, Experience, Education } from '$lib/types';
+import type { Profile, Skill, Experience, Education } from '$lib/types';
+
+const mockProfile: Profile = {
+	name: 'Alex Rivera',
+	email: 'alex@example.com',
+	title: 'Software Architect',
+	location: 'Vancouver, BC',
+	phone: '',
+	linkedin_url: '',
+	github_url: '',
+	twitter_url: '',
+	pitch_short: 'Short pitch.',
+	pitch_long: 'Long-form bio with substantial detail about the candidate.',
+	availability_status: 'open',
+	availability_date: '',
+	remote_preference: 'remote',
+};
 
 const mockSkills: Skill[] = [
 	{ id: 1, skill_name: 'Rust', category: 'strong', years_experience: 3, last_used: '2026' },
@@ -47,6 +64,7 @@ const mockEducation: Education[] = [
 ];
 
 beforeEach(() => {
+	vi.mocked(api.getProfile).mockResolvedValue(mockProfile);
 	vi.mocked(api.getSkills).mockResolvedValue(mockSkills);
 	vi.mocked(api.getExperience).mockResolvedValue(mockExperiences);
 	vi.mocked(api.getEducation).mockResolvedValue(mockEducation);
@@ -62,6 +80,7 @@ describe('Resume page', () => {
 
 	it('shows loading state before data resolves', () => {
 		// Delay resolution so we can catch the loading state
+		vi.mocked(api.getProfile).mockReturnValue(new Promise(() => {}));
 		vi.mocked(api.getSkills).mockReturnValue(new Promise(() => {}));
 		vi.mocked(api.getExperience).mockReturnValue(new Promise(() => {}));
 		vi.mocked(api.getEducation).mockReturnValue(new Promise(() => {}));
@@ -90,15 +109,15 @@ describe('Resume page', () => {
 		});
 	});
 
-	it('renders sections in order: Skills → Experience → Education', async () => {
+	it('renders sections in order: Bio → Skills → Experience → Education', async () => {
 		const { container } = render(ResumePage);
 		await waitFor(() => {
 			expect(screen.getByTestId('resume-section-skills')).toBeInTheDocument();
 		});
 
 		const anchors = container.querySelectorAll('.section-anchor');
-		const ids = Array.from(anchors).map(el => el.id);
-		expect(ids).toEqual(['skills', 'experience', 'education']);
+		const ids = Array.from(anchors).map((el) => el.id);
+		expect(ids).toEqual(['bio', 'skills', 'experience', 'education']);
 	});
 
 	it('has id="skills" anchor for deep linking', async () => {
@@ -145,6 +164,7 @@ describe('Resume page', () => {
 	});
 
 	it('shows error state when API fails', async () => {
+		vi.mocked(api.getProfile).mockRejectedValue(new Error('Network error'));
 		vi.mocked(api.getSkills).mockRejectedValue(new Error('Network error'));
 		vi.mocked(api.getExperience).mockRejectedValue(new Error('Network error'));
 		vi.mocked(api.getEducation).mockRejectedValue(new Error('Network error'));
@@ -152,6 +172,34 @@ describe('Resume page', () => {
 		await waitFor(() => {
 			expect(screen.getByText(/network error/i)).toBeInTheDocument();
 		});
+	});
+
+	// ----- Bio section (pitch_long) -----
+	it('renders Bio section with pitch_long when non-empty', async () => {
+		render(ResumePage);
+		await waitFor(() => {
+			expect(screen.getByTestId('resume-section-bio')).toBeInTheDocument();
+		});
+		expect(screen.getByText(/Long-form bio with substantial detail/i)).toBeInTheDocument();
+		expect(screen.getByRole('heading', { level: 2, name: /^bio$/i })).toBeInTheDocument();
+	});
+
+	it('does NOT render Bio section when pitch_long is empty', async () => {
+		vi.mocked(api.getProfile).mockResolvedValue({ ...mockProfile, pitch_long: '' });
+		render(ResumePage);
+		await waitFor(() => {
+			expect(screen.getByTestId('resume-section-skills')).toBeInTheDocument();
+		});
+		expect(screen.queryByTestId('resume-section-bio')).not.toBeInTheDocument();
+	});
+
+	it('does NOT render Bio section when pitch_long is whitespace-only', async () => {
+		vi.mocked(api.getProfile).mockResolvedValue({ ...mockProfile, pitch_long: '   \n  ' });
+		render(ResumePage);
+		await waitFor(() => {
+			expect(screen.getByTestId('resume-section-skills')).toBeInTheDocument();
+		});
+		expect(screen.queryByTestId('resume-section-bio')).not.toBeInTheDocument();
 	});
 
 	it('Skills section heading is reachable as h2', async () => {

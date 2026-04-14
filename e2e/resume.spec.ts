@@ -91,7 +91,8 @@ test.describe('Resume destination — pill matrix (when skills seeded)', () => {
         json: {
           name: 'Alex Rivera',
           title: 'Software Architect',
-          elevator_pitch: 'Test pitch.',
+          pitch_short: 'Test pitch.',
+          pitch_long: 'Test pitch long.',
           availability_status: 'open',
         },
       })
@@ -192,7 +193,8 @@ test.describe('Resume destination — skeleton', () => {
         json: {
           name: 'Alex Rivera',
           title: 'Software Architect',
-          elevator_pitch: 'Test pitch.',
+          pitch_short: 'Test pitch.',
+          pitch_long: 'Test pitch long.',
           availability_status: 'open',
         },
       })

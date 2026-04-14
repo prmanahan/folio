@@ -29,7 +29,8 @@ export interface ProfileFull {
   linkedin_url: string;
   github_url: string;
   twitter_url: string;
-  elevator_pitch: string;
+  pitch_short: string;
+  pitch_long: string;
   availability_status: string;
   availability_date: string;
   remote_preference: string;
@@ -53,7 +54,8 @@ export interface ProfileInput {
   linkedin_url: string;
   github_url: string;
   twitter_url: string;
-  elevator_pitch: string;
+  pitch_short: string;
+  pitch_long: string;
   availability_status: string;
   availability_date: string;
   remote_preference: string;
