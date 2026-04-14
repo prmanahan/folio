@@ -82,6 +82,7 @@
 	/* Layout */
 	--max-width:  960px;
 	--nav-height: 3.5rem;
+	--banner-height: 2.5rem;
 }
 
 *, *::before, *::after {

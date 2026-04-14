@@ -6,6 +6,18 @@
   import TagInput from '$lib/components/admin/TagInput.svelte';
   import Toast from '$lib/components/admin/Toast.svelte';
 
+  // Length limits mirror libs/site-core/models/profile.rs.
+  // Source of truth is the Rust validator; these are admin-UI hints.
+  const LIMITS = {
+    name: 32,
+    title: 48,
+    pitch_short: 280,
+    pitch_long: 1500,
+    location: 48,
+    remote_preference: 64,
+    availability_status: 32,
+  } as const;
+
   let form = $state<ProfileInput>({
     name: '',
     email: '',
@@ -15,7 +27,8 @@
     linkedin_url: '',
     github_url: '',
     twitter_url: '',
-    elevator_pitch: '',
+    pitch_short: '',
+    pitch_long: '',
     availability_status: '',
     availability_date: '',
     remote_preference: '',
@@ -29,6 +42,33 @@
     salary_min: null,
     salary_max: null,
   });
+
+  // Count Unicode scalars, matching the Rust validator's `chars().count()`.
+  function charCount(s: string): number {
+    return Array.from(s).length;
+  }
+
+  let pitchShortCount = $derived(charCount(form.pitch_short));
+  let pitchLongCount = $derived(charCount(form.pitch_long));
+  let pitchShortOver = $derived(pitchShortCount > LIMITS.pitch_short);
+  let pitchShortEmpty = $derived(form.pitch_short.trim().length === 0);
+  let pitchLongOver = $derived(pitchLongCount > LIMITS.pitch_long);
+  let nameOver = $derived(charCount(form.name) > LIMITS.name);
+  let titleOver = $derived(charCount(form.title) > LIMITS.title);
+  let locationOver = $derived(charCount(form.location) > LIMITS.location);
+  let remotePrefOver = $derived(charCount(form.remote_preference) > LIMITS.remote_preference);
+  let availStatusOver = $derived(charCount(form.availability_status) > LIMITS.availability_status);
+
+  let validationBlocked = $derived(
+    pitchShortOver ||
+      pitchShortEmpty ||
+      pitchLongOver ||
+      nameOver ||
+      titleOver ||
+      locationOver ||
+      remotePrefOver ||
+      availStatusOver,
+  );
   let loading = $state(true);
   let saving = $state(false);
   let toastMessage = $state('');
@@ -47,7 +87,8 @@
         linkedin_url: profile.linkedin_url,
         github_url: profile.github_url,
         twitter_url: profile.twitter_url,
-        elevator_pitch: profile.elevator_pitch,
+        pitch_short: profile.pitch_short,
+        pitch_long: profile.pitch_long,
         availability_status: profile.availability_status,
         availability_date: profile.availability_date,
         remote_preference: profile.remote_preference,
@@ -70,6 +111,11 @@
   });
 
   async function handleSave() {
+    if (validationBlocked) {
+      toastMessage = 'Fix the highlighted fields before saving';
+      toastType = 'error';
+      return;
+    }
     saving = true;
     try {
       await updateProfile(form);
@@ -93,7 +139,8 @@
     <button
       style="background: var(--nb-gold); color: var(--nb-bg); border: none; border-radius: 0.25rem; padding: 0.5rem 1rem; font-size: 0.8125rem; font-weight: 600; cursor: pointer;"
       onclick={handleSave}
-      disabled={saving}
+      disabled={saving || validationBlocked}
+      data-testid="save-profile-btn"
     >
       {saving ? 'Saving…' : 'Save Profile'}
     </button>
@@ -108,7 +155,10 @@
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
           <div>
             <label class="nb-label" for="field-name">Name</label>
-            <input id="field-name" class="nb-input" bind:value={form.name} />
+            <input id="field-name" class="nb-input" maxlength={LIMITS.name} bind:value={form.name} />
+            {#if nameOver}
+              <div class="field-error" data-testid="error-name">Max {LIMITS.name} chars</div>
+            {/if}
           </div>
           <div>
             <label class="nb-label" for="field-email">Email</label>
@@ -116,11 +166,17 @@
           </div>
           <div>
             <label class="nb-label" for="field-title">Title</label>
-            <input id="field-title" class="nb-input" bind:value={form.title} />
+            <input id="field-title" class="nb-input" maxlength={LIMITS.title} bind:value={form.title} />
+            {#if titleOver}
+              <div class="field-error" data-testid="error-title">Max {LIMITS.title} chars</div>
+            {/if}
           </div>
           <div>
             <label class="nb-label" for="field-location">Location</label>
-            <input id="field-location" class="nb-input" bind:value={form.location} />
+            <input id="field-location" class="nb-input" maxlength={LIMITS.location} bind:value={form.location} />
+            {#if locationOver}
+              <div class="field-error" data-testid="error-location">Max {LIMITS.location} chars</div>
+            {/if}
           </div>
           <div>
             <label class="nb-label" for="field-phone">Phone</label>
@@ -139,12 +195,66 @@
             <input id="field-twitter" class="nb-input" bind:value={form.twitter_url} />
           </div>
           <div style="grid-column: 1 / -1;">
-            <label class="nb-label" for="field-elevator-pitch">Elevator Pitch</label>
-            <textarea id="field-elevator-pitch" class="nb-input" rows="4" bind:value={form.elevator_pitch}></textarea>
+            <label class="nb-label" for="field-pitch-short">
+              Pitch (short — hub) — required
+            </label>
+            <textarea
+              id="field-pitch-short"
+              class="nb-input"
+              rows="3"
+              maxlength={LIMITS.pitch_short}
+              bind:value={form.pitch_short}
+              data-testid="field-pitch-short"
+            ></textarea>
+            <div class="counter-row">
+              <span
+                class="char-counter"
+                class:over={pitchShortOver}
+                data-testid="counter-pitch-short"
+              >{pitchShortCount} / {LIMITS.pitch_short}</span>
+              {#if pitchShortEmpty}
+                <span class="field-error" data-testid="error-pitch-short-empty">Required</span>
+              {:else if pitchShortOver}
+                <span class="field-error" data-testid="error-pitch-short-over">Over limit</span>
+              {/if}
+            </div>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label class="nb-label" for="field-pitch-long">
+              Pitch (long — resume / AI context)
+            </label>
+            <textarea
+              id="field-pitch-long"
+              class="nb-input"
+              rows="6"
+              maxlength={LIMITS.pitch_long}
+              bind:value={form.pitch_long}
+              data-testid="field-pitch-long"
+            ></textarea>
+            <div class="counter-row">
+              <span
+                class="char-counter"
+                class:over={pitchLongOver}
+                data-testid="counter-pitch-long"
+              >{pitchLongCount} / {LIMITS.pitch_long}</span>
+              {#if pitchLongOver}
+                <span class="field-error" data-testid="error-pitch-long-over">Over limit</span>
+              {/if}
+            </div>
           </div>
           <div>
             <label class="nb-label" for="field-availability-status">Availability Status</label>
-            <input id="field-availability-status" class="nb-input" bind:value={form.availability_status} />
+            <input
+              id="field-availability-status"
+              class="nb-input"
+              maxlength={LIMITS.availability_status}
+              bind:value={form.availability_status}
+            />
+            {#if availStatusOver}
+              <div class="field-error" data-testid="error-availability-status">
+                Max {LIMITS.availability_status} chars
+              </div>
+            {/if}
           </div>
           <div>
             <label class="nb-label" for="field-availability-date">Availability Date</label>
@@ -152,7 +262,17 @@
           </div>
           <div>
             <label class="nb-label" for="field-remote-preference">Remote Preference</label>
-            <input id="field-remote-preference" class="nb-input" bind:value={form.remote_preference} />
+            <input
+              id="field-remote-preference"
+              class="nb-input"
+              maxlength={LIMITS.remote_preference}
+              bind:value={form.remote_preference}
+            />
+            {#if remotePrefOver}
+              <div class="field-error" data-testid="error-remote-preference">
+                Max {LIMITS.remote_preference} chars
+              </div>
+            {/if}
           </div>
         </div>
       </FormSection>
@@ -221,3 +341,26 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .counter-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.25rem;
+    font-size: 0.6875rem;
+  }
+  .char-counter {
+    color: var(--nb-text3);
+    font-variant-numeric: tabular-nums;
+  }
+  .char-counter.over {
+    color: var(--nb-amber, #d97706);
+    font-weight: 600;
+  }
+  .field-error {
+    color: var(--nb-amber, #d97706);
+    font-size: 0.6875rem;
+    margin-top: 0.25rem;
+  }
+</style>

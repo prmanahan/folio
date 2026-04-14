@@ -20,7 +20,9 @@ export const SEEDED_PROFILE = {
   linkedin_url: 'https://linkedin.com/in/alex-rivera-example',
   github_url: 'https://github.com/alex-rivera-example',
   twitter_url: '',
-  elevator_pitch:
+  pitch_short:
+    'Software architect with 12 years building distributed systems. Backend Java to architecture and team leadership.',
+  pitch_long:
     'Software architect with 12 years building distributed systems. Started in backend Java, evolved into architecture and team leadership. Track record of shipping reliable systems at scale while growing engineering teams.',
   availability_status: 'open',
   availability_date: '',

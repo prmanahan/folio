@@ -88,17 +88,18 @@
 
 <style>
 	.skills-banner {
-		position: absolute;
-		bottom: 0;
-		left: 0;
-		right: 0;
-		height: 2.5rem;
+		/* Per spec R2 the banner is a DOM sibling of .hero, in document flow,
+		   not anchored to the hero box. It sits directly under the hero on the
+		   landing page. The conveyor still runs wall-to-wall via 100vw. */
+		position: relative;
+		height: var(--banner-height);
 		width: 100vw;
-		/* Break out of container max-width — conveyor runs wall-to-wall */
+		/* Break out of any container max-width — conveyor runs wall-to-wall */
 		margin-left: calc(50% - 50vw);
 		overflow: hidden;
 		background: rgba(176, 141, 87, 0.10);
 		border-top: 1px solid rgba(176, 141, 87, 0.25);
+		border-bottom: 1px solid rgba(176, 141, 87, 0.15);
 		z-index: 3;
 	}
 

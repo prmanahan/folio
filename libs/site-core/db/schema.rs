@@ -18,6 +18,11 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         "page_hits",
         include_str!("../../../migrations/003_page_hits.sql"),
     ),
+    (
+        4,
+        "profile_pitch_split",
+        include_str!("../../../migrations/004_profile_pitch_split.sql"),
+    ),
 ];
 
 /// Ensure the migrations tracking table exists.

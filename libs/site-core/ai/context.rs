@@ -50,8 +50,17 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
     );
 
     // --- 2. Elevator pitch + career narrative ---
-    if !prof.elevator_pitch.is_empty() {
-        prompt.push_str(&prof.elevator_pitch);
+    // Prefer pitch_long (the richer biographical version) for AI context;
+    // fall back to pitch_short if pitch_long is empty so we never lose the
+    // pitch entirely. This is per spec note 4: "Rune picks pitch_long as the
+    // replacement (richer context) unless there's a reason not to."
+    let pitch_for_ai = if !prof.pitch_long.is_empty() {
+        &prof.pitch_long
+    } else {
+        &prof.pitch_short
+    };
+    if !pitch_for_ai.is_empty() {
+        prompt.push_str(pitch_for_ai);
         prompt.push_str("\n\n");
     }
     if !prof.career_narrative.is_empty() {
@@ -368,7 +377,8 @@ mod tests {
             "UPDATE candidate_profile SET
                 name = 'Jane Doe',
                 title = 'Senior Engineer',
-                elevator_pitch = 'I build reliable systems.',
+                pitch_short = 'I build reliable systems.',
+                pitch_long = 'I build reliable systems.',
                 career_narrative = 'Ten years of distributed systems work.',
                 looking_for = 'IC or staff-level roles',
                 not_looking_for = 'Management-only roles',

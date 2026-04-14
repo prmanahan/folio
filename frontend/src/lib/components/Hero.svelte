@@ -1,38 +1,39 @@
 <script lang="ts">
-	import type { Profile, Link, Skill } from '$lib/types';
+	import type { Profile, Link } from '$lib/types';
 	import GearsBackground from './GearsBackground.svelte';
-	import SkillsBanner from './SkillsBanner.svelte';
 
 	interface Props {
 		profile: Profile;
 		links: Link[];
-		skills?: Skill[];
 		onToggleAi?: () => void;
 	}
 
-	let { profile, links, skills = [], onToggleAi }: Props = $props();
+	let { profile, links, onToggleAi }: Props = $props();
 
 	// Allowed URL protocols for contact links
 	const SAFE_PROTOCOLS = ['https:', 'http:', 'mailto:', 'tel:'];
 
+	// Per spec R12: cap rendered links on the hub at 5. Excess links remain in
+	// the data model but are only rendered on /resume.
+	const HUB_LINK_LIMIT = 5;
+
 	let safeLinks = $derived(
-		links.filter((link) => {
-			try {
-				// mailto: and tel: don't parse well with URL constructor
-				// Check prefix directly for those
-				const lower = link.url.toLowerCase().trim();
-				return SAFE_PROTOCOLS.some((p) => lower.startsWith(p));
-			} catch {
-				return false;
-			}
-		})
+		links
+			.filter((link) => {
+				try {
+					// mailto: and tel: don't parse well with URL constructor
+					// Check prefix directly for those
+					const lower = link.url.toLowerCase().trim();
+					return SAFE_PROTOCOLS.some((p) => lower.startsWith(p));
+				} catch {
+					return false;
+				}
+			})
+			.slice(0, HUB_LINK_LIMIT)
 	);
 
 	// Split name into characters for stamp-in entrance animation
 	let nameChars = $derived(profile.name.split(''));
-
-	// Split elevator pitch into paragraphs
-	let pitchParagraphs = $derived(profile.elevator_pitch.split('\n\n'));
 </script>
 
 <section class="hero">
@@ -71,11 +72,12 @@
 
 		<!-- Right column: Content + cards -->
 		<div class="content">
-			<!-- Elevator pitch -->
+			<!-- Hub pitch — pitch_short, full text, no truncation, no Read more.
+			     Per spec R8/R10 the hub renders pitch_short as-is; the long form
+			     lives exclusively on /resume. The 280-char limit is the safety
+			     net, not a CSS clamp. -->
 			<div class="hero-pitch">
-				{#each pitchParagraphs as paragraph}
-					<p>{paragraph}</p>
-				{/each}
+				<p>{profile.pitch_short}</p>
 			</div>
 
 			<!-- Meta line -->
@@ -135,9 +137,6 @@
 			</div>
 		</div>
 	</div>
-
-	<!-- Layer 3: Skills banner at bottom -->
-	<SkillsBanner {skills} />
 </section>
 
 <style>
@@ -146,14 +145,21 @@
 	   ============================================================ */
 	.hero {
 		position: relative;
-		/* Header is now always present — hero fills remaining viewport */
-		min-height: calc(100svh - var(--nav-height));
+		/* HARD CEILING per spec R1/R3: the hub may NOT grow past one small
+		   viewport height minus the nav. svh is preferred over dvh/lvh
+		   because it does not reflow as mobile browser chrome collapses,
+		   keeping the "frozen tableau" effect stable on scroll.
+		   The skills banner now lives as a sibling of .hero (see (public)/
+		   +page.svelte) so its position is determined by document flow,
+		   not by anchoring to this box. */
+		max-height: calc(100svh - var(--nav-height) - var(--banner-height));
+		height: calc(100svh - var(--nav-height) - var(--banner-height));
 		display: flex;
 		flex-direction: column;
 		justify-content: center;
 		overflow: hidden;
 		padding-top: 2rem;
-		padding-bottom: 5rem;
+		padding-bottom: 2rem;
 	}
 
 	/* Noise texture overlay */
@@ -277,11 +283,7 @@
 		color: var(--color-text);
 	}
 
-	.hero-pitch p + p {
-		margin-top: 0.75rem;
-	}
-
-	.hero-meta {
+.hero-meta {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.5rem 0.875rem;
@@ -509,8 +511,8 @@
 	   ============================================================ */
 	@media (min-width: 1024px) {
 		.hero {
-			padding-top: 4rem;
-			padding-bottom: 6rem;
+			padding-top: 3rem;
+			padding-bottom: 3rem;
 		}
 
 		.hub {
