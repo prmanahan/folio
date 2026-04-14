@@ -27,4 +27,11 @@ export default defineConfig({
       use: { ...devices['Desktop Safari'] },
     },
   ],
+  webServer: {
+    command: 'npm run dev',
+    cwd: './frontend',
+    url: 'http://localhost:5173',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120 * 1000,
+  },
 });

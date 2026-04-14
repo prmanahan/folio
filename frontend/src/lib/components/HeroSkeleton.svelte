@@ -62,7 +62,7 @@
 		position: relative;
 		/* Match Hero.svelte min-height to prevent layout shift on skeleton→hero transition.
 		   Header is always rendered, so subtract nav height from the viewport. */
-		min-height: calc(100svh - var(--nav-height));
+		min-height: calc(100svh - var(--nav-height) - var(--banner-height));
 		display: flex;
 		flex-direction: column;
 		justify-content: center;
