@@ -21,7 +21,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 uuid = { version = "1", features = ["v4"] }
 mime_guess = "2"
-rig-core = "0.33"
+rig-core = "0.37"
 futures = "0.3"
 tokio-stream = "0.1"
 schemars = "0.8"

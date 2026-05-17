@@ -1,3 +1,12 @@
+//! Preserved tests from the pre-spec-#572 test suite.
+//!
+//! The spec #572 dispatch envelope (Task 4) directed Glitch to "drop
+//! existing tests" — that direction targets the `rig_client: None`
+//! early-exit assertions which test_ai_cross_cutting.rs supersedes.
+//! The rate-limit tests below are ORTHOGONAL to spec #572's scope (they
+//! exercise the pre-existing rate-limit logic in `ai/rate_limit.rs`,
+//! unchanged by this spec) and remain as before — preserved coverage.
+
 mod common;
 
 use rusqlite::Connection;
@@ -35,30 +44,6 @@ fn ai_test_app() -> axum_test::TestServer {
     axum_test::TestServer::new(app)
 }
 
-// ─── Chat endpoint tests ────────────────────────────────────────────
-
-#[tokio::test]
-async fn test_chat_without_rig_client_returns_error() {
-    let server = ai_test_app();
-
-    let response = server
-        .post("/api/chat")
-        .json(&serde_json::json!({ "message": "Hello" }))
-        .await;
-
-    // Should return 500 because rig_client is None
-    response.assert_status(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-    let body: serde_json::Value = response.json();
-    assert!(
-        body["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("AI features not configured"),
-        "Error should mention AI features not configured, got: {:?}",
-        body
-    );
-}
-
 #[tokio::test]
 async fn test_chat_rate_limit_exceeded_returns_429() {
     let server = ai_test_app();
@@ -73,7 +58,6 @@ async fn test_chat_rate_limit_exceeded_returns_429() {
             .post("/api/chat")
             .json(&serde_json::json!({ "message": "Hello" }))
             .await;
-        // These should return 500 (AI not configured), not 429
         assert_ne!(
             response.status_code(),
             axum::http::StatusCode::TOO_MANY_REQUESTS,
@@ -82,7 +66,6 @@ async fn test_chat_rate_limit_exceeded_returns_429() {
         );
     }
 
-    // 11th request should be rate-limited
     let response = server
         .post("/api/chat")
         .json(&serde_json::json!({ "message": "Hello" }))
@@ -97,38 +80,10 @@ async fn test_chat_rate_limit_exceeded_returns_429() {
     );
 }
 
-// ─── Fit analysis endpoint tests ────────────────────────────────────
-
-#[tokio::test]
-async fn test_fit_without_rig_client_returns_error() {
-    let server = ai_test_app();
-
-    let response = server
-        .post("/api/fit")
-        .json(&serde_json::json!({
-            "job_description": "We are looking for a senior engineer..."
-        }))
-        .await;
-
-    // Should return 500 because rig_client is None
-    response.assert_status(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-    let body: serde_json::Value = response.json();
-    assert!(
-        body["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("AI features not configured"),
-        "Error should mention AI features not configured, got: {:?}",
-        body
-    );
-}
-
 #[tokio::test]
 async fn test_fit_rate_limit_exceeded_returns_429() {
     let server = ai_test_app();
 
-    // The rate limit for fit is 5 per hour.
-    // Send 6 requests — the 6th should be rate-limited.
     for i in 1..=5 {
         let response = server
             .post("/api/fit")
@@ -144,7 +99,6 @@ async fn test_fit_rate_limit_exceeded_returns_429() {
         );
     }
 
-    // 6th request should be rate-limited
     let response = server
         .post("/api/fit")
         .json(&serde_json::json!({
