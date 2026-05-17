@@ -17,7 +17,7 @@ fn rate_limit_test_app() -> (axum_test::TestServer, GlobalRateLimitState) {
         .unwrap();
     site_core::db::migrate(&conn).unwrap();
 
-    let password_hash = site_core::auth::hash_password("testpass").unwrap();
+    let password_hash = common::test_password::password_hash();
     let state: DbState = Arc::new(AppState {
         db: Arc::new(Mutex::new(conn)),
         admin_password_hash: password_hash,
@@ -95,7 +95,7 @@ async fn http_request_over_limit_returns_429() {
     conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     site_core::db::migrate(&conn).unwrap();
 
-    let password_hash = site_core::auth::hash_password("testpass").unwrap();
+    let password_hash = common::test_password::password_hash();
     let state: DbState = Arc::new(AppState {
         db: Arc::new(Mutex::new(conn)),
         admin_password_hash: password_hash,

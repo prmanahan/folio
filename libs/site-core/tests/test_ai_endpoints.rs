@@ -27,8 +27,7 @@ fn ai_test_app() -> axum_test::TestServer {
     site_core::db::migrate(&conn).unwrap();
     site_core::db::seed::seed_test_data(&conn).unwrap();
 
-    let password_hash =
-        site_core::auth::hash_password("testpass").expect("Failed to hash test password");
+    let password_hash = common::test_password::password_hash();
     let state: DbState = Arc::new(AppState {
         db: Arc::new(Mutex::new(conn)),
         admin_password_hash: password_hash,

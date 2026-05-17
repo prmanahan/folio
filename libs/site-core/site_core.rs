@@ -8,3 +8,6 @@ pub mod models;
 pub mod routes;
 pub mod state;
 pub mod static_files;
+
+#[cfg(test)]
+mod test_password;

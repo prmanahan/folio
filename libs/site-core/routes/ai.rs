@@ -433,7 +433,7 @@ mod m1_no_key_path_tests {
     }
 
     fn no_key_state(conn: Connection) -> DbState {
-        let password_hash = crate::auth::hash_password("testpass").expect("hash");
+        let password_hash = crate::test_password::password_hash();
         Arc::new(AppState {
             db: Arc::new(Mutex::new(conn)),
             admin_password_hash: password_hash,
