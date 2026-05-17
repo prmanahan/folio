@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+
+pub mod ai_mock;
+
 use rusqlite::Connection;
 
 pub fn test_db() -> Connection {

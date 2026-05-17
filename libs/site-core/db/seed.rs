@@ -102,7 +102,9 @@ pub fn live_profile_fixture() -> serde_json::Value {
 /// with empty `pitch_short`; the validation layer only fires on admin update,
 /// not on seed inserts, so this is safe and explicit.
 pub fn seed_live_profile(conn: &Connection) -> Result<(), rusqlite::Error> {
-    warn!("seed_live_profile: fixture ships with empty pitch_short; admin UI will reject round-trip save until content work lands");
+    warn!(
+        "seed_live_profile: fixture ships with empty pitch_short; admin UI will reject round-trip save until content work lands"
+    );
     let p: LiveProfile = serde_json::from_str(LIVE_PROFILE_JSON)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     conn.execute(

@@ -1,7 +1,7 @@
 <project>
 Name: Folio
 Project ID: 1
-Path: /Users/manahan/claude_workspace/projects/folio
+Path: /Users/manahan/claude_workspace/repos/folio
 Slug: folio
 </project>
 
@@ -53,6 +53,10 @@ All commands via `justfile`. Run from project root.
 Module layout: `cmd/server/` (Axum entry), `libs/site-core/` (core logic, DB, routes, AI, static file serving), `frontend/` (SvelteKit), `migrations/` (SQL), `e2e/` (Playwright), `data/` (SQLite + seed SQL).
 
 **Backend/frontend decoupling:** Since removing `rust_embed`, `cargo build` and `cargo test` (unit tests) run standalone without any frontend build step — no `include_str!`/`include_bytes!`/`build.rs` coupling to frontend assets. The only frontend dependency is at *runtime*: `validate_static_dir()` panics at startup if `STATIC_DIR` (default `frontend/build`) is missing, and `ServeDir` reads files live from that path. This is the correct G-0002 design.
+
+**AI architecture is asymmetric (spec #572) — do not "unify" it:** the two AI paths deliberately take different routes.
+- **chat** = `ai/anthropic_stream.rs` — a custom Anthropic SSE consumer (Path X). It bypasses rig-core's `CompletionModel` *on purpose: that path drops `stop_reason`*, which chat needs to map refusal/context-exceeded/truncated terminal conditions. Refactoring chat back through rig's `CompletionModel` silently loses `stop_reason` and reintroduces the bug this spec fixed.
+- **fit** = `agent.prompt` + `ai/stop_reason.rs::StopReasonCapture` (a rig PromptHook) — fit stays on rig and recovers `stop_reason` via the hook instead of a custom SSE consumer.
 </entry-points>
 
 <conventions>
@@ -60,7 +64,7 @@ Module layout: `cmd/server/` (Axum entry), `libs/site-core/` (core logic, DB, ro
 - **Coverage: 90%** hard floor on both line and function coverage.
 - **Pre-commit: `just check`** — fmt + clippy with `-D warnings` + test must all pass.
 - **Worktrees in `.worktrees/`** for all feature work. See feedback_worktrees memory.
-- **Squash-merge to main** via `/merge` skill or PR. No local merges to main.
+- **Rebase-merge to main** via `/merge` skill or PR (matches mnemra-core; flipped 2026-05-15). Squash and merge-commits disabled at the GitHub repo level. No local merges to main.
 </conventions>
 
 <skills>
@@ -77,12 +81,11 @@ Skills Puck should load into dispatches targeting this project.
 <current-phase>
 State that changes as work progresses. Update when it drifts.
 
-**Active branches (2026-04-13):**
-- `hero-redesign` (worktree `.worktrees/hero-redesign`, commit `eb4ea04`) — pending visual review + Warden review. Highest priority for next session.
-- `feat-backend-coverage` (worktree `.worktrees/feat-backend-coverage`) — dangling, needs triage.
-- `feat-frontend-coverage` (worktree `.worktrees/feat-frontend-coverage`) — dangling, needs triage.
-
-**Main branch state:** 1 commit ahead of `origin/main`, unpushed. Confirm with Peter before pushing. Uncommitted untracked: `data/db.sqlite`, `decisions/`, `docs/ATTRIBUTION.md`, `docs/specs/`, `docs/superpowers/` — most should be gitignored or committed; needs review.
+**As of 2026-05-15:**
+- `main` clean, synced with `origin/main`.
+- Active worktree: `.worktrees/spec572-impl` on branch `feat/572-sonnet-migration` — task #572 implementation.
+- Stale local branches present (no worktrees): `feat/backend-coverage`, `feat/frontend-coverage`, `chore/defaults-g0006`, `fix/admin-notebook-phase3-4`, `fix/workflow-permissions`, `ultra` — needs triage cleanup pass.
+- **Done:** task #572 — Sonnet 4 deprecation migration shipped (spec `docs/specs/2026-05-15-sonnet-migration-config-table.md`). Delivered: new `site_config` SQLite table (key/value, typed) — now the **canonical runtime source of truth** for `ai.model_id` and `ai.max_tokens` (read from the DB at request time, not hardcoded) + swap to `claude-sonnet-4-6` + rig-core 0.33 → 0.37 bump + chat handler rewrite to custom Anthropic SSE consumer (Path X, bypasses rig's CompletionModel which drops `stop_reason`) + fit handler PromptHook for `stop_reason` capture + typed refusal/context-exceeded error mapping.
 </current-phase>
 
 <references>

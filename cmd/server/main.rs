@@ -105,7 +105,7 @@ async fn run_server() {
     let rig_client = config
         .anthropic_api_key
         .as_ref()
-        .and_then(|key| rig::providers::anthropic::Client::new(key).ok());
+        .and_then(|key| rig_core::providers::anthropic::Client::new(key).ok());
 
     let db_state: DbState = Arc::new(AppState {
         db: Arc::new(Mutex::new(conn)),
