@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod ai_mock;
+pub mod test_password;
 
 use rusqlite::Connection;
 
@@ -37,8 +38,7 @@ pub fn test_app() -> axum_test::TestServer {
     site_core::db::migrate(&conn).unwrap();
     site_core::db::seed::seed_test_data(&conn).unwrap();
 
-    let password_hash =
-        site_core::auth::hash_password("testpass").expect("Failed to hash test password");
+    let password_hash = test_password::password_hash();
     let state: site_core::state::DbState = std::sync::Arc::new(site_core::state::AppState {
         db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
         admin_password_hash: password_hash,

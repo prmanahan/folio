@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 async fn login_and_get_token(server: &axum_test::TestServer) -> String {
     let response = server
         .post("/api/admin/login")
-        .json(&serde_json::json!({ "password": "testpass" }))
+        .json(&serde_json::json!({ "password": common::test_password::password() }))
         .await;
     response.assert_status(StatusCode::OK);
     let body: serde_json::Value = response.json();

@@ -276,7 +276,7 @@ async fn anthropic_api_key_absent_preserves_existing_ai_disabled_behavior_no_hel
     site_core::db::migrate(&conn).expect("migrate");
     site_core::db::seed::seed_test_data(&conn).expect("seed");
 
-    let password_hash = site_core::auth::hash_password("testpass").expect("hash");
+    let password_hash = common::test_password::password_hash();
     let state: DbState = Arc::new(AppState {
         db: Arc::new(Mutex::new(conn)),
         admin_password_hash: password_hash,

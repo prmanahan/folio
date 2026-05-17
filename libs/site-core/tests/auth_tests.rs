@@ -11,8 +11,7 @@ fn auth_test_app() -> axum_test::TestServer {
     let conn = common::test_db();
     site_core::db::seed::seed_test_data(&conn).unwrap();
 
-    let password_hash =
-        site_core::auth::hash_password("testpass").expect("Failed to hash test password");
+    let password_hash = common::test_password::password_hash();
     let state: DbState = std::sync::Arc::new(site_core::state::AppState {
         db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
         admin_password_hash: password_hash,
@@ -43,7 +42,7 @@ async fn test_login_success() {
 
     let response = server
         .post("/api/admin/login")
-        .json(&serde_json::json!({ "password": "testpass" }))
+        .json(&serde_json::json!({ "password": common::test_password::password() }))
         .await;
 
     response.assert_status_ok();
@@ -76,7 +75,7 @@ async fn test_protected_with_valid_token() {
     // First, log in to get a token
     let login_response = server
         .post("/api/admin/login")
-        .json(&serde_json::json!({ "password": "testpass" }))
+        .json(&serde_json::json!({ "password": common::test_password::password() }))
         .await;
     login_response.assert_status_ok();
     let body: serde_json::Value = login_response.json();
@@ -129,7 +128,7 @@ async fn test_logout_invalidates_token() {
     // Log in
     let login_response = server
         .post("/api/admin/login")
-        .json(&serde_json::json!({ "password": "testpass" }))
+        .json(&serde_json::json!({ "password": common::test_password::password() }))
         .await;
     login_response.assert_status_ok();
     let body: serde_json::Value = login_response.json();
