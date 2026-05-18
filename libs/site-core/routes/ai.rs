@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
     routing::post,
@@ -26,17 +26,57 @@ use crate::state::DbState;
 /// handler (spec R17). Mirrors the chat-handler cap.
 const LOG_SANITIZE_MAX_CHARS: usize = 500;
 
+/// LLM-audit L2 / R5: explicit request-body byte cap on the AI routes.
+///
+/// 64 KiB. The largest in-spec request is the fit handler's 15_000-char
+/// job description; at up to 4 bytes/char (worst-case UTF-8) plus the JSON
+/// envelope that is well under 64 KiB, so this leaves ~4x headroom over
+/// the semantic cap while rejecting a ~1 MiB body pre-parse (axum emits
+/// 413 before the handler allocates/parses) instead of relying on axum's
+/// 2 MiB default and the post-parse char check.
+const AI_BODY_LIMIT_BYTES: usize = 64 * 1024;
+
+/// Generic opaque client message for AI-path `AppError::Internal` failures
+/// whose detail (upstream/serde error text) must stay server-side only
+/// (LLM-audit residual / R7). The detailed `{e}` is logged via
+/// `tracing::error!` at each site; the client receives only this fixed
+/// string so no upstream/serde text reaches the response body.
+const AI_INTERNAL_OPAQUE_MESSAGE: &str = "AI request failed. Please try again later.";
+
+/// LLM-audit M1 / R1: deadline on the fit handler's single buffered
+/// `agent.prompt(...).await`.
+///
+/// 12 s. The spec band is "single-digit to low-tens of seconds"; the R1
+/// acceptance test stalls the mock upstream for 40 s and asserts the
+/// handler returns within a 25 s wall-clock bound. 12 s sits comfortably
+/// under that bound while leaving enough room for a real (non-stalled)
+/// Sonnet fit completion, which is a single non-streaming round-trip. On
+/// expiry the handler returns the existing degraded `AppError::Internal`
+/// surface (fixed opaque client string — never raw upstream text).
+const FIT_PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+
 /// Extract the client IP from request headers.
 ///
 /// Priority: `trusted_header` (configured via `TRUSTED_IP_HEADER` env var, e.g.
 /// `fly-client-ip` on Fly.io) → `x-forwarded-for` (fallback for local dev without
-/// a proxy) → `fallback` (ConnectInfo addr or "unknown").
+/// a proxy) → `peer_addr` (ConnectInfo peer addr) → `"unknown"`.
+///
+/// LLM-audit L1 / R4: mirrors the fix in
+/// `middleware::global_rate_limit::extract_ip_for_rate_limit`. The
+/// no-ConnectInfo handlers pass `None` (→ `"unknown"` only when no peer
+/// addr); the `_with_addr` handlers pass `Some(addr)` so distinct
+/// no-proxy clients get distinct rate-limit buckets instead of all
+/// collapsing into one `"unknown"` bucket.
 ///
 /// SECURITY NOTE: The trusted header is set by the reverse proxy and cannot be spoofed
 /// by clients in production. `x-forwarded-for` is used only as a local-dev fallback
 /// and is client-controlled; if this service is ever exposed directly (no proxy),
 /// rate limiting by XFF IP is bypassable.
-fn extract_ip(headers: &HeaderMap, fallback: &str, trusted_header: Option<&str>) -> String {
+fn extract_ip(
+    headers: &HeaderMap,
+    trusted_header: Option<&str>,
+    peer_addr: Option<SocketAddr>,
+) -> String {
     // Prefer the configured trusted header (e.g. fly-client-ip, CF-Connecting-IP, etc.).
     if let Some(header_name) = trusted_header
         && let Some(val) = headers.get(header_name)
@@ -57,7 +97,11 @@ fn extract_ip(headers: &HeaderMap, fallback: &str, trusted_header: Option<&str>)
             return trimmed.to_string();
         }
     }
-    fallback.to_string()
+    // R4: prefer the peer addr over the collapsing "unknown" bucket.
+    match peer_addr {
+        Some(addr) => addr.ip().to_string(),
+        None => "unknown".to_string(),
+    }
 }
 
 /// Chat handler that uses ConnectInfo (requires into_make_service_with_connect_info).
@@ -69,11 +113,7 @@ pub async fn chat_with_addr(
     headers: HeaderMap,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
-    let ip = extract_ip(
-        &headers,
-        &addr.ip().to_string(),
-        state.trusted_ip_header.as_deref(),
-    );
+    let ip = extract_ip(&headers, state.trusted_ip_header.as_deref(), Some(addr));
     chat_inner(state, &ip, payload).await
 }
 
@@ -84,7 +124,7 @@ pub async fn chat(
     headers: HeaderMap,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
-    let ip = extract_ip(&headers, "unknown", state.trusted_ip_header.as_deref());
+    let ip = extract_ip(&headers, state.trusted_ip_header.as_deref(), None);
     chat_inner(state, &ip, payload).await
 }
 
@@ -158,11 +198,7 @@ pub async fn fit_analysis_with_addr(
 ) -> Result<Json<FitVerdict>, AppError> {
     fit_analysis_inner(
         state.clone(),
-        &extract_ip(
-            &headers,
-            &addr.ip().to_string(),
-            state.trusted_ip_header.as_deref(),
-        ),
+        &extract_ip(&headers, state.trusted_ip_header.as_deref(), Some(addr)),
         payload,
     )
     .await
@@ -177,7 +213,7 @@ pub async fn fit_analysis(
 ) -> Result<Json<FitVerdict>, AppError> {
     fit_analysis_inner(
         state.clone(),
-        &extract_ip(&headers, "unknown", state.trusted_ip_header.as_deref()),
+        &extract_ip(&headers, state.trusted_ip_header.as_deref(), None),
         payload,
     )
     .await
@@ -258,11 +294,33 @@ async fn fit_analysis_inner(
         .build();
 
     let capture = StopReasonCapture::new();
-    let response_text = agent
+    // R1 (LLM10): bound the single buffered upstream round-trip. Without
+    // this, a hung/slow upstream pins the connection indefinitely
+    // (bounded only by the per-IP rate quota). `tokio::time::timeout`
+    // drops the in-flight future on expiry; the degraded surface is the
+    // existing opaque `AppError::Internal` (no raw upstream text).
+    let prompt_fut = agent
         .prompt(payload.job_description.as_str())
-        .with_hook(capture.clone())
-        .await
-        .map_err(|e| AppError::Internal(format!("AI prompt failed: {e}")))?;
+        .with_hook(capture.clone());
+    let response_text = match tokio::time::timeout(FIT_PROMPT_TIMEOUT, prompt_fut).await {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => {
+            // R7: the upstream/rig error text (`{e}`) can carry library
+            // and HTTP-surface detail. Log it server-side at error level;
+            // the client receives only the fixed opaque message so no
+            // upstream text reaches the response body.
+            tracing::error!(error = %e, "fit: AI prompt failed");
+            return Err(AppError::Internal(AI_INTERNAL_OPAQUE_MESSAGE.to_string()));
+        }
+        Err(_elapsed) => {
+            // R1: deadline exceeded. Degraded surface — no upstream text.
+            tracing::error!(
+                timeout_secs = FIT_PROMPT_TIMEOUT.as_secs(),
+                "fit: upstream prompt timed out; returning degraded error"
+            );
+            return Err(AppError::Internal(AI_INTERNAL_OPAQUE_MESSAGE.to_string()));
+        }
+    };
 
     // Map the captured stop_reason. Missing => treat as EndTurn (rig's
     // hook fires after a successful completion; if the wire response
@@ -310,11 +368,16 @@ async fn fit_analysis_inner(
             "unexpected tool_use; folio is no-tools".into(),
         )),
         StopReason::Other(value) => {
-            // The mapping function already emitted a `warn!` naming the
-            // sanitized value; no double-log here.
-            Err(AppError::Internal(format!(
-                "unrecognized stop_reason: {value}"
-            )))
+            // R7: `value` is upstream-derived (Anthropic stop_reason
+            // string). The mapping function already emitted a `warn!`
+            // naming the sanitized value; emit one error! with the value
+            // for the server-side trail, then return the fixed opaque
+            // client string (no upstream text in the response body).
+            tracing::error!(
+                stop_reason = %value,
+                "fit: unrecognized upstream stop_reason"
+            );
+            Err(AppError::Internal(AI_INTERNAL_OPAQUE_MESSAGE.to_string()))
         }
     }
 }
@@ -335,23 +398,35 @@ fn parse_verdict(response_text: &str) -> Result<Json<FitVerdict>, AppError> {
                 })
         })
         .map_err(|e| {
-            AppError::Internal(format!("Failed to parse AI response as FitVerdict: {e}"))
+            // R7: serde's parse error embeds surrounding model-input
+            // context. Log the full detail server-side; the client gets
+            // the fixed opaque string only.
+            tracing::error!(error = %e, "fit: failed to parse AI response as FitVerdict");
+            AppError::Internal(AI_INTERNAL_OPAQUE_MESSAGE.to_string())
         })?;
     Ok(Json(verdict))
 }
 
 /// Routes for use without ConnectInfo (e.g., in tests).
+///
+/// R5: `DefaultBodyLimit::max(AI_BODY_LIMIT_BYTES)` is applied here (not
+/// only in `main.rs`) so the pre-parse 413 fires for apps that merge only
+/// `routes::ai::routes()` — the behavioral R5 test builds its app that way.
 pub fn routes() -> Router<DbState> {
     Router::new()
         .route("/api/chat", post(chat))
         .route("/api/fit", post(fit_analysis))
+        .layer(DefaultBodyLimit::max(AI_BODY_LIMIT_BYTES))
 }
 
 /// Routes for use with ConnectInfo (production, where into_make_service_with_connect_info is used).
+///
+/// R5: same explicit body cap as `routes()`.
 pub fn routes_with_connect_info() -> Router<DbState> {
     Router::new()
         .route("/api/chat", post(chat_with_addr))
         .route("/api/fit", post(fit_analysis_with_addr))
+        .layer(DefaultBodyLimit::max(AI_BODY_LIMIT_BYTES))
 }
 
 // ===========================================================================

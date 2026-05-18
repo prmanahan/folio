@@ -1,4 +1,6 @@
-use axum::extract::State;
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, State};
 use axum::response::Response;
 use sha2::{Digest, Sha256};
 
@@ -34,8 +36,18 @@ pub async fn page_hits_middleware(
     let path = request.uri().path().to_string();
 
     if should_track(&path) {
-        let ip =
-            extract_ip_for_rate_limit(request.headers(), db_state.trusted_ip_header.as_deref());
+        // R4: thread the ConnectInfo peer addr through the shared
+        // extractor so distinct no-proxy visitors hash to distinct keys
+        // instead of all collapsing into `hash("unknown")`.
+        let peer_addr = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0);
+        let ip = extract_ip_for_rate_limit(
+            request.headers(),
+            db_state.trusted_ip_header.as_deref(),
+            peer_addr,
+        );
         let ip_hash = hash_ip(&ip, &db_state.page_hit_salt);
         let db = db_state.db.clone();
 

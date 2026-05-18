@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 
@@ -61,11 +62,25 @@ impl GlobalRateLimitState {
     }
 }
 
-/// Extract IP from headers using the configured trusted header → X-Forwarded-For → fallback chain.
+/// Extract IP from headers using the configured trusted header →
+/// X-Forwarded-For → ConnectInfo peer addr → `"unknown"` chain.
 ///
 /// `trusted_header`: the header name configured via `TRUSTED_IP_HEADER` (e.g. `fly-client-ip`).
 /// Pass `None` to skip the trusted header step and fall straight to `x-forwarded-for`.
-pub fn extract_ip_for_rate_limit(headers: &HeaderMap, trusted_header: Option<&str>) -> String {
+///
+/// `peer_addr`: the `ConnectInfo` peer socket address when available.
+///
+/// LLM-audit L1 / R4: when neither header resolves, prefer the peer
+/// address so distinct no-proxy clients get distinct rate-limit buckets.
+/// The literal `"unknown"` (a single shared bucket — one client can DoS
+/// another, many attackers share one quota) is used ONLY when no peer
+/// address is available. Header precedence is unchanged: the peer addr is
+/// a fallback, never an override of a present trusted header / XFF.
+pub fn extract_ip_for_rate_limit(
+    headers: &HeaderMap,
+    trusted_header: Option<&str>,
+    peer_addr: Option<SocketAddr>,
+) -> String {
     if let Some(header_name) = trusted_header
         && let Some(val) = headers.get(header_name)
         && let Ok(val_str) = val.to_str()
@@ -84,7 +99,12 @@ pub fn extract_ip_for_rate_limit(headers: &HeaderMap, trusted_header: Option<&st
             return trimmed.to_string();
         }
     }
-    "unknown".to_string()
+    // R4: prefer the ConnectInfo peer addr over the collapsing "unknown"
+    // bucket; "unknown" only when no peer addr is available.
+    match peer_addr {
+        Some(addr) => addr.ip().to_string(),
+        None => "unknown".to_string(),
+    }
 }
 
 /// Axum middleware: 60 requests per IP per minute, globally.
@@ -110,7 +130,18 @@ pub async fn global_rate_limit_middleware(
         }
     }
 
-    let ip = extract_ip_for_rate_limit(request.headers(), db_state.trusted_ip_header.as_deref());
+    // R4: thread the ConnectInfo peer addr (present in production via
+    // `into_make_service_with_connect_info`; absent in tests / non-
+    // ConnectInfo setups → `None` → "unknown" only then).
+    let peer_addr = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
+    let ip = extract_ip_for_rate_limit(
+        request.headers(),
+        db_state.trusted_ip_header.as_deref(),
+        peer_addr,
+    );
 
     let window = Duration::from_secs(60);
     let limit = 60_usize;
@@ -207,13 +238,18 @@ mod tests {
         let mut headers = HeaderMap::new();
 
         // Only XFF present, no trusted header configured — should use XFF
+        // (peer addr present but headers win — R4 precedence preserved).
         headers.insert("x-forwarded-for", "1.1.1.1, 2.2.2.2".parse().unwrap());
-        assert_eq!(extract_ip_for_rate_limit(&headers, None), "1.1.1.1");
+        let peer: SocketAddr = "9.9.9.9:443".parse().unwrap();
+        assert_eq!(
+            extract_ip_for_rate_limit(&headers, None, Some(peer)),
+            "1.1.1.1"
+        );
 
         // fly-client-ip present and configured as trusted header — takes priority over XFF
         headers.insert("fly-client-ip", "3.3.3.3".parse().unwrap());
         assert_eq!(
-            extract_ip_for_rate_limit(&headers, Some("fly-client-ip")),
+            extract_ip_for_rate_limit(&headers, Some("fly-client-ip"), Some(peer)),
             "3.3.3.3"
         );
 
@@ -221,12 +257,19 @@ mod tests {
         let mut xff_only = HeaderMap::new();
         xff_only.insert("x-forwarded-for", "4.4.4.4".parse().unwrap());
         assert_eq!(
-            extract_ip_for_rate_limit(&xff_only, Some("fly-client-ip")),
+            extract_ip_for_rate_limit(&xff_only, Some("fly-client-ip"), None),
             "4.4.4.4"
         );
 
-        // Neither header — should fall back to "unknown"
+        // Neither header, but a peer addr → R4: use the peer addr, NOT the
+        // collapsing "unknown" bucket.
         let empty = HeaderMap::new();
-        assert_eq!(extract_ip_for_rate_limit(&empty, None), "unknown");
+        assert_eq!(
+            extract_ip_for_rate_limit(&empty, None, Some(peer)),
+            "9.9.9.9"
+        );
+
+        // Neither header AND no peer addr — only then fall back to "unknown".
+        assert_eq!(extract_ip_for_rate_limit(&empty, None, None), "unknown");
     }
 }

@@ -30,7 +30,15 @@ pub const DEFAULT_MAX_TOKENS: u32 = 5530;
 pub const MAX_TOKENS_MIN: u32 = 1;
 
 /// Inclusive upper bound for `ai.max_tokens`. Values above clamp down.
-pub const MAX_TOKENS_MAX: u32 = 200_000;
+///
+/// LLM-audit M3 / R2: lowered from 200_000 to 12_000. For a portfolio
+/// chat/fit feature a 200k upper bound was a sky-high per-request
+/// cost/latency ceiling — a bad config row or a compromised admin session
+/// could request a 200k completion. 12_000 sits mid-band of the spec's
+/// 8_000–16_000 target: comfortably above `DEFAULT_MAX_TOKENS` (5530) so
+/// the default and any reasonable hand-tuned value pass through unclamped,
+/// while the clamp now doubles as the LLM10 cost ceiling.
+pub const MAX_TOKENS_MAX: u32 = 12_000;
 
 const KEY_MODEL_ID: &str = "ai.model_id";
 const KEY_MAX_TOKENS: &str = "ai.max_tokens";
@@ -140,7 +148,9 @@ pub fn get_max_tokens(conn: &Connection) -> u32 {
             key = KEY_MAX_TOKENS,
             value = parsed,
             clamped_to = clamped,
-            "config value out of range [1, 200_000], clamped"
+            min = MAX_TOKENS_MIN,
+            max = MAX_TOKENS_MAX,
+            "config value out of range [MAX_TOKENS_MIN, MAX_TOKENS_MAX], clamped"
         );
     }
     clamped
@@ -486,11 +496,16 @@ mod tests {
         assert_eq!(buf.count("ERROR "), 0);
     }
 
-    /// R4: boundary upper (200_000) → no log emission (no clamp triggered).
+    /// R4: a value exactly at the configured upper bound (`MAX_TOKENS_MAX`)
+    /// → no log emission (no clamp triggered). Tracks the constant rather
+    /// than a hardcoded literal so it stays correct across ceiling changes
+    /// (LLM-audit R2 lowered `MAX_TOKENS_MAX` from 200_000 to 12_000;
+    /// mirrors the same constant-tracking amendment Glitch applied to the
+    /// legacy clamp assertions in `tests/test_config.rs`).
     #[test]
     fn get_max_tokens_emits_no_log_at_upper_bound() {
         let conn = seeded_conn();
-        set_value(&conn, "ai.max_tokens", "200000");
+        set_value(&conn, "ai.max_tokens", &MAX_TOKENS_MAX.to_string());
 
         let (_, buf) = capture_logs(|| get_max_tokens(&conn));
         let captured = buf.captured();

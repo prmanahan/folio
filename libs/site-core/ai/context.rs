@@ -166,21 +166,20 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
                 exp.proudest_achievement
             ));
         }
-        if !exp.would_do_differently.is_empty() {
-            prompt.push_str(&format!(
-                "Would do differently: {}\n",
-                exp.would_do_differently
-            ));
-        }
+        // LLM07(a) / R3: `would_do_differently` is intentionally NOT
+        // interpolated. Prompt-only confidentiality is bypassable by
+        // adversarial phrasing; the most-sensitive private fields are
+        // dropped from the construction path entirely. The DB column,
+        // struct field, and admin CRUD are unaffected — only this read
+        // is removed.
         if !exp.challenges_faced.is_empty() {
             prompt.push_str(&format!("Challenges faced: {}\n", exp.challenges_faced));
         }
         if !exp.lessons_learned.is_empty() {
             prompt.push_str(&format!("Lessons learned: {}\n", exp.lessons_learned));
         }
-        if !exp.manager_would_say.is_empty() {
-            prompt.push_str(&format!("Manager would say: {}\n", exp.manager_would_say));
-        }
+        // LLM07(a) / R3: `manager_would_say` is intentionally NOT
+        // interpolated (see the `would_do_differently` note above).
         if !exp.reports_would_say.is_empty() {
             prompt.push_str(&format!("Reports would say: {}\n", exp.reports_would_say));
         }
@@ -207,9 +206,9 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
         if !s.evidence.is_empty() {
             line.push_str(&format!(". Evidence: {}", s.evidence));
         }
-        if !s.honest_notes.is_empty() {
-            line.push_str(&format!(". Notes: {}", s.honest_notes));
-        }
+        // LLM07(a) / R3: `honest_notes` is intentionally NOT interpolated.
+        // It is the most-sensitive skill field; dropped from the
+        // construction path entirely (column/struct/admin CRUD unaffected).
         line.push('\n');
         line
     };

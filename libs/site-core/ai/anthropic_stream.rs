@@ -50,11 +50,32 @@ const TRUNCATED_CLIENT_MESSAGE: &str = "The response was cut off due to length."
 /// (R17). The spec mandates 500 Unicode chars.
 const LOG_SANITIZE_MAX_CHARS: usize = 500;
 
+/// LLM-audit residual / R7: fixed opaque client message for the chat-path
+/// outbound-request construction failures (serialize / build / attach).
+/// The serde/http `{err}` detail is logged server-side via
+/// `tracing::error!`; the client-facing `AppError::Internal` carries only
+/// this fixed string so no serde/library text reaches the response body.
+const CHAT_REQUEST_BUILD_OPAQUE_MESSAGE: &str = "AI request failed. Please try again later.";
+
 /// Bound on the bridge channel between the SSE-consume task and the axum
 /// response stream. Generous enough for buffered-flush bursts on
 /// `max_tokens` (the buffer is replayed in order) but bounded so a
 /// runaway consumer can't grow unbounded.
 const SSE_CHANNEL_CAPACITY: usize = 64;
+
+/// LLM-audit M1 / R1: per-event idle deadline on the chat SSE consume
+/// loop. If the upstream stalls mid-stream and no new frame arrives within
+/// this window, the loop aborts. 12 s matches the fit handler's bound and
+/// sits well under the R1 acceptance test's 25 s wall-clock assertion (the
+/// mock stalls 40 s with no terminal frame).
+const CHAT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+
+/// LLM-audit M1 / R1: total wall-clock cap on the chat SSE consume loop.
+/// Even if frames keep trickling in just under the idle bound, the whole
+/// stream is hard-capped here so a slow-drip upstream cannot pin the
+/// spawned task and connection indefinitely. 20 s is bounded well under
+/// any proxy/LB timeout while allowing a normal multi-delta completion.
+const CHAT_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Local deserialization shape for Anthropic's SSE `event: error` frame.
 /// Anthropic wires it as `{"type":"error","error":{"type":"<kind>",
@@ -169,13 +190,26 @@ pub fn stream_chat(
         user_message,
         max_tokens,
     ))
-    .map_err(|err| AppError::Internal(format!("failed to serialize chat body: {err}")))?;
+    .map_err(|err| {
+        // R7: serde error text stays server-side; client gets the fixed
+        // opaque message.
+        tracing::error!(error = %err, "chat: failed to serialize chat body");
+        AppError::Internal(CHAT_REQUEST_BUILD_OPAQUE_MESSAGE.to_string())
+    })?;
 
     let request: Request<Vec<u8>> = client
         .post_sse("/v1/messages")
-        .map_err(|err| AppError::Internal(format!("failed to build SSE request: {err}")))?
+        .map_err(|err| {
+            // R7: http-builder error text stays server-side.
+            tracing::error!(error = %err, "chat: failed to build SSE request");
+            AppError::Internal(CHAT_REQUEST_BUILD_OPAQUE_MESSAGE.to_string())
+        })?
         .body(body_bytes)
-        .map_err(|err| AppError::Internal(format!("failed to attach body to request: {err}")))?;
+        .map_err(|err| {
+            // R7: http-builder error text stays server-side.
+            tracing::error!(error = %err, "chat: failed to attach body to request");
+            AppError::Internal(CHAT_REQUEST_BUILD_OPAQUE_MESSAGE.to_string())
+        })?;
 
     // Retry policy: rig-core 0.37 implements `Stream` ONLY for the
     // defaulted `GenericEventSource<..., ExponentialBackoff>`; passing a
@@ -236,6 +270,15 @@ pub fn stream_chat(
 /// Anthropic SSE `event: error` frames map through the same generic
 /// `event: error` client surface; the sanitized message text reaches the
 /// server log only.
+///
+/// R1 (LLM10): the loop is bounded two ways. A per-event idle timeout
+/// (`CHAT_IDLE_TIMEOUT`) wraps each `source.next()` so a mid-stream stall
+/// (upstream stops sending frames) aborts within the idle window. A total
+/// wall-clock deadline (`CHAT_TOTAL_TIMEOUT`) bounds the whole loop so a
+/// slow-drip upstream cannot pin the task indefinitely. On EITHER expiry
+/// the buffered text is DISCARDED (R29 — no partial model text reaches the
+/// client), a generic `event: error` frame is emitted, and the loop
+/// breaks to the unconditional `[DONE]` tail.
 async fn run_chat_stream<HttpClient>(
     mut source: GenericEventSource<HttpClient, Vec<u8>>,
     tx: mpsc::Sender<Result<SseEvent, Infallible>>,
@@ -245,7 +288,44 @@ async fn run_chat_stream<HttpClient>(
     let mut buffered_text: Vec<String> = Vec::new();
     let mut terminal_emitted = false;
 
-    while let Some(frame_result) = source.next().await {
+    // R1: total wall-clock deadline for the entire consume loop.
+    let total_deadline = tokio::time::Instant::now() + CHAT_TOTAL_TIMEOUT;
+
+    loop {
+        // R1: per-event idle timeout AND the remaining total budget. We
+        // wait on `source.next()` with whichever bound is tighter; on
+        // either expiry, discard the buffer and emit a generic error.
+        let next_frame = tokio::time::timeout_at(
+            (tokio::time::Instant::now() + CHAT_IDLE_TIMEOUT).min(total_deadline),
+            source.next(),
+        )
+        .await;
+
+        let frame_result = match next_frame {
+            Ok(Some(frame_result)) => frame_result,
+            Ok(None) => break, // stream ended; handled by !terminal_emitted tail
+            Err(_elapsed) => {
+                // R1: idle or total deadline exceeded mid-stream. R29:
+                // DROP buffered_text (do NOT flush partial model text).
+                let timed_out_total = tokio::time::Instant::now() >= total_deadline;
+                tracing::error!(
+                    idle_timeout_secs = CHAT_IDLE_TIMEOUT.as_secs(),
+                    total_timeout_secs = CHAT_TOTAL_TIMEOUT.as_secs(),
+                    total_deadline_hit = timed_out_total,
+                    "chat: upstream SSE stalled; discarding buffer and \
+                     emitting degraded error"
+                );
+                buffered_text.clear();
+                let _ = tx
+                    .send(Ok(SseEvent::default()
+                        .event("error")
+                        .data("AI response failed. Please try again.")))
+                    .await;
+                terminal_emitted = true;
+                break;
+            }
+        };
+
         let event = match frame_result {
             Ok(event) => event,
             Err(err) => {
