@@ -1,4 +1,4 @@
-use axum::extract::Path;
+use axum::extract::{DefaultBodyLimit, Path};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Router, routing::get};
@@ -15,6 +15,7 @@ use site_core::state::{AppState, DbState};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
+use tower_http::timeout::TimeoutLayer;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -115,10 +116,29 @@ async fn run_server() {
         page_hit_salt: config.page_hit_salt.clone(),
     });
 
+    // LLM-audit Nit / R6: CORS_ORIGIN fail-loud. The old silent
+    // `unwrap_or_else(|_| "http://localhost:3000")` made a missing prod
+    // env var yield a wrong-origin policy that breaks the site without any
+    // operator signal. WARN form (not require-in-prod) is chosen to match
+    // the existing `PAGE_HIT_SALT` pattern and keep local/dev ergonomics
+    // (dev has no CORS_ORIGIN; only `ADMIN_PASSWORD` is fail-loud). A
+    // missing CORS_ORIGIN now emits a WARN naming the var before falling
+    // back, so the misconfiguration is loud in the logs.
+    let cors_origin = match std::env::var("CORS_ORIGIN") {
+        Ok(origin) => origin,
+        Err(_) => {
+            tracing::warn!(
+                "CORS_ORIGIN is unset; falling back to the localhost dev \
+                 default (http://localhost:3000). In production set \
+                 CORS_ORIGIN explicitly — a missing value silently yields a \
+                 wrong-origin CORS policy."
+            );
+            "http://localhost:3000".to_string()
+        }
+    };
     let cors = CorsLayer::new()
         .allow_origin(
-            std::env::var("CORS_ORIGIN")
-                .unwrap_or_else(|_| "http://localhost:3000".to_string())
+            cors_origin
                 .parse::<axum::http::HeaderValue>()
                 .expect("Invalid CORS_ORIGIN value"),
         )
@@ -149,6 +169,25 @@ async fn run_server() {
             global_rate_limit_middleware,
         ))
         .layer(axum::Extension(global_rate_limit))
+        // LLM-audit L2 / R5: explicit global request-body byte cap (64 KiB).
+        // The AI routes additionally apply their own `DefaultBodyLimit` in
+        // `routes::ai::routes_with_connect_info()`; this global layer is the
+        // outer backstop covering every route (and the wiring the R5 gate
+        // checks for in main.rs). Aligns the byte cap with the semantic
+        // caps so oversized bodies are rejected pre-parse with 413 rather
+        // than relying on axum's 2 MiB default.
+        .layer(DefaultBodyLimit::max(64 * 1024))
+        // LLM-audit M1 / R1: outer-backstop request timeout. The fit
+        // handler bounds its single upstream await and the chat consumer
+        // bounds its SSE loop in-handler; this `TimeoutLayer` is the
+        // router-level safety net for any path/await not individually
+        // bounded. 60 s is generous (well above the in-handler 12–20 s
+        // AI bounds) so it never pre-empts the finer-grained AI deadlines
+        // but still caps a wedged request.
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(60),
+        ))
         .layer(cors)
         .layer(axum::middleware::from_fn(security_headers))
         .fallback_service(site_core::static_files::static_file_service(
