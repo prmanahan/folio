@@ -429,9 +429,10 @@ fn get_max_tokens_trims_whitespace_before_parsing() {
     );
 }
 
-/// Given: a database where `ai.max_tokens` has `value = "999999"` (above 200_000) — Scenario 7
+/// Given: a database where `ai.max_tokens` has `value = "999999"` (above the
+///        configured upper bound) — Scenario 7
 /// When:  `get_max_tokens` is called
-/// Then:  the value is clamped to `200_000` (R4 upper bound)
+/// Then:  the value is clamped to `MAX_TOKENS_MAX` (R4 upper bound)
 /// And:   a `tracing::warn!` is emitted naming the offending value
 ///
 /// Red-phase failure: `site_core::db::config` does not exist yet.
@@ -450,11 +451,12 @@ fn get_max_tokens_clamps_to_upper_bound_when_exceeded() {
     // When: the accessor reads the over-range value.
     let max_tokens = get_max_tokens(&conn);
 
-    // Then: the value is clamped to the upper bound (200_000).
+    // Then: the value is clamped to the configured upper bound.
     // LOG: tracing::warn! expected naming "999999" and the clamp behavior (R4).
     assert_eq!(
-        max_tokens, 200_000,
-        "ai.max_tokens=999999 must clamp to upper bound 200_000"
+        max_tokens,
+        site_core::db::config::MAX_TOKENS_MAX,
+        "ai.max_tokens=999999 must clamp to the configured upper bound (MAX_TOKENS_MAX)"
     );
 }
 
@@ -487,20 +489,22 @@ fn get_max_tokens_clamps_to_lower_bound_when_zero() {
     );
 }
 
-/// Given: a database where `ai.max_tokens` has `value = "200000"` (exactly the upper bound)
+/// Given: a database where `ai.max_tokens` is exactly `MAX_TOKENS_MAX` (the
+///        configured upper bound)
 /// When:  `get_max_tokens` is called
-/// Then:  the value `200_000` is returned (passthrough, R4 boundary)
+/// Then:  that same value is returned (passthrough, R4 boundary)
 /// And:   NO warn is emitted (in-range)
 ///
 /// Red-phase failure: `site_core::db::config` does not exist yet.
 #[test]
 fn get_max_tokens_passes_through_value_at_upper_bound() {
-    // Given: a fresh DB with ai.max_tokens exactly at the upper bound.
+    // Given: a fresh DB with ai.max_tokens exactly at the configured upper bound.
     let conn = common::test_db();
+    let upper_bound_str = site_core::db::config::MAX_TOKENS_MAX.to_string();
     let updated = conn
         .execute(
-            "UPDATE site_config SET value = '200000' WHERE key = 'ai.max_tokens'",
-            [],
+            "UPDATE site_config SET value = ?1 WHERE key = 'ai.max_tokens'",
+            [&upper_bound_str],
         )
         .expect("UPDATE on site_config must succeed");
     assert_eq!(updated, 1, "UPDATE must affect exactly the seed row");
@@ -511,8 +515,9 @@ fn get_max_tokens_passes_through_value_at_upper_bound() {
     // Then: passthrough — the inclusive upper bound is honored.
     // LOG: NO warn expected — exactly at upper bound is in-range.
     assert_eq!(
-        max_tokens, 200_000,
-        "ai.max_tokens=200000 must pass through unchanged (inclusive upper bound)"
+        max_tokens,
+        site_core::db::config::MAX_TOKENS_MAX,
+        "ai.max_tokens at the configured upper bound (MAX_TOKENS_MAX) must pass through unchanged (inclusive upper bound)"
     );
 }
 
@@ -547,7 +552,7 @@ fn get_max_tokens_passes_through_value_at_lower_bound() {
 
 /// Given: a database where `ai.max_tokens` has `value = "4294967295"` (u32::MAX)
 /// When:  `get_max_tokens` is called
-/// Then:  the value is clamped to `200_000` (R4 — far above upper bound)
+/// Then:  the value is clamped to `MAX_TOKENS_MAX` (R4 — far above upper bound)
 /// And:   a `tracing::warn!` is emitted
 ///
 /// Red-phase failure: `site_core::db::config` does not exist yet.
@@ -567,12 +572,14 @@ fn get_max_tokens_clamps_u32_max_to_upper_bound() {
     // When: the accessor reads u32::MAX.
     let max_tokens = get_max_tokens(&conn);
 
-    // Then: clamped to upper bound — must NOT panic on the parse, must NOT
-    // overflow on the clamp. (Parsing u32::MAX as u32 succeeds; clamp pulls it down.)
+    // Then: clamped to the configured upper bound — must NOT panic on the
+    // parse, must NOT overflow on the clamp. (Parsing u32::MAX as u32
+    // succeeds; clamp pulls it down.)
     // LOG: tracing::warn! expected naming u32::MAX and the clamp behavior (R4).
     assert_eq!(
-        max_tokens, 200_000,
-        "ai.max_tokens=u32::MAX must clamp to upper bound 200_000 (no panic, no overflow)"
+        max_tokens,
+        site_core::db::config::MAX_TOKENS_MAX,
+        "ai.max_tokens=u32::MAX must clamp to the configured upper bound (MAX_TOKENS_MAX) (no panic, no overflow)"
     );
 }
 
