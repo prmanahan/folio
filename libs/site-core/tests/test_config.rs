@@ -646,6 +646,131 @@ fn get_max_tokens_returns_default_on_negative_value() {
 // Non-panic guarantees (R3, R4 — "MUST NOT panic")
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// R2 (LLM-audit M3) — lower the token-output ceiling.
+//
+// Spec: `docs/specs/2026-05-18-llm-audit-remediation.md` R2. Target band
+// 8_000–16_000; the implementer picks the exact value and justifies it.
+// These tests assert the BAND CONTRACT, not a specific value, so they hold
+// regardless of which in-band value Forge picks:
+//   - a value above the new ceiling clamps DOWN to the new ceiling
+//   - the new ceiling is within 8_000..=16_000
+//   - DEFAULT_MAX_TOKENS (5530) and MAX_TOKENS_MIN are unchanged
+//
+// Mechanism for "discover the implemented ceiling without hardcoding it":
+// request a value far above any plausible ceiling (1_000_000). get_max_tokens
+// clamps to MAX_TOKENS_MAX. The returned value IS the implemented ceiling.
+// We then assert that observed ceiling lies in the spec band.
+//
+// Red-phase: MAX_TOKENS_MAX is 200_000 today (db/config.rs:33). 200_000 is
+// NOT in 8_000..=16_000 → `clamped_ceiling_is_within_spec_band` fails by
+// assertion. `value_above_new_ceiling_clamps_down` also fails: requesting
+// 100_000 currently returns 100_000 (in old range), not the lowered ceiling.
+// ---------------------------------------------------------------------------
+
+/// Probe the implemented `MAX_TOKENS_MAX` ceiling behaviorally: a request
+/// far above any plausible cap clamps to the ceiling, so the returned value
+/// equals the implemented ceiling.
+fn observed_ceiling() -> u32 {
+    let conn = common::test_db();
+    conn.execute(
+        "UPDATE site_config SET value = '1000000' WHERE key = 'ai.max_tokens'",
+        [],
+    )
+    .expect("UPDATE on site_config must succeed");
+    get_max_tokens(&conn)
+}
+
+/// Given: the implemented token ceiling
+/// When:  it is probed via a far-over-range request
+/// Then:  it lies within the spec band 8_000..=16_000 (R2)
+///
+/// Red-phase failure: ceiling is 200_000 today; 200_000 ∉ 8_000..=16_000.
+#[test]
+fn r2_clamped_ceiling_is_within_spec_band_8000_to_16000() {
+    let ceiling = observed_ceiling();
+    assert!(
+        (8_000..=16_000).contains(&ceiling),
+        "R2: MAX_TOKENS_MAX must be lowered into the spec band \
+         8_000..=16_000; observed implemented ceiling = {ceiling}"
+    );
+}
+
+/// Given: a `site_config` value above the new (lowered) ceiling
+/// When:  get_max_tokens reads it
+/// Then:  it clamps DOWN to the ceiling, and the ceiling is in-band (R2)
+///
+/// Uses 50_000 as the over-ceiling request: above the entire 8_000..=16_000
+/// band, below the legacy 200_000 cap (so the legacy code returns 50_000
+/// unchanged — that is the red signal). Post-fix it clamps to the new
+/// in-band ceiling.
+#[test]
+fn r2_value_above_new_ceiling_clamps_down_to_in_band_ceiling() {
+    let conn = common::test_db();
+    let updated = conn
+        .execute(
+            "UPDATE site_config SET value = '50000' WHERE key = 'ai.max_tokens'",
+            [],
+        )
+        .expect("UPDATE on site_config must succeed");
+    assert_eq!(updated, 1, "UPDATE must affect exactly the seed row");
+
+    let max_tokens = get_max_tokens(&conn);
+
+    assert!(
+        max_tokens < 50_000,
+        "R2: a request of 50_000 (above the spec band) MUST clamp DOWN to \
+         the new ceiling — got {max_tokens} (legacy code returns 50_000 \
+         unclamped: that is the pre-fix red state)"
+    );
+    assert!(
+        (8_000..=16_000).contains(&max_tokens),
+        "R2: clamped value must equal the new in-band ceiling \
+         (8_000..=16_000); got {max_tokens}"
+    );
+}
+
+/// Given: DEFAULT_MAX_TOKENS and MAX_TOKENS_MIN constants
+/// When:  R2 lowers MAX_TOKENS_MAX
+/// Then:  DEFAULT_MAX_TOKENS stays 5530 and MAX_TOKENS_MIN stays 1 (R2 —
+///   "DEFAULT_MAX_TOKENS unchanged; MAX_TOKENS_MIN unchanged")
+///
+/// These constants are public (db/config.rs:27,30). This guards against a
+/// fix that lowers the ceiling by also moving the default/min.
+#[test]
+fn r2_default_and_min_token_constants_are_unchanged() {
+    assert_eq!(
+        site_core::db::config::DEFAULT_MAX_TOKENS,
+        5530,
+        "R2: DEFAULT_MAX_TOKENS MUST remain 5530"
+    );
+    assert_eq!(
+        site_core::db::config::MAX_TOKENS_MIN,
+        1,
+        "R2: MAX_TOKENS_MIN MUST remain 1"
+    );
+}
+
+/// Boundary: a value within the new band (e.g. 8_000, the band floor) is
+/// passed through unclamped — proves the ceiling didn't drop BELOW the
+/// band (which would clamp legitimate in-band configs).
+#[test]
+fn r2_value_at_band_floor_is_not_clamped() {
+    let conn = common::test_db();
+    conn.execute(
+        "UPDATE site_config SET value = '8000' WHERE key = 'ai.max_tokens'",
+        [],
+    )
+    .expect("UPDATE on site_config must succeed");
+
+    let max_tokens = get_max_tokens(&conn);
+    assert_eq!(
+        max_tokens, 8_000,
+        "R2: 8_000 is the spec band floor and MUST pass through unclamped \
+         (the new ceiling must be >= 8_000); got {max_tokens}"
+    );
+}
+
 /// Given: a database missing the `site_config` table entirely (simulated SQL
 ///        connection error / schema-missing scenario).
 /// When:  `get_model_id` and `get_max_tokens` are called
