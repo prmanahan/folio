@@ -4,7 +4,6 @@
 > **Source design:** `scratch/pixel-folio-hero-vertical-review.md` (Pixel, 2026-04-13, Option B chosen)
 > **Date:** 2026-04-13
 > **Severity:** high (live on production)
-> **Target:** `/Users/manahan/claude_workspace/projects/folio`
 > **Assigned:** Rune (Sonnet)
 > **Review pipeline:** Warden → Glitch → 90% coverage gate → merge
 
