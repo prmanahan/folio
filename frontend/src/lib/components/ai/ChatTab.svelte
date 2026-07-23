@@ -10,6 +10,9 @@
 	let isStreaming = $state(false);
 	let error = $state<string | null>(null);
 	let messagesEl = $state<HTMLDivElement | null>(null);
+	// Settled assistant response text, announced to screen readers once per
+	// completed turn (not per token — see the live region markup below).
+	let liveAnnouncement = $state('');
 
 	$effect(() => {
 		// Scroll to bottom whenever messages change
@@ -59,9 +62,15 @@
 			}
 
 			// If stream completed but no content was received, show error
-			if (messages[messages.length - 1]?.content === '') {
+			const finalMsg = messages[messages.length - 1];
+			if (finalMsg?.content === '') {
 				error = 'AI response was empty. Please try again.';
 				messages = messages.slice(0, -1);
+			} else if (finalMsg) {
+				// Announce the settled response once, on completion — not per
+				// token (AC-2). Error paths never reach here, so this region
+				// stays untouched and doesn't double up with role="alert" (AC-4).
+				liveAnnouncement = finalMsg.content;
 			}
 		} catch (e) {
 			if (e instanceof SSEError) {
@@ -102,6 +111,25 @@
 				<ChatMessageComponent {message} />
 			{/each}
 		{/if}
+	</div>
+
+	<!--
+		Two dedicated, visually-hidden live regions (D6-03). `.messages` above
+		stays a plain container — it is NOT itself aria-live, so token-by-token
+		content mutations during streaming are silent (AC-2). These regions are
+		the only announcement surfaces:
+		  - status: exposed only while isStreaming is true, removed when false (AC-3).
+		  - announcement: set once, when a turn settles successfully (AC-1/AC-2).
+		Neither is touched on an error path, so the role="alert" region below
+		remains the sole error announcement (AC-4).
+	-->
+	<div class="sr-only" role="status" aria-live="polite" data-testid="chat-typing-status">
+		{#if isStreaming}
+			Assistant is typing…
+		{/if}
+	</div>
+	<div class="sr-only" aria-live="polite" aria-atomic="true" data-testid="chat-response-announcement">
+		{liveAnnouncement}
 	</div>
 
 	{#if error}
@@ -153,6 +181,19 @@
 
 	.empty-state {
 		padding: 1rem 0;
+	}
+
+	/* Visually hidden but available to screen readers (D6-03 live regions). */
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
 	}
 
 	.empty-heading {
