@@ -1,7 +1,6 @@
 <project>
 Name: Folio
 Project ID: 1
-Path: /Users/manahan/claude_workspace/repos/folio
 Slug: folio
 </project>
 
@@ -63,7 +62,7 @@ Module layout: `cmd/server/` (Axum entry), `libs/site-core/` (core logic, DB, ro
 - **Test pyramid: inverted** (per G-0001). Heavy unit tests with mocks; integration tests only at real seams.
 - **Coverage: 90%** hard floor on both line and function coverage.
 - **Pre-commit: `just check`** — fmt + clippy with `-D warnings` + test must all pass.
-- **Worktrees in `.worktrees/`** for all feature work. See feedback_worktrees memory.
+- **Worktrees in `.worktrees/`** for all feature work.
 - **Rebase-merge to main** via `/merge` skill or PR (matches mnemra-core; flipped 2026-05-15). Squash and merge-commits disabled at the GitHub repo level. No local merges to main.
 </conventions>
 
@@ -95,5 +94,4 @@ State that changes as work progresses. Update when it drifts.
 - **README:** `README.md` — human-facing getting-started doc.
 - **Fly config:** `fly.toml`
 - **Docker:** `Dockerfile`, `docker-compose.yml`
-- **Related memory files:** `project_personal_site.md`, `feedback_no_rust_embed.md`
 </references>

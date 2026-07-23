@@ -3,7 +3,6 @@
 > **Spec for:** task #572 — Folio model migration: Sonnet 4-20250514 → Sonnet 4.6
 > **Date:** 2026-05-15 (v3)
 > **Status:** locked (trust-and-lock — v1 and v2 each had a full reviewer pass; v3 is a targeted architectural reset documented below; re-review only if implementation surfaces something unexpected against the verification asks)
-> **Target:** `/Users/manahan/claude_workspace/repos/folio`
 > **Implementation pipeline:** spec v3 (this revision, locked) → Glitch-first implementation (red-phase tests → Forge impl → Glitch test-integrity re-review → Warden code+security review) → 90% coverage gate → `/merge` (rebase-merge)
 
 ## Changelog
