@@ -240,6 +240,69 @@ test.describe('Accessibility — AI pane', () => {
     const sendBtn = page.getByRole('button', { name: /transmit message/i });
     await expect(sendBtn).toBeVisible({ timeout: 5000 });
   });
+
+  // D6-03: a screen reader gets zero indication today that a chat response
+  // streamed or arrived. Covers AC-1 (arrival announced) and AC-3 (streaming
+  // status announced, then removed). AC-2/AC-4/AC-5 (no per-token firehose,
+  // error path untouched, no visual change) are verified by code reading in
+  // the completion report — not straightforward to assert from the DOM here.
+  test('assistant response is announced via a live region once streaming completes (AC-1)', async ({ page }) => {
+    await page.route('**/api/chat', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: 'data: Peter ships reliable systems.\ndata: [DONE]\n',
+      })
+    );
+
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: PROFILE_NAME })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: /ask ai/i }).click();
+    const textarea = page.getByPlaceholder(/type your transmission/i);
+    await expect(textarea).toBeVisible({ timeout: 5000 });
+    await textarea.fill('tell me about Peter');
+    await page.getByRole('button', { name: /transmit message/i }).click();
+
+    // Streaming settled once the transmit button reverts from its spinner.
+    await expect(page.getByRole('button', { name: /transmit message/i })).toContainText('Transmit', {
+      timeout: 5000,
+    });
+
+    const announcement = page.locator('[data-testid="chat-response-announcement"]');
+    await expect(announcement).toHaveText('Peter ships reliable systems.');
+    // Note: not asserting !toBeVisible() here — Playwright treats the standard
+    // clip-rect sr-only technique (1x1px, non-zero layout box) as "visible"
+    // since it isn't display:none/visibility:hidden. Confirmed via manual run
+    // (AC-5's no-visible-layout-change claim is a code-reading check, not this
+    // assertion's job).
+  });
+
+  test('typing status is announced while streaming and removed after (AC-3)', async ({ page }) => {
+    await page.route('**/api/chat', async (route) => {
+      await new Promise((r) => setTimeout(r, 1000));
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: 'data: Peter ships reliable systems.\ndata: [DONE]\n',
+      });
+    });
+
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: PROFILE_NAME })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: /ask ai/i }).click();
+    const textarea = page.getByPlaceholder(/type your transmission/i);
+    await expect(textarea).toBeVisible({ timeout: 5000 });
+    await textarea.fill('tell me about Peter');
+    await page.getByRole('button', { name: /transmit message/i }).click();
+
+    const status = page.locator('[data-testid="chat-typing-status"]');
+    await expect(status).toHaveText(/assistant is typing/i, { timeout: 2000 });
+
+    await expect(page.getByRole('button', { name: /transmit message/i })).toContainText('Transmit', {
+      timeout: 5000,
+    });
+    await expect(status).toBeEmpty();
+  });
 });
 
 test.describe('Accessibility — Resume page', () => {
