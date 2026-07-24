@@ -206,7 +206,7 @@
               </div>
             </div>
           </FormSection>
-          <FormSection title="Private Notes" tier="private" collapsed>
+          <FormSection title="Role Reflections" tier="ai">
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; margin-top: 0.75rem;">
               <div style="grid-column: 1 / -1;">
                 <label class="nb-label" for="new-why-joined">Why Joined</label>
@@ -225,10 +225,6 @@
                 <textarea id="new-proudest-achievement" class="nb-input" rows="3" bind:value={form.proudest_achievement}></textarea>
               </div>
               <div style="grid-column: 1 / -1;">
-                <label class="nb-label" for="new-would-do-differently">Would Do Differently</label>
-                <textarea id="new-would-do-differently" class="nb-input" rows="3" bind:value={form.would_do_differently}></textarea>
-              </div>
-              <div style="grid-column: 1 / -1;">
                 <label class="nb-label" for="new-challenges-faced">Challenges Faced</label>
                 <textarea id="new-challenges-faced" class="nb-input" rows="3" bind:value={form.challenges_faced}></textarea>
               </div>
@@ -237,12 +233,20 @@
                 <textarea id="new-lessons-learned" class="nb-input" rows="3" bind:value={form.lessons_learned}></textarea>
               </div>
               <div style="grid-column: 1 / -1;">
-                <label class="nb-label" for="new-manager-would-say">Manager Would Say</label>
-                <textarea id="new-manager-would-say" class="nb-input" rows="3" bind:value={form.manager_would_say}></textarea>
-              </div>
-              <div style="grid-column: 1 / -1;">
                 <label class="nb-label" for="new-reports-would-say">Reports Would Say</label>
                 <textarea id="new-reports-would-say" class="nb-input" rows="3" bind:value={form.reports_would_say}></textarea>
+              </div>
+            </div>
+          </FormSection>
+          <FormSection title="Private Notes" tier="private" collapsed>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; margin-top: 0.75rem;">
+              <div style="grid-column: 1 / -1;">
+                <label class="nb-label" for="new-would-do-differently">Would Do Differently</label>
+                <textarea id="new-would-do-differently" class="nb-input" rows="3" bind:value={form.would_do_differently}></textarea>
+              </div>
+              <div style="grid-column: 1 / -1;">
+                <label class="nb-label" for="new-manager-would-say">Manager Would Say</label>
+                <textarea id="new-manager-would-say" class="nb-input" rows="3" bind:value={form.manager_would_say}></textarea>
               </div>
             </div>
           </FormSection>
@@ -362,7 +366,7 @@
                   </div>
                 </div>
               </FormSection>
-              <FormSection title="Private Notes" tier="private" collapsed>
+              <FormSection title="Role Reflections" tier="ai">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; margin-top: 0.75rem;">
                   <div style="grid-column: 1 / -1;">
                     <label class="nb-label" for="edit-why-joined-{item.id}">Why Joined</label>
@@ -381,10 +385,6 @@
                     <textarea id="edit-proudest-achievement-{item.id}" class="nb-input" rows="3" bind:value={form.proudest_achievement}></textarea>
                   </div>
                   <div style="grid-column: 1 / -1;">
-                    <label class="nb-label" for="edit-would-do-differently-{item.id}">Would Do Differently</label>
-                    <textarea id="edit-would-do-differently-{item.id}" class="nb-input" rows="3" bind:value={form.would_do_differently}></textarea>
-                  </div>
-                  <div style="grid-column: 1 / -1;">
                     <label class="nb-label" for="edit-challenges-faced-{item.id}">Challenges Faced</label>
                     <textarea id="edit-challenges-faced-{item.id}" class="nb-input" rows="3" bind:value={form.challenges_faced}></textarea>
                   </div>
@@ -393,12 +393,20 @@
                     <textarea id="edit-lessons-learned-{item.id}" class="nb-input" rows="3" bind:value={form.lessons_learned}></textarea>
                   </div>
                   <div style="grid-column: 1 / -1;">
-                    <label class="nb-label" for="edit-manager-would-say-{item.id}">Manager Would Say</label>
-                    <textarea id="edit-manager-would-say-{item.id}" class="nb-input" rows="3" bind:value={form.manager_would_say}></textarea>
-                  </div>
-                  <div style="grid-column: 1 / -1;">
                     <label class="nb-label" for="edit-reports-would-say-{item.id}">Reports Would Say</label>
                     <textarea id="edit-reports-would-say-{item.id}" class="nb-input" rows="3" bind:value={form.reports_would_say}></textarea>
+                  </div>
+                </div>
+              </FormSection>
+              <FormSection title="Private Notes" tier="private" collapsed>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; margin-top: 0.75rem;">
+                  <div style="grid-column: 1 / -1;">
+                    <label class="nb-label" for="edit-would-do-differently-{item.id}">Would Do Differently</label>
+                    <textarea id="edit-would-do-differently-{item.id}" class="nb-input" rows="3" bind:value={form.would_do_differently}></textarea>
+                  </div>
+                  <div style="grid-column: 1 / -1;">
+                    <label class="nb-label" for="edit-manager-would-say-{item.id}">Manager Would Say</label>
+                    <textarea id="edit-manager-would-say-{item.id}" class="nb-input" rows="3" bind:value={form.manager_would_say}></textarea>
                   </div>
                 </div>
               </FormSection>

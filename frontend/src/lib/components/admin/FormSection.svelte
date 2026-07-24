@@ -27,7 +27,7 @@
 
   const helperText: Record<string, string> = {
     public: 'Visible on your portfolio site',
-    ai: 'Used by the AI assistant',
+    ai: 'Used by the AI assistant — anyone can talk to it',
     private: 'Only visible to you',
   };
 
