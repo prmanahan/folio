@@ -28,6 +28,11 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         "site_config",
         include_str!("../../../migrations/005_site_config.sql"),
     ),
+    (
+        6,
+        "experience_visibility",
+        include_str!("../../../migrations/006_experience_visibility.sql"),
+    ),
 ];
 
 /// Ensure the migrations tracking table exists.

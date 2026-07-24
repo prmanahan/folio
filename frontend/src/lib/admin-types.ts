@@ -94,6 +94,7 @@ export interface ExperienceFull {
   lessons_learned: string;
   manager_would_say: string;
   reports_would_say: string;
+  visible: boolean;
 }
 
 export interface ExperienceInput {
@@ -117,6 +118,7 @@ export interface ExperienceInput {
   lessons_learned: string;
   manager_would_say: string;
   reports_would_say: string;
+  visible: boolean;
 }
 
 // Skills

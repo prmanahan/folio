@@ -39,7 +39,7 @@ pub fn list_public(conn: &Connection) -> Result<Vec<ExperiencePublic>, rusqlite:
     let mut stmt = conn.prepare(
         "SELECT id, company_name, title, location, start_date, end_date,
                 is_current, summary, bullet_points, display_order
-         FROM experiences ORDER BY display_order ASC",
+         FROM experiences WHERE visible = 1 ORDER BY display_order ASC",
     )?;
     let rows = stmt.query_map([], ExperiencePublic::from_row)?;
     rows.collect()
@@ -69,6 +69,7 @@ pub struct ExperienceFull {
     pub lessons_learned: String,
     pub manager_would_say: String,
     pub reports_would_say: String,
+    pub visible: bool,
 }
 
 impl ExperienceFull {
@@ -102,6 +103,7 @@ impl ExperienceFull {
             lessons_learned: row.get("lessons_learned")?,
             manager_would_say: row.get("manager_would_say")?,
             reports_would_say: row.get("reports_would_say")?,
+            visible: row.get("visible")?,
         })
     }
 }
@@ -128,6 +130,11 @@ pub struct ExperienceInput {
     pub lessons_learned: String,
     pub manager_would_say: String,
     pub reports_would_say: String,
+    // Spec #2715 / D-1: required, no `#[serde(default)]` in either direction.
+    // A body omitting `visible` MUST 422, not silently default — see the
+    // spec's Decisions of note D-1 for why both a false-default and a
+    // true-default fail silently in opposite directions.
+    pub visible: bool,
 }
 
 pub fn list_all(conn: &Connection) -> Result<Vec<ExperienceFull>, rusqlite::Error> {
@@ -136,7 +143,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<ExperienceFull>, rusqlite::Erro
                 is_current, summary, bullet_points, display_order, title_progression,
                 quantified_impact, why_joined, why_left, actual_contributions,
                 proudest_achievement, would_do_differently, challenges_faced,
-                lessons_learned, manager_would_say, reports_would_say
+                lessons_learned, manager_would_say, reports_would_say, visible
          FROM experiences ORDER BY display_order ASC",
     )?;
     let rows = stmt.query_map([], ExperienceFull::from_row)?;
@@ -149,7 +156,7 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<ExperienceFull, rusqlite:
                 is_current, summary, bullet_points, display_order, title_progression,
                 quantified_impact, why_joined, why_left, actual_contributions,
                 proudest_achievement, would_do_differently, challenges_faced,
-                lessons_learned, manager_would_say, reports_would_say
+                lessons_learned, manager_would_say, reports_would_say, visible
          FROM experiences WHERE id = ?1",
         rusqlite::params![id],
         ExperienceFull::from_row,
@@ -169,8 +176,8 @@ pub fn create(
             summary, bullet_points, display_order, title_progression,
             quantified_impact, why_joined, why_left, actual_contributions,
             proudest_achievement, would_do_differently, challenges_faced,
-            lessons_learned, manager_would_say, reports_would_say
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            lessons_learned, manager_would_say, reports_would_say, visible
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         rusqlite::params![
             input.company_name,
             input.title,
@@ -192,6 +199,7 @@ pub fn create(
             input.lessons_learned,
             input.manager_would_say,
             input.reports_would_say,
+            input.visible as i64,
         ],
     )?;
     let id = conn.last_insert_rowid();
@@ -214,8 +222,8 @@ pub fn update(
             why_joined = ?12, why_left = ?13, actual_contributions = ?14,
             proudest_achievement = ?15, would_do_differently = ?16,
             challenges_faced = ?17, lessons_learned = ?18,
-            manager_would_say = ?19, reports_would_say = ?20
-         WHERE id = ?21",
+            manager_would_say = ?19, reports_would_say = ?20, visible = ?21
+         WHERE id = ?22",
         rusqlite::params![
             input.company_name,
             input.title,
@@ -237,6 +245,7 @@ pub fn update(
             input.lessons_learned,
             input.manager_would_say,
             input.reports_would_say,
+            input.visible as i64,
             id,
         ],
     )?;

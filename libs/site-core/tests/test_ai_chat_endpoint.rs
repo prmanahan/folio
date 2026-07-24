@@ -668,11 +668,123 @@ async fn chat_handler_reuses_rig_anthropic_client_from_app_state_no_new_client_p
 }
 
 // ===========================================================================
+// R-0003 / S2 — AI-context invariant: hidden rows still reach the model
+// (spec #2715, docs/specs/2026-07-24-experiences-visible-flag.md)
+//
+// Placed here (not a new file) because it reuses this file's proven
+// outbound-body-capture pattern verbatim (see the Scenario 1 tests above,
+// lines 44-103) — the pattern the spec names as R-0003's black-box surface.
+// ===========================================================================
+
+/// Given two experience rows — one `visible = 1`, one `visible = 0`, each
+///   carrying a distinct sentinel company name
+/// When a client POSTs /api/chat (mocked upstream) and the outbound
+///   Anthropic request body is captured
+/// Then the captured `system` payload's concatenated block text contains
+///   BOTH sentinels — hidden rows stay in the AI system prompt by design
+///   (D2 / R-0003 / S2). Assert on row DATA, never on which function ran.
+///
+/// **Red-phase form (accepted).** Before migration 006 exists, seeding the
+/// `visible = 0` row fails with "no such column: visible" — that IS the
+/// accepted red state per R-0003's "Red-phase form" note; no behavioral red
+/// is possible before the column exists, and this test should not chase
+/// one. Behavioral validity is established later by R-0003's ordered
+/// seeded-failure probe (implementer, post-green) — not by this red phase.
+#[tokio::test]
+async fn chat_outbound_system_prompt_contains_both_visible_and_hidden_row_sentinels() {
+    const VISIBLE_SENTINEL: &str = "ZZ-VISIBLE-SENTINEL-Solstice-Robotics-4a1c";
+    const HIDDEN_SENTINEL: &str = "ZZ-HIDDEN-SENTINEL-Umbra-Systems-9e2f";
+
+    let mut server = mockito::Server::new_async().await;
+    let captured_body = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let captured_body_for_mock = captured_body.clone();
+
+    let _mock = server
+        .mock("POST", "/v1/messages")
+        .match_request(move |req| {
+            let body = req.body().expect("outbound request must have a body");
+            captured_body_for_mock
+                .lock()
+                .unwrap()
+                .extend_from_slice(body);
+            true
+        })
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(anthropic_sse_response(&["ok"], "end_turn"))
+        .create_async()
+        .await;
+
+    let (app, state) = ai_test_app_with_mock_and_state(&server.url());
+
+    // Given: seed the two rows directly through the exposed connection —
+    // in-test, not via the shared seed_test_data() fixture.
+    {
+        let conn = state.db.lock().expect("db lock");
+        conn.execute(
+            "INSERT INTO experiences (
+                company_name, title, location, start_date, end_date, is_current,
+                summary, bullet_points, display_order, visible
+             ) VALUES (?1, 'Engineer', 'Remote', '2010-01', '2012-01', 0, 'Summary.', '[]', 50, 1)",
+            rusqlite::params![VISIBLE_SENTINEL],
+        )
+        .expect(
+            "seeding a visible = 1 row must succeed once migration 006 \
+             exists (accepted schema-red pre-006)",
+        );
+        conn.execute(
+            "INSERT INTO experiences (
+                company_name, title, location, start_date, end_date, is_current,
+                summary, bullet_points, display_order, visible
+             ) VALUES (?1, 'Engineer', 'Remote', '2008-01', '2010-01', 0, 'Summary.', '[]', 40, 0)",
+            rusqlite::params![HIDDEN_SENTINEL],
+        )
+        .expect(
+            "seeding a visible = 0 row must succeed — migration 006 must \
+             exist (visible column); accepted schema-red pre-006 per \
+             R-0003's Red-phase form note",
+        );
+    }
+
+    // When
+    let response = app
+        .post("/api/chat")
+        .json(&serde_json::json!({ "message": "Tell me about your background" }))
+        .await;
+    response.assert_status_ok();
+
+    // Then
+    let body_bytes = captured_body.lock().unwrap().clone();
+    let body_str = std::str::from_utf8(&body_bytes).expect("outbound body is UTF-8");
+    let body_json: Value = serde_json::from_str(body_str).expect("outbound body parses as JSON");
+
+    let system = body_json["system"]
+        .as_array()
+        .expect("system field must be an array of blocks (Anthropic SystemContent)");
+    let concatenated: String = system
+        .iter()
+        .filter_map(|block| block["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        concatenated.contains(VISIBLE_SENTINEL),
+        "R-0003/S2: the visible-row sentinel must appear in the outbound \
+         system prompt; system blocks: {body_json:?}"
+    );
+    assert!(
+        concatenated.contains(HIDDEN_SENTINEL),
+        "R-0003/S2: the hidden-row sentinel MUST STILL appear in the \
+         outbound system prompt — hidden rows stay AI-layer-only by design \
+         (D2/R-0003); system blocks: {body_json:?}"
+    );
+}
+
+// ===========================================================================
 // Suppress unused warnings on helpers conditionally used
 // ===========================================================================
 
 #[allow(dead_code)]
 fn _silence_unused() {
     let _ = ai_mock::valid_fit_verdict_json();
-    let _ = ai_test_app_with_mock_and_state;
 }

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { listExperience, createExperience, updateExperience, deleteExperience } from '$lib/admin-api';
   import type { ExperienceFull, ExperienceInput } from '$lib/admin-types';
+  import { emptyExperienceForm } from '$lib/admin-experience-form';
   import FormSection from '$lib/components/admin/FormSection.svelte';
   import ListInput from '$lib/components/admin/ListInput.svelte';
   import Toast from '$lib/components/admin/Toast.svelte';
@@ -9,38 +10,13 @@
   let items = $state<ExperienceFull[]>([]);
   let editingId = $state<number | null>(null);
   let creatingNew = $state(false);
-  let form = $state<ExperienceInput>(emptyForm());
+  let form = $state<ExperienceInput>(emptyExperienceForm());
   let loading = $state(true);
   let saving = $state(false);
   let toastMessage = $state('');
   let toastType = $state<'success' | 'error'>('success');
   let isDirty = $state(false);
   let deletingId = $state<number | null>(null);
-
-  function emptyForm(): ExperienceInput {
-    return {
-      company_name: '',
-      title: '',
-      location: '',
-      start_date: '',
-      end_date: null,
-      is_current: false,
-      summary: '',
-      bullet_points: [],
-      display_order: 0,
-      title_progression: '',
-      quantified_impact: [],
-      why_joined: '',
-      why_left: '',
-      actual_contributions: '',
-      proudest_achievement: '',
-      would_do_differently: '',
-      challenges_faced: '',
-      lessons_learned: '',
-      manager_would_say: '',
-      reports_would_say: '',
-    };
-  }
 
   async function loadItems() {
     items = await listExperience();
@@ -58,7 +34,7 @@
   });
 
   function startCreate() {
-    form = emptyForm();
+    form = emptyExperienceForm();
     editingId = null;
     creatingNew = true;
     isDirty = false;
@@ -89,6 +65,7 @@
       lessons_learned: item.lessons_learned,
       manager_would_say: item.manager_would_say,
       reports_would_say: item.reports_would_say,
+      visible: item.visible,
     };
     isDirty = false;
   }
@@ -211,6 +188,10 @@
                 <label class="nb-label" for="new-display-order">Display Order</label>
                 <input id="new-display-order" type="number" class="nb-input" bind:value={form.display_order} />
               </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; padding-top: 1.25rem;">
+                <input type="checkbox" id="new-visible" bind:checked={form.visible} onchange={() => isDirty = true} />
+                <label class="nb-label" for="new-visible" style="margin-bottom: 0;">Visible on public page</label>
+              </div>
             </div>
           </FormSection>
           <FormSection title="AI Context" tier="ai">
@@ -285,6 +266,7 @@
           <div style={cardBodyStyle}>
             <div style={cardTitleStyle}>{item.title}</div>
             <div style={cardMetaStyle}>{item.company_name} · {item.start_date} — {item.is_current ? 'Present' : (item.end_date ?? '')}</div>
+            <span style="{tagPillStyle} {item.visible ? 'color: #7fd4a8; background: var(--nb-green-dim);' : ''}">{item.visible ? 'visible' : 'hidden'}</span>
             {#if item.is_current}
               <span style={tagPillStyle}>current</span>
             {/if}
@@ -361,6 +343,10 @@
                   <div>
                     <label class="nb-label" for="edit-display-order-{item.id}">Display Order</label>
                     <input id="edit-display-order-{item.id}" type="number" class="nb-input" bind:value={form.display_order} />
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 0.5rem; padding-top: 1.25rem;">
+                    <input type="checkbox" id="edit-visible-{item.id}" bind:checked={form.visible} onchange={() => isDirty = true} />
+                    <label class="nb-label" for="edit-visible-{item.id}" style="margin-bottom: 0;">Visible on public page</label>
                   </div>
                 </div>
               </FormSection>

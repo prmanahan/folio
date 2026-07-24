@@ -1,0 +1,42 @@
+spec_type = "code"
+
+[audit_chain.intent]
+ref = "docs/intent/experiences-visible-flag.md"
+version = "a0e8b922c4fe724f33089fc85b38d0cbc0b4d29f"
+locked_at = 2026-07-24T11:13:48Z
+
+[audit_chain.frame]
+ref = "docs/intent/experiences-visible-flag-frame.md"
+version = "2391bf0a5b3afa5b8b3dfc8c36fb70cd68c23686"
+internal_conformance = "pass"
+
+[audit_chain.frame.generated_against]
+intent_version = "a0e8b922c4fe724f33089fc85b38d0cbc0b4d29f"
+
+[audit_chain.spec]
+ref = "docs/specs/2026-07-24-experiences-visible-flag.md"
+version = "453426255905af7dd01f43941b87587c8ca42a0a"
+internal_conformance = "pass"
+
+[audit_chain.spec.generated_against]
+intent_version = "a0e8b922c4fe724f33089fc85b38d0cbc0b4d29f"
+frame_version = "2391bf0a5b3afa5b8b3dfc8c36fb70cd68c23686"
+
+[signals.auditor]
+applicable = true
+reviewer = "canon-conformance-backstop"
+tier = "t1"
+
+[signals.spot_check]
+applicable = true
+depth = "review"
+gate = true
+
+[pre_signal_checks.stuck_detector]
+applicable = true
+
+[pre_signal_checks.chain_freshness]
+applicable = true
+
+[pre_signal_checks.chain_internal_conformance]
+applicable = true
