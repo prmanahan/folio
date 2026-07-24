@@ -187,6 +187,11 @@
             <label class="nb-label" for="field-evidence">Evidence</label>
             <textarea id="field-evidence" class="nb-input" rows="4" bind:value={form.evidence}></textarea>
           </div>
+        </div>
+      </FormSection>
+
+      <FormSection title="Private Notes" tier="private" collapsed>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; margin-top: 0.75rem;">
           <div style="grid-column: 1 / -1;">
             <label class="nb-label" for="field-honest-notes">Honest Notes</label>
             <textarea id="field-honest-notes" class="nb-input" rows="4" bind:value={form.honest_notes}></textarea>
