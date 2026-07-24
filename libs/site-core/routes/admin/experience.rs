@@ -119,6 +119,15 @@ mod tests {
             lessons_learned: "Incremental wins.".to_string(),
             manager_would_say: "Reliable and sharp.".to_string(),
             reports_would_say: "Clear and supportive.".to_string(),
+            // Spec #2715 / R-0004: `visible` becomes a required field on
+            // `ExperienceInput` (no serde default, D-1). Mechanical
+            // red-phase compile-fix (spec Notes, "Ownership split") — this
+            // literal does not compile until the implementer adds the field
+            // to `ExperienceInput` in models/experience.rs; that IS this
+            // dispatch's accepted compile-red state (mirrors #572's
+            // precedent). Once the field lands, this fixture needs no
+            // further edit.
+            visible: true,
         }
     }
 
@@ -132,6 +141,10 @@ mod tests {
 
         assert_eq!(a.company_name, "Acme Corp");
         assert_eq!(b.company_name, "Beta Inc");
+        // Spec #2715 / R-0004: create() persists `visible` — make_input()
+        // sets `visible: true`, so both rows must round-trip as visible.
+        assert!(a.visible, "created row must carry the input's visible=true");
+        assert!(b.visible, "created row must carry the input's visible=true");
 
         // List all — should have 2 (plus any seed data; use distinct IDs)
         let all = experience::list_all(&conn).unwrap();
@@ -156,13 +169,31 @@ mod tests {
             fetched.quantified_impact,
             serde_json::json!({"revenue": "$1M"})
         );
+        assert!(
+            fetched.visible,
+            "get_by_id must return the persisted visible value"
+        );
 
-        // Update
+        // Update — round-trip visible: false to confirm update() writes it
+        // (R-0004/R-0005: the write path must not drop or default the flag).
         let mut updated_input = make_input("Acme Corp Updated", 1);
         updated_input.summary = "Led a team of 10.".to_string();
+        updated_input.visible = false;
         let updated = experience::update(&conn, a.id, &updated_input).unwrap();
         assert_eq!(updated.company_name, "Acme Corp Updated");
         assert_eq!(updated.summary, "Led a team of 10.");
+        assert!(
+            !updated.visible,
+            "update() must persist visible=false, not drop or default it"
+        );
+
+        // Re-fetch to confirm the write actually landed in storage, not just
+        // in the in-memory return value.
+        let refetched = experience::get_by_id(&conn, a.id).unwrap();
+        assert!(
+            !refetched.visible,
+            "visible=false must survive a re-read from storage after update()"
+        );
 
         // Delete
         experience::delete(&conn, b.id).unwrap();
@@ -190,6 +221,13 @@ mod tests {
         assert!(json.get("why_left").is_none());
         assert!(json.get("career_narrative").is_none());
         assert!(json.get("manager_would_say").is_none());
+        // Spec #2715 / D-3: `ExperiencePublic` must never serialize `visible`
+        // — the public query filters on it, so the value would be constant
+        // `true` on every row (zero information, one more frozen surface).
+        assert!(
+            json.get("visible").is_none(),
+            "ExperiencePublic must not carry a `visible` key (D-3)"
+        );
         // Public fields must be present
         assert!(json.get("company_name").is_some());
         assert!(json.get("bullet_points").is_some());

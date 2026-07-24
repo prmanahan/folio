@@ -36,6 +36,8 @@ jobs:
         run: |
           cd frontend
           npm ci
+          npm run check
+          npm run test:unit
           npm run build
 
       - name: Run tests
