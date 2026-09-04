@@ -103,8 +103,8 @@ mod tests {
         let b = gaps::create(&conn, &make_input("Mobile dev", false)).unwrap();
 
         assert_eq!(a.description, "ML/AI");
-        assert_eq!(a.interest_in_learning, true);
-        assert_eq!(b.interest_in_learning, false);
+        assert!(a.interest_in_learning);
+        assert!(!b.interest_in_learning);
 
         let all = gaps::list_all(&conn).unwrap();
         assert!(all.iter().any(|g| g.id == a.id));
@@ -116,7 +116,7 @@ mod tests {
         let updated =
             gaps::update(&conn, a.id, &make_input("ML/AI (getting better)", false)).unwrap();
         assert_eq!(updated.description, "ML/AI (getting better)");
-        assert_eq!(updated.interest_in_learning, false);
+        assert!(!updated.interest_in_learning);
 
         gaps::delete(&conn, b.id).unwrap();
         let result = gaps::get_by_id(&conn, b.id);

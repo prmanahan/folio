@@ -156,7 +156,6 @@ async fn r1b_chat_handler_emits_error_and_done_within_idle_bound_and_discards_pa
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_chunked_body(move |w| {
-            use std::io::Write;
             // message_start + content_block_start + ONE content delta
             // carrying a marker, then STALL with no terminal frame.
             let preamble = concat!(

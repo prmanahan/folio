@@ -114,7 +114,7 @@ mod tests {
 
         assert_eq!(a.title, "Hello World");
         assert_eq!(a.slug, "hello-world");
-        assert_eq!(b.published, true);
+        assert!(b.published);
 
         let all = article::list_all(&conn).unwrap();
         assert!(all.iter().any(|art| art.id == a.id));
@@ -127,7 +127,7 @@ mod tests {
             article::update(&conn, a.id, &make_input("Hello World Updated", true)).unwrap();
         assert_eq!(updated.title, "Hello World Updated");
         assert_eq!(updated.slug, "hello-world-updated");
-        assert_eq!(updated.published, true);
+        assert!(updated.published);
 
         article::delete(&conn, b.id).unwrap();
         let result = article::get_by_id(&conn, b.id);

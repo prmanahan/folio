@@ -115,7 +115,7 @@ mod tests {
 
         assert_eq!(a.title, "My Site");
         assert_eq!(a.slug, "my-site"); // auto-generated
-        assert_eq!(b.published, true);
+        assert!(b.published);
 
         let all = project::list_all(&conn).unwrap();
         assert!(all.iter().any(|p| p.id == a.id));
@@ -127,7 +127,7 @@ mod tests {
         let updated = project::update(&conn, a.id, &make_input("My Site v2", 1, true)).unwrap();
         assert_eq!(updated.title, "My Site v2");
         assert_eq!(updated.slug, "my-site-v2");
-        assert_eq!(updated.published, true);
+        assert!(updated.published);
 
         project::delete(&conn, b.id).unwrap();
         let result = project::get_by_id(&conn, b.id);

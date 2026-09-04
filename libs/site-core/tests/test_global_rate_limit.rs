@@ -294,24 +294,63 @@ mod r4_peer_addr_fallback {
     }
 } // end mod r4_peer_addr_fallback (gate removed; R4 signature live)
 
-/// R4 mirrored-site consistency (source-text meta-test). The spec requires
-/// the SAME fix at `routes/ai.rs::extract_ip`. Today its no-ConnectInfo
-/// arms call `extract_ip(&headers, "unknown", ...)` (routes/ai.rs:87, 180),
-/// hardcoding the "unknown" fallback at the call site. Post-fix the
-/// extractor must take a peer-addr arg and the literal
-/// `extract_ip(&headers, "unknown",` call form must be gone (replaced by a
-/// peer-addr-threading form). Source-as-text: reads routes/ai.rs, does NOT
-/// modify it. CARGO_MANIFEST_DIR resolves to libs/site-core/.
+/// Single-extractor invariant (source-text meta-test, task #1077).
+///
+/// Supersedes the R4 mirrored-site check, which asserted routes/ai.rs no
+/// longer contained the literal `extract_ip(&headers, "unknown",`. That
+/// predicate went permanently unfalsifiable once ai.rs's private copy was
+/// deleted: a re-forked extractor under any other name would satisfy it.
+///
+/// The invariant that actually protects rate limiting is that ONE
+/// extractor decides bucket keys. Two copies drift on header precedence
+/// or the no-header fallback, and the drift changes who gets throttled
+/// with no test failing. So: ai.rs must call the shared helper, and must
+/// not resolve a client IP by any other route.
+///
+/// The name-keyed assertion (`fn extract_ip(`) is kept for its clearer
+/// message on the literal re-fork, but it cannot be the guard on its own
+/// — a copy named `resolve_ip` walks straight past it. The header-keyed
+/// assertion is the one that holds: any extractor, under any name, has to
+/// read a client-IP header, so keying on the INGREDIENT covers the names
+/// nobody thought of.
+///
+/// Source-as-text: reads routes/ai.rs, does NOT modify it.
+/// CARGO_MANIFEST_DIR resolves to libs/site-core/.
 #[test]
-fn r4_mirrored_extract_ip_in_routes_ai_no_longer_hardcodes_unknown_fallback() {
+fn routes_ai_uses_the_shared_ip_extractor_and_reads_no_ip_headers_itself() {
     let ai_src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/routes/ai.rs"))
         .expect("routes/ai.rs must be readable");
 
+    // Comments are stripped for the POSITIVE assertion only: a doc comment
+    // quoting the call form would otherwise hold it green with no live call
+    // site left. The negative assertions below deliberately range over the
+    // whole file, comments included — a client-IP header named anywhere in
+    // ai.rs is worth a loud failure even in prose, because a false positive
+    // costs a reworded comment and a false negative costs a silent re-fork.
+    let code_only = ai_src
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     assert!(
-        !ai_src.contains(r#"extract_ip(&headers, "unknown","#),
-        "R4 (mirrored site): routes/ai.rs MUST NOT hardcode the literal \
-         \"unknown\" fallback at the extract_ip call site — the \
-         no-ConnectInfo handlers must thread a peer addr (or None) through \
-         the same fix applied to extract_ip_for_rate_limit"
+        code_only.contains("extract_ip_for_rate_limit(&headers,"),
+        "routes/ai.rs MUST resolve client IPs through \
+         middleware::global_rate_limit::extract_ip_for_rate_limit"
+    );
+
+    assert!(
+        !ai_src.contains("x-forwarded-for"),
+        "routes/ai.rs MUST NOT read client-IP headers directly — any \
+         re-forked extractor must touch this header regardless of what it \
+         is named"
+    );
+
+    assert!(
+        !ai_src.contains("fn extract_ip("),
+        "routes/ai.rs MUST NOT define its own IP extractor — a second \
+         extractor drifts from the shared one on header precedence or the \
+         no-header fallback, silently changing which clients share a \
+         rate-limit bucket"
     );
 }

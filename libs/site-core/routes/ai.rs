@@ -20,6 +20,7 @@ use crate::ai::stop_reason::{StopReason, StopReasonCapture, from_anthropic_str};
 use crate::ai::types::{ChatRequest, FitRequest, FitVerdict};
 use crate::db::config::{get_max_tokens, get_model_id};
 use crate::error::{AppError, sanitize_for_log};
+use crate::middleware::global_rate_limit::extract_ip_for_rate_limit;
 use crate::state::DbState;
 
 /// Cap for raw model text passed through `tracing::error!` from the fit
@@ -55,55 +56,6 @@ const AI_INTERNAL_OPAQUE_MESSAGE: &str = "AI request failed. Please try again la
 /// surface (fixed opaque client string — never raw upstream text).
 const FIT_PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
 
-/// Extract the client IP from request headers.
-///
-/// Priority: `trusted_header` (configured via `TRUSTED_IP_HEADER` env var, e.g.
-/// `fly-client-ip` on Fly.io) → `x-forwarded-for` (fallback for local dev without
-/// a proxy) → `peer_addr` (ConnectInfo peer addr) → `"unknown"`.
-///
-/// LLM-audit L1 / R4: mirrors the fix in
-/// `middleware::global_rate_limit::extract_ip_for_rate_limit`. The
-/// no-ConnectInfo handlers pass `None` (→ `"unknown"` only when no peer
-/// addr); the `_with_addr` handlers pass `Some(addr)` so distinct
-/// no-proxy clients get distinct rate-limit buckets instead of all
-/// collapsing into one `"unknown"` bucket.
-///
-/// SECURITY NOTE: The trusted header is set by the reverse proxy and cannot be spoofed
-/// by clients in production. `x-forwarded-for` is used only as a local-dev fallback
-/// and is client-controlled; if this service is ever exposed directly (no proxy),
-/// rate limiting by XFF IP is bypassable.
-fn extract_ip(
-    headers: &HeaderMap,
-    trusted_header: Option<&str>,
-    peer_addr: Option<SocketAddr>,
-) -> String {
-    // Prefer the configured trusted header (e.g. fly-client-ip, CF-Connecting-IP, etc.).
-    if let Some(header_name) = trusted_header
-        && let Some(val) = headers.get(header_name)
-        && let Ok(val_str) = val.to_str()
-    {
-        let trimmed = val_str.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-    // Fall back to X-Forwarded-For for local dev (no proxy).
-    if let Some(forwarded) = headers.get("x-forwarded-for")
-        && let Ok(val) = forwarded.to_str()
-        && let Some(first_ip) = val.split(',').next()
-    {
-        let trimmed = first_ip.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-    // R4: prefer the peer addr over the collapsing "unknown" bucket.
-    match peer_addr {
-        Some(addr) => addr.ip().to_string(),
-        None => "unknown".to_string(),
-    }
-}
-
 /// Chat handler that uses ConnectInfo (requires into_make_service_with_connect_info).
 /// Used in production where ConnectInfo is available.
 #[tracing::instrument(skip(state, headers, payload))]
@@ -113,7 +65,7 @@ pub async fn chat_with_addr(
     headers: HeaderMap,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
-    let ip = extract_ip(&headers, state.trusted_ip_header.as_deref(), Some(addr));
+    let ip = extract_ip_for_rate_limit(&headers, state.trusted_ip_header.as_deref(), Some(addr));
     chat_inner(state, &ip, payload).await
 }
 
@@ -124,7 +76,7 @@ pub async fn chat(
     headers: HeaderMap,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
-    let ip = extract_ip(&headers, state.trusted_ip_header.as_deref(), None);
+    let ip = extract_ip_for_rate_limit(&headers, state.trusted_ip_header.as_deref(), None);
     chat_inner(state, &ip, payload).await
 }
 
@@ -198,7 +150,7 @@ pub async fn fit_analysis_with_addr(
 ) -> Result<Json<FitVerdict>, AppError> {
     fit_analysis_inner(
         state.clone(),
-        &extract_ip(&headers, state.trusted_ip_header.as_deref(), Some(addr)),
+        &extract_ip_for_rate_limit(&headers, state.trusted_ip_header.as_deref(), Some(addr)),
         payload,
     )
     .await
@@ -213,7 +165,7 @@ pub async fn fit_analysis(
 ) -> Result<Json<FitVerdict>, AppError> {
     fit_analysis_inner(
         state.clone(),
-        &extract_ip(&headers, state.trusted_ip_header.as_deref(), None),
+        &extract_ip_for_rate_limit(&headers, state.trusted_ip_header.as_deref(), None),
         payload,
     )
     .await
@@ -364,9 +316,19 @@ async fn fit_analysis_inner(
             );
             Err(AppError::ContextExceeded(Some(response_text)))
         }
-        StopReason::ToolUse => Err(AppError::Internal(
-            "unexpected tool_use; folio is no-tools".into(),
-        )),
+        StopReason::ToolUse => {
+            // Same shape as the `Other` arm below (R7): the condition is
+            // named in the server-side log, the client gets the fixed
+            // opaque string. An arm-specific message would be rendered
+            // into the response body verbatim — `AppError::Internal(msg)`
+            // serializes `msg` as `{"error": msg}` — disclosing the
+            // service's tool configuration to an unauthenticated caller.
+            tracing::error!(
+                stop_reason = "tool_use",
+                "fit: unexpected tool_use; folio is no-tools"
+            );
+            Err(AppError::Internal(AI_INTERNAL_OPAQUE_MESSAGE.to_string()))
+        }
         StopReason::Other(value) => {
             // R7: `value` is upstream-derived (Anthropic stop_reason
             // string). The mapping function already emitted a `warn!`
