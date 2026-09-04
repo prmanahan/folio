@@ -13,3 +13,30 @@ ai_docs/
 .claude/
 *.md
 justfile
+
+# Secrets never enter the build context, and never an image layer.
+#
+# `COPY frontend/ ./` in stage 1 is unguarded, so any .env a Vite dev creates
+# would be baked into a builder LAYER -- which outlives the build context and is
+# far harder to notice or undo than a stray file on disk. frontend/.gitignore
+# ignores .env and .env.* ; .dockerignore did not. Nothing leaks today, no .env
+# exists, and this closes the path before one does.
+#
+# `.env.*` matters more than `.env`: Vite's actual convention is .env.local,
+# .env.development and .env.production, so the bare filename is the LEAST likely
+# one to appear.
+#
+# The two re-inclusions mirror frontend/.gitignore:19-20, which deliberately
+# un-ignores .env.example and .env.test because they are meant to be readable.
+# This is not hypothetical: ./.env.example is a tracked file today, so a bare
+# `**/.env.*` would have excluded committed documentation -- a smaller bug in the
+# opposite direction.
+#
+# Order is load-bearing: .dockerignore resolves by LAST matching pattern, so the
+# negations must follow the broad excludes. Verified by seeding all six names on
+# disk and reading them back out of a real image layer -- not by analogy to
+# gitignore, whose `!` semantics differ.
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.test

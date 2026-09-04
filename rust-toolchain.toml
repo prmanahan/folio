@@ -10,8 +10,25 @@
 # `rustup show active-toolchain` before linting so a divergence between this
 # file and what CI actually runs is visible in the log rather than assumed.
 #
-# Bumping: change the version here AND the action ref in both
-# .github/workflows/test.yml and .github/workflows/deploy.yml.
+# Bumping: change the version here AND all three other surfaces --
+# the action ref in .github/workflows/test.yml, the same ref in
+# .github/workflows/deploy.yml, and the `FROM rust:<version>-bookworm`
+# base image in Dockerfile stage 2. The Dockerfile one is the surface
+# that ships: it builds the binary served at peter.manahan.io, and it is
+# the one #3473 missed (fixed in #3479). Nothing enforces this list --
+# it is a convention a reader has to follow, and it has already failed
+# once. A CI check comparing the Dockerfile tag to `channel` below is
+# the mechanism that would; it does not exist yet.
 [toolchain]
 channel = "1.98.0"
-components = ["clippy", "rustfmt"]
+# llvm-tools is added ahead of #2750, which will introduce `cargo llvm-cov`
+# coverage recipes. Nothing in the tree invokes cargo llvm-cov yet -- that
+# is what #2750 is for; this lands the component first so the recipes do
+# not arrive depending on a toolchain that has not got it.
+# Listing it here makes it a property of the pin rather than of one
+# machine: rustup adds a missing component named in this file even when
+# the toolchain is already installed without it, which is exactly CI's
+# case (dtolnay/rust-toolchain installs with `components: clippy,
+# rustfmt` only). Verified 2026-09-04 against a 1.88 toolchain that had
+# no llvm-tools: rustup logged `downloading component llvm-tools`.
+components = ["clippy", "llvm-tools", "rustfmt"]
