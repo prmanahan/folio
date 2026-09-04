@@ -102,8 +102,8 @@ mod tests {
         let b = faq::create(&conn, &make_input("Remote only?", false)).unwrap();
 
         assert_eq!(a.question, "What's your stack?");
-        assert_eq!(a.is_common_question, true);
-        assert_eq!(b.is_common_question, false);
+        assert!(a.is_common_question);
+        assert!(!b.is_common_question);
 
         let all = faq::list_all(&conn).unwrap();
         assert!(all.iter().any(|f| f.id == a.id));

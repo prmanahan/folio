@@ -76,6 +76,26 @@ impl GlobalRateLimitState {
 /// another, many attackers share one quota) is used ONLY when no peer
 /// address is available. Header precedence is unchanged: the peer addr is
 /// a fallback, never an override of a present trusted header / XFF.
+///
+/// SECURITY NOTE: The trusted header is set by the reverse proxy and cannot be spoofed
+/// by clients in production. `x-forwarded-for` is used only as a local-dev fallback
+/// and is client-controlled; if this service is ever exposed directly (no proxy),
+/// rate limiting by XFF IP is bypassable — and, since `middleware::page_hits`
+/// hashes this same value to key unique-hit analytics, a spoofed XFF also
+/// poisons hit counts. The consequence tracks the call surface, not just the
+/// limiter: a caller added here inherits both failure modes.
+///
+/// Bucket keys for the global rate-limit middleware,
+/// `middleware::page_hits` and the AI handlers in `routes::ai` all come
+/// from here. `routes::ai` carried a character-identical private copy
+/// until #1077; a second extractor is how two callers drift into
+/// disagreeing about who gets throttled.
+///
+/// NOT the only IP read in the service. `auth::extract_client_ip` keys
+/// the login brute-force limiter and is still the pre-R4 two-arg shape:
+/// no peer-addr fallback, so it collapses every no-header client into
+/// one `"unknown"` bucket. Converging it changes an authentication path
+/// and was outside #1077's scope — reported, not fixed here.
 pub fn extract_ip_for_rate_limit(
     headers: &HeaderMap,
     trusted_header: Option<&str>,

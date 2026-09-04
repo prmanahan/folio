@@ -39,6 +39,14 @@ jobs:
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2.9.1
 
+      # Cheapest check first, and before the frontend build: a formatting
+      # failure takes ~2s and should not cost an npm install plus a cargo
+      # test run. Mirrors `just check`, which runs fmt ahead of clippy and
+      # test. `--check` reports without rewriting; the toolchain pin above
+      # is what makes the result deterministic across rustfmt releases.
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
       - name: Install Node 22
         uses: actions/setup-node@v6.3.0
         with:
@@ -57,5 +65,7 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      # `--all-targets` puts test targets under the same lint bar as the
+      # library; without it no test target is ever linted.
       - name: Run Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings

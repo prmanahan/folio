@@ -208,7 +208,7 @@ mod tests {
             let mut inner = self
                 .0
                 .lock()
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "log buffer mutex poisoned"))?;
+                .map_err(|_| io::Error::other("log buffer mutex poisoned"))?;
             inner.extend_from_slice(buf);
             Ok(buf.len())
         }

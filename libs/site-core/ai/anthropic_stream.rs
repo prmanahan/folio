@@ -386,7 +386,7 @@ async fn run_chat_stream<HttpClient>(
         // 8259 §7 — AND SSE line-splitting on raw `\n` corrupts the
         // wire-frame structure further. To stay robust to both cases on
         // the R29 / R17 path (refusal etc. — we still need the text for
-        // server-side logging), pre-escape control chars and ` `-out
+        // server-side logging), pre-escape control chars and `NUL`-out
         // unparseable bytes before JSON deserialization.
         let escaped = escape_control_chars_in_json(&message_event.data);
         let parsed = match serde_json::from_str::<ChatStreamFrame>(&escaped) {

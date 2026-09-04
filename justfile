@@ -24,10 +24,25 @@ test:
 e2e:
     npx playwright test
 
-# Format, lint, test — pre-commit check
+# Apply rustfmt across the workspace — the writing half of `check`'s
+# `fmt --check`, so a red gate has a one-command fix.
+fmt:
+    cargo fmt --all
+
+# Format check, lint, test — pre-commit gate.
+#
+# `fmt --check` reports, it does not rewrite: a gate whose first step
+# edits the tree cannot fail, and its churn rides into whatever branch is
+# checked out. Run `just fmt` to apply.
+#
+# `--all-targets` puts tests, benches and examples under the same lint
+# bar as the library; without it no test target is ever linted.
+#
+# Deterministic only because rust-toolchain.toml pins the toolchain — on a
+# floating `stable`, `fmt --check` goes red on every rustfmt release.
 check:
-    cargo fmt
-    cargo clippy -- -D warnings
+    cargo fmt --all -- --check
+    cargo clippy --all-targets -- -D warnings
     cargo test
 
 # Build release binary

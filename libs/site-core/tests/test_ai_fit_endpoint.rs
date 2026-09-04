@@ -16,6 +16,7 @@
 //! - Scenario 14 (stop_sequence) — fit half: 200 + parsed verdict
 //! - Scenario 15 (max_tokens) — fit half: warn + JSON parse
 //! - Scenario 16 (Other / unrecognized) — fit half: 500
+//! - tool_use (task #1077) — fit half: 500 + opaque body
 
 mod common;
 
@@ -438,6 +439,68 @@ async fn fit_handler_returns_500_on_unrecognized_stop_reason_after_warn_log() {
         captured.contains("some_future_anthropic_string"),
         "warn log MUST name the sanitized stop_reason value, captured: {}",
         captured
+    );
+}
+
+// ===========================================================================
+// tool_use — unexpected for a no-tools service (task #1077)
+// ===========================================================================
+
+/// Given the model returns stop_reason = "tool_use"
+/// When the client POSTs /api/fit
+/// Then the response is HTTP 500
+/// And the body carries only the fixed opaque AI message — the arm's
+///     description of the condition stays server-side, as it already does
+///     for the `Other` arm (R7)
+/// And an error log names the condition, which is also what distinguishes
+///     "the tool_use arm ran" from "some other 500 path ran" — both render
+///     the same opaque body
+#[tokio::test]
+async fn fit_handler_returns_500_with_opaque_body_on_tool_use_stop_reason() {
+    let (buf, _guard) = install_log_capture();
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(anthropic_messages_response(
+            valid_fit_verdict_json(),
+            "tool_use",
+        ))
+        .create_async()
+        .await;
+
+    let app = ai_test_app_with_mock(&server.url());
+    let response = app
+        .post("/api/fit")
+        .json(&serde_json::json!({ "job_description": "Hi" }))
+        .await;
+
+    assert_eq!(
+        response.status_code(),
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "tool_use stop_reason MUST map to HTTP 500"
+    );
+
+    let body: Value = response.json();
+    assert_eq!(
+        body["error"].as_str(),
+        Some("AI request failed. Please try again later."),
+        "tool_use MUST return the fixed opaque AI message, matching the \
+         `Other` arm — no internal detail in the response body"
+    );
+    assert!(
+        body.get("message").is_none(),
+        "tool_use uses the flat AppError::Internal shape; a second field \
+         would be a new client contract, body={body}"
+    );
+
+    let captured = buf.captured();
+    assert!(
+        captured.contains("unexpected tool_use"),
+        "the tool_use arm MUST leave a server-side trail naming the \
+         condition, captured: {captured}"
     );
 }
 
