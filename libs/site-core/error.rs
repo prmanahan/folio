@@ -7,8 +7,9 @@
 //! untrusted model output to the client).
 //!
 //! Heterogeneous response shape, by design:
-//! - `Refusal`         → 422, `{"error":"refusal","message":"<canned>"}`
-//! - `ContextExceeded` → 413, `{"error":"context_exceeded","message":"<canned>"}`
+//! - `Refusal`           → 422, `{"error":"refusal","message":"<canned>"}`
+//! - `ContextExceeded`   → 413, `{"error":"context_exceeded","message":"<canned>"}`
+//! - `ProfileValidation` → 400, `{"error":"<validator text>","field":"<name>","limit":<n|null>}`
 //! - all other variants → keep the existing flat `{"error":"<msg>"}` shape.
 //!
 //! The R17 sanitizer (`sanitize_for_log`) is exported for reuse by
@@ -17,6 +18,7 @@
 //! / context-exceeded text at 500 chars before emitting the `error!` log
 //! record).
 
+use crate::models::profile::ProfileValidationError;
 use axum::{
     Json,
     http::StatusCode,
@@ -46,6 +48,27 @@ pub enum AppError {
     /// Anthropic returned `stop_reason = "model_context_window_exceeded"`.
     /// Same payload contract as `Refusal` — raw text is server-side-only.
     ContextExceeded(Option<String>),
+    /// A profile request body failed field validation before any DB access.
+    /// Distinct from `BadRequest` because the client needs the offending
+    /// `field` and its `limit`, which the flat `{"error": msg}` shape cannot
+    /// carry.
+    ///
+    /// Named for the model it serves, not for validation in general: a second
+    /// validator gets its OWN variant. The alternative — widening
+    /// [`ProfileValidationError`]'s `field` / `reason` to `String` so this
+    /// variant can be reused — is a one-line edit to a struct whose fields are
+    /// already `pub`, and it would quietly turn this into the
+    /// arbitrary-string channel R29 exists to prevent.
+    ///
+    /// Carries the validator's own typed error rather than a `String`. Every
+    /// field of [`ProfileValidationError`] is `&'static str` or
+    /// `Option<usize>`, which makes an arbitrary-string body awkward rather
+    /// than impossible — `Box::leak` yields a `&'static str` from any
+    /// `String`. The property that actually holds: both construction sites in
+    /// `models::profile` pass literals, and `Display` renders only those
+    /// fields, so no request-supplied bytes reach this body (cf. R29, which
+    /// keeps raw model text out of `Refusal` bodies by hand).
+    ProfileValidation(ProfileValidationError),
 }
 
 impl IntoResponse for AppError {
@@ -84,6 +107,18 @@ impl IntoResponse for AppError {
                 })),
             )
                 .into_response(),
+            // `limit` serializes to `null` when the rule carries no numeric
+            // cap (e.g. "must not be empty"). Present-and-null, never absent —
+            // clients key off the field's presence.
+            AppError::ProfileValidation(verr) => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": verr.to_string(),
+                    "field": verr.field,
+                    "limit": verr.limit,
+                })),
+            )
+                .into_response(),
         }
     }
 }
@@ -91,6 +126,19 @@ impl IntoResponse for AppError {
 impl From<rusqlite::Error> for AppError {
     fn from(err: rusqlite::Error) -> Self {
         AppError::Internal(err.to_string())
+    }
+}
+
+/// Lets a handler write `input.validate()?` and get the 400 shape for free.
+///
+/// Note the reach: any `Result<_, ProfileValidationError>` in a handler
+/// becomes a client-visible 400 through a bare `?`, with no decision at the
+/// call site. That is the intent — the validator's text is built from
+/// literals — but it means changing what `ProfileValidationError` carries
+/// changes what the API returns, without any handler being touched.
+impl From<ProfileValidationError> for AppError {
+    fn from(err: ProfileValidationError) -> Self {
+        AppError::ProfileValidation(err)
     }
 }
 

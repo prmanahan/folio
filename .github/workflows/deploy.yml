@@ -30,10 +30,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
+      # Pinned to the same version as rust-toolchain.toml. The @rev selects the
+      # toolchain for this action, so the ref IS the version. Bumping means
+      # editing this ref and rust-toolchain.toml together.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
-          components: clippy
+          components: clippy, rustfmt
+
+      # Acceptance evidence for the pin, not decoration. rust-toolchain.toml
+      # outranks the `rustup default` this action sets, so the line that
+      # matters is `active-toolchain`: it names the version AND why it is
+      # active ("overridden by .../rust-toolchain.toml" vs "it's the default
+      # toolchain"). Without it, a future drift is invisible in the log again.
+      - name: Report active Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+          cargo clippy --version
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2.9.1

@@ -42,8 +42,7 @@ use std::time::{Duration, Instant};
 
 // Path to the binary crate's main.rs, relative to libs/site-core/.
 const MAIN_RS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../cmd/server/main.rs");
-const ANTHROPIC_STREAM_RS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/ai/anthropic_stream.rs");
+const ANTHROPIC_STREAM_RS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ai/anthropic_stream.rs");
 const ROUTES_AI_RS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/routes/ai.rs");
 
 // ===========================================================================
@@ -127,8 +126,7 @@ async fn r1a_fit_handler_returns_degraded_error_within_wall_clock_bound_when_ups
     // It must be an error status (degraded surface), not a 200, and the
     // body must not carry raw upstream text.
     assert!(
-        response.status_code().is_server_error()
-            || response.status_code().is_client_error(),
+        response.status_code().is_server_error() || response.status_code().is_client_error(),
         "R1(a): a stalled upstream MUST yield an error status (degraded \
          surface), got {}",
         response.status_code()
@@ -202,9 +200,7 @@ async fn r1b_chat_handler_emits_error_and_done_within_idle_bound_and_discards_pa
     let body = response.as_bytes();
     let frames = parse_sse_frames(body);
 
-    let has_error_event = frames
-        .iter()
-        .any(|(ev, _)| ev.as_deref() == Some("error"));
+    let has_error_event = frames.iter().any(|(ev, _)| ev.as_deref() == Some("error"));
     let ends_with_done = frames
         .last()
         .map(|(ev, data)| ev.is_none() && data == "[DONE]")
@@ -242,9 +238,8 @@ async fn r1b_chat_handler_emits_error_and_done_within_idle_bound_and_discards_pa
 /// Red-phase: main.rs has no TimeoutLayer today → assertion fails.
 #[test]
 fn r1c_timeout_layer_is_wired_into_the_router_construction() {
-    let main_src = std::fs::read_to_string(MAIN_RS).unwrap_or_else(|e| {
-        panic!("cmd/server/main.rs must be readable at {MAIN_RS}: {e}")
-    });
+    let main_src = std::fs::read_to_string(MAIN_RS)
+        .unwrap_or_else(|e| panic!("cmd/server/main.rs must be readable at {MAIN_RS}: {e}"));
 
     assert!(
         main_src.contains("TimeoutLayer"),
@@ -389,9 +384,8 @@ async fn r5_normal_sized_body_is_unaffected_by_the_limit() {
 /// modifying. Red-phase: no DefaultBodyLimit in main.rs → fails.
 #[test]
 fn r5_default_body_limit_is_wired_with_an_explicit_byte_cap() {
-    let main_src = std::fs::read_to_string(MAIN_RS).unwrap_or_else(|e| {
-        panic!("cmd/server/main.rs must be readable at {MAIN_RS}: {e}")
-    });
+    let main_src = std::fs::read_to_string(MAIN_RS)
+        .unwrap_or_else(|e| panic!("cmd/server/main.rs must be readable at {MAIN_RS}: {e}"));
     assert!(
         main_src.contains("DefaultBodyLimit"),
         "R5: cmd/server/main.rs MUST configure axum's DefaultBodyLimit \
@@ -434,13 +428,11 @@ fn r5_default_body_limit_is_wired_with_an_explicit_byte_cap() {
 /// Reading ≠ modifying — within scope.
 #[test]
 fn r6_cors_origin_unset_fails_loud_or_warns_no_silent_localhost_default() {
-    let main_src = std::fs::read_to_string(MAIN_RS).unwrap_or_else(|e| {
-        panic!("cmd/server/main.rs must be readable at {MAIN_RS}: {e}")
-    });
+    let main_src = std::fs::read_to_string(MAIN_RS)
+        .unwrap_or_else(|e| panic!("cmd/server/main.rs must be readable at {MAIN_RS}: {e}"));
 
     // The exact silent-fallback expression present at the parent commit.
-    let silent_fallback =
-        r#"unwrap_or_else(|_| "http://localhost:3000".to_string())"#;
+    let silent_fallback = r#"unwrap_or_else(|_| "http://localhost:3000".to_string())"#;
     assert!(
         !main_src.contains(silent_fallback),
         "R6: the unconditional silent CORS_ORIGIN → localhost default \
@@ -450,10 +442,10 @@ fn r6_cors_origin_unset_fails_loud_or_warns_no_silent_localhost_default() {
 
     // Accept EITHER fail-loud OR warn form, both must name CORS_ORIGIN.
     let mentions_cors_origin = main_src.contains("CORS_ORIGIN");
-    let fail_loud = mentions_cors_origin
-        && (main_src.contains("panic!") || main_src.contains(".expect("));
-    let warns = mentions_cors_origin
-        && (main_src.contains("warn!") || main_src.contains("tracing::warn"));
+    let fail_loud =
+        mentions_cors_origin && (main_src.contains("panic!") || main_src.contains(".expect("));
+    let warns =
+        mentions_cors_origin && (main_src.contains("warn!") || main_src.contains("tracing::warn"));
 
     assert!(
         fail_loud || warns,
@@ -544,7 +536,8 @@ async fn r7_fit_prompt_failure_returns_opaque_body_with_detail_in_logs() {
     // Detail must be server-side (captured logs).
     let captured = buf.captured();
     assert!(
-        captured.contains(UPSTREAM_LEAK_MARKER) || captured.contains("ERROR ")
+        captured.contains(UPSTREAM_LEAK_MARKER)
+            || captured.contains("ERROR ")
             || captured.contains("WARN "),
         "R7: the detailed upstream error MUST be logged server-side \
          (error!/warn!) even though the client body is opaque; \
@@ -611,7 +604,8 @@ async fn r7_fit_parse_failure_returns_opaque_body_no_serde_text_leak() {
 
     let captured = buf.captured();
     assert!(
-        captured.contains("ERROR ") || captured.contains("WARN ")
+        captured.contains("ERROR ")
+            || captured.contains("WARN ")
             || captured.contains(PARSE_LEAK_MARKER),
         "R7: the parse-failure detail MUST be logged server-side; \
          captured={captured}"
@@ -631,9 +625,8 @@ async fn r7_fit_parse_failure_returns_opaque_body_no_serde_text_leak() {
 /// present in anthropic_stream.rs today → assertion fails.
 #[test]
 fn r7_third_site_chat_body_serialize_error_is_opaque_to_client() {
-    let stream_src = std::fs::read_to_string(ANTHROPIC_STREAM_RS).unwrap_or_else(|e| {
-        panic!("ai/anthropic_stream.rs must be readable: {e}")
-    });
+    let stream_src = std::fs::read_to_string(ANTHROPIC_STREAM_RS)
+        .unwrap_or_else(|e| panic!("ai/anthropic_stream.rs must be readable: {e}"));
 
     // The leaky form interpolates the serde error into the client-facing
     // AppError::Internal. Post-fix the client string must be fixed/opaque.
@@ -664,8 +657,9 @@ fn r7_routes_ai_no_longer_builds_internal_errors_from_upstream_serde_text() {
          opaque client string (detail → server log)"
     );
     assert!(
-        !ai_src.contains(r#"AppError::Internal(format!("Failed to parse AI response as FitVerdict: {e}"))"#)
-            && !ai_src.contains(r#"format!("Failed to parse AI response as FitVerdict: {e}")"#),
+        !ai_src.contains(
+            r#"AppError::Internal(format!("Failed to parse AI response as FitVerdict: {e}"))"#
+        ) && !ai_src.contains(r#"format!("Failed to parse AI response as FitVerdict: {e}")"#),
         "R7 (routes/ai.rs:338): the `Failed to parse AI response as \
          FitVerdict: {{e}}` AppError::Internal construction MUST be \
          replaced with a fixed opaque client string"

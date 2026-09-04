@@ -204,11 +204,9 @@ fn constructed_prompt_has_no_high_similarity_span_of_dropped_sentinels() {
 /// blocks; this then passes.
 #[test]
 fn context_construction_path_does_not_read_the_three_dropped_field_accessors() {
-    let context_src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/ai/context.rs"
-    ))
-    .expect("ai/context.rs must be readable");
+    let context_src =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ai/context.rs"))
+            .expect("ai/context.rs must be readable");
 
     // Strip the `#[cfg(test)] mod tests` block: the unit-test seed helpers
     // legitimately reference these field names in SQL string literals and
@@ -261,11 +259,9 @@ fn context_construction_path_does_not_read_the_three_dropped_field_accessors() {
 /// ai/context.rs construction region only, NOT prompt_templates.rs.
 #[test]
 fn context_construction_path_does_not_emit_the_three_dropped_field_labels() {
-    let context_src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/ai/context.rs"
-    ))
-    .expect("ai/context.rs must be readable");
+    let context_src =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ai/context.rs"))
+            .expect("ai/context.rs must be readable");
     let construction_region = match context_src.find("#[cfg(test)]") {
         Some(idx) => &context_src[..idx],
         None => context_src.as_str(),

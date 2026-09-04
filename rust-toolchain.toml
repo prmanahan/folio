@@ -1,0 +1,17 @@
+# Pinned toolchain. Exact version, not `stable`: a rustc/clippy bump must be a
+# deliberate commit, not something that happens to the repo overnight. New
+# clippy lints in a bump turn `just check` red on an untouched tree, which is
+# how this file came to exist (task #3473 — `result_large_err` arrived with
+# 1.98.0).
+#
+# rustup applies this file to any cargo/rustc invocation under this directory,
+# outranking `rustup default` (verified 2026-09-04). CI installs the same
+# version via `dtolnay/rust-toolchain@1.98.0`; the workflows echo
+# `rustup show active-toolchain` before linting so a divergence between this
+# file and what CI actually runs is visible in the log rather than assumed.
+#
+# Bumping: change the version here AND the action ref in both
+# .github/workflows/test.yml and .github/workflows/deploy.yml.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]
