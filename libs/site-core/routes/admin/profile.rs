@@ -1,14 +1,7 @@
 use crate::error::AppError;
 use crate::models::profile::{self, ProfileInput};
 use crate::state::DbState;
-use axum::{
-    Json, Router,
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::get,
-};
-use serde_json::json;
+use axum::{Json, Router, extract::State, routing::get};
 
 async fn get_profile(State(state): State<DbState>) -> Result<Json<profile::ProfileFull>, AppError> {
     let conn = state
@@ -23,26 +16,20 @@ async fn get_profile(State(state): State<DbState>) -> Result<Json<profile::Profi
 ///
 /// Validates length limits before touching the DB. On validation failure,
 /// returns a 400 with a structured body containing the offending `field`,
-/// the `limit` (when applicable), and a human-readable `error` message.
+/// the `limit` (when applicable), and a human-readable `error` message —
+/// rendered by `AppError::ProfileValidation`, which the `?` below converts to.
 async fn update_profile(
     State(state): State<DbState>,
     Json(input): Json<ProfileInput>,
-) -> Result<Json<profile::ProfileFull>, Response> {
-    if let Err(verr) = input.validate() {
-        let body = json!({
-            "error": verr.to_string(),
-            "field": verr.field,
-            "limit": verr.limit,
-        });
-        return Err((StatusCode::BAD_REQUEST, Json(body)).into_response());
-    }
+) -> Result<Json<profile::ProfileFull>, AppError> {
+    input.validate()?;
 
     let conn = state
         .db
         .lock()
-        .map_err(|_| AppError::Internal("DB lock poisoned".into()).into_response())?;
+        .map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
     let p = profile::update(&conn, &input)
-        .map_err(|e| AppError::Internal(format!("DB update failed: {e}")).into_response())?;
+        .map_err(|e| AppError::Internal(format!("DB update failed: {e}")))?;
     Ok(Json(p))
 }
 
