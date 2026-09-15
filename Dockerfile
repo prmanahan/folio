@@ -39,6 +39,13 @@ RUN npm run build
 FROM rust:1.98.0-bookworm AS rust-builder
 WORKDIR /app
 
+# aws-lc-sys (rustls's crypto backend) probes the build host for a system
+# AWS-LC via OPENSSL_DIR/pkg-config before falling back to its vendored
+# source build -- so which crypto library ships would otherwise depend on
+# what happens to be installed in this image, not on what was tested.
+# USE_SYSTEM=0 forces the vendored build unconditionally.
+ENV AWS_LC_SYS_USE_SYSTEM=0
+
 # Cache dependencies: copy manifests, create dummy sources, build deps
 #
 # `--locked` on both release builds: the workspace declares caret ranges
