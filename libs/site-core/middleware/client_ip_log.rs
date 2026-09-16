@@ -77,6 +77,109 @@ pub fn log_client_ip_fields(headers: &HeaderMap, peer_addr: Option<SocketAddr>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    // Capture harness mirrors `db::config`'s `LogBuf`/`capture_logs`: kept
+    // as its own small copy in the UNIT test binary rather than shared or
+    // moved to an integration test, because `db::config`'s own comment
+    // records a measured ~40% flake capturing tracing output inside the
+    // larger, higher-parallelism integration-test binary versus zero
+    // flake here.
+    #[derive(Clone, Default)]
+    struct LogBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl LogBuf {
+        fn captured(&self) -> String {
+            let bytes = self.0.lock().expect("log buffer mutex poisoned").clone();
+            String::from_utf8(bytes).expect("log output must be valid UTF-8")
+        }
+    }
+
+    impl io::Write for LogBuf {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut inner = self
+                .0
+                .lock()
+                .map_err(|_| io::Error::other("log buffer mutex poisoned"))?;
+            inner.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogBuf {
+        type Writer = LogBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn capture_logs(f: impl FnOnce()) -> String {
+        let buf = LogBuf::default();
+        let layer = tracing_subscriber::fmt::Layer::default()
+            .with_writer(buf.clone())
+            .with_ansi(false)
+            .with_target(false)
+            .without_time();
+        let subscriber = tracing_subscriber::Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, f);
+        buf.captured()
+    }
+
+    /// C10 / ruling 3-4: the runbook verifies the sentinel probe by
+    /// `grep`-ing the log line for a field NAME (`fly_client_ip=...`).
+    /// That instruction is only trustworthy if the field names are
+    /// actually what this test locks them to, and if the peer-address
+    /// branch renders correctly rather than always falling through to
+    /// `"invalid"`. Exercises all three fields with header values AND a
+    /// real `SocketAddr` peer, not `None`.
+    #[test]
+    fn log_line_carries_all_three_field_names_with_truncated_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "203.0.113.42".parse().unwrap());
+        headers.insert("cf-connecting-ip", "2001:db8:1234:5678::9".parse().unwrap());
+        let peer: SocketAddr = "198.51.100.7:443".parse().unwrap();
+
+        let captured = capture_logs(|| log_client_ip_fields(&headers, Some(peer)));
+
+        assert!(
+            captured.contains("peer=198.51.100.0/24"),
+            "expected a truncated peer field, captured: {captured}"
+        );
+        assert!(
+            captured.contains("fly_client_ip=203.0.113.0/24"),
+            "expected a truncated fly_client_ip field, captured: {captured}"
+        );
+        assert!(
+            captured.contains("cf_connecting_ip=2001:db8:1234::/48"),
+            "expected a truncated cf_connecting_ip field, captured: {captured}"
+        );
+    }
+
+    /// The no-peer, no-headers case: all three fields render `"invalid"`,
+    /// distinguishable from a value that failed to reach the log line at
+    /// all (which would show no field name).
+    #[test]
+    fn log_line_carries_invalid_for_absent_peer_and_headers() {
+        let headers = HeaderMap::new();
+
+        let captured = capture_logs(|| log_client_ip_fields(&headers, None));
+
+        assert!(captured.contains("peer=invalid"), "captured: {captured}");
+        assert!(
+            captured.contains("fly_client_ip=invalid"),
+            "captured: {captured}"
+        );
+        assert!(
+            captured.contains("cf_connecting_ip=invalid"),
+            "captured: {captured}"
+        );
+    }
 
     #[test]
     fn ipv4_header_truncates_to_24() {

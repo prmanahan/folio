@@ -250,4 +250,16 @@ async fn rejected_requests_never_write_a_page_hit() {
         counts.is_empty(),
         "no page-hit row should exist after only rejected requests, got: {counts:?}"
     );
+
+    // This is a STRUCTURAL guarantee, not an empirically falsifiable one:
+    // origin_lock returns before ever calling `next`, so
+    // `page_hits_middleware` is unreachable on the reject path by
+    // construction, independent of whether page_hits fires on an
+    // authorized request to the same path. It currently does not — "/"
+    // is served through the static-file fallback, which sits OUTSIDE
+    // page_hits_middleware's own layer boundary (the same layering cause
+    // as this task's H1, but pre-existing and out of #3558's scope; see
+    // task #3634).  An authorized-request positive control was tried and
+    // removed here for that reason: it would fail regardless of
+    // origin_lock's correctness, for an unrelated, already-tracked cause.
 }

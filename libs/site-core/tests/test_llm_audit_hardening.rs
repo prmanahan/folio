@@ -16,16 +16,19 @@
 //!    sleep ends and the test asserts on observed wall-clock.
 //!    NO new test dependency — std + the existing mockito seam only.
 //!
-//!  - **R1/R5/R6 wiring lives in `cmd/server/main.rs`** (`run_server()`),
-//!    which is NOT exposed through any site-core public fn and is
-//!    forbid-scoped for the implementer. Where a behavior test cannot
-//!    reach the layer, the GATE is a source-as-text meta-test that reads
-//!    `cmd/server/main.rs` (reading ≠ modifying; in scope) and asserts the
-//!    fix is WIRED, not merely present as an unused constant. The
-//!    implementer may instead extract a `site_core`-level builder; the
-//!    behavior tests here work under either choice. `CARGO_MANIFEST_DIR`
-//!    for this integration test resolves to `libs/site-core/`; the binary
-//!    crate root is one level up at `../cmd/server/main.rs`.
+//!  - **R6 wiring lives in `cmd/server/main.rs`** (`run_server()`), which
+//!    is NOT exposed through any site-core public fn and is forbid-scoped
+//!    for the implementer. Where a behavior test cannot reach the layer,
+//!    the GATE is a source-as-text meta-test that reads `cmd/server/main.rs`
+//!    (reading ≠ modifying; in scope) and asserts the fix is WIRED, not
+//!    merely present as an unused constant. **R1(c) and R5's wiring moved
+//!    to `site_core::app::build_app`** (task #3558's `build_app`
+//!    extraction, done under this same "implementer may instead extract a
+//!    site_core-level builder" allowance) — their meta-tests below read
+//!    `APP_RS`, not `MAIN_RS`. `CARGO_MANIFEST_DIR` for this integration
+//!    test resolves to `libs/site-core/`; the binary crate root is one
+//!    level up at `../cmd/server/main.rs`, and `app.rs` is a sibling of
+//!    this test's own manifest dir.
 //!
 //!  - **R1 acceptance is wall-clock**, not "the timeout constant equals
 //!    N". A test that only reads the configured value passes against a
