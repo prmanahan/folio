@@ -54,6 +54,41 @@ pub fn check_rate_limit(
     Ok(())
 }
 
+/// Fixed key used for the site-wide ceiling row that every visitor shares
+/// on a given endpoint. Never a value a real visitor's `ip` can carry
+/// into an ordinary [`check_rate_limit`] call — but the actual collision
+/// guarantee is the `:global_ceiling`-suffixed endpoint below, which
+/// applies even if some caller's `ip` happened to equal this literal
+/// string.
+pub const GLOBAL_CEILING_BUCKET: &str = "global";
+
+/// Check a per-visitor limit and a site-wide hourly ceiling for the same
+/// endpoint, using the same `(ip, endpoint)`-keyed table and the same
+/// enforcement function for both.
+///
+/// The ceiling check reuses [`check_rate_limit`] with `ip` fixed to
+/// [`GLOBAL_CEILING_BUCKET`] and `endpoint` suffixed `:global_ceiling` —
+/// every caller of this function for the same `endpoint` therefore
+/// increments the SAME shared row, regardless of the real visitor `ip`
+/// passed in. The suffix is what makes the composite key collision-proof:
+/// even a call whose `ip` happens to equal `GLOBAL_CEILING_BUCKET` still
+/// lands on a per-visitor row keyed by the unsuffixed `endpoint`, never
+/// on the ceiling row itself.
+///
+/// The per-visitor check runs first — a visitor already over their own
+/// limit is rejected without ever touching the shared ceiling row.
+pub fn check_rate_limit_with_ceiling(
+    conn: &Connection,
+    ip: &str,
+    endpoint: &str,
+    max_requests: i64,
+    ceiling: i64,
+) -> Result<(), AppError> {
+    check_rate_limit(conn, ip, endpoint, max_requests)?;
+    let global_endpoint = format!("{endpoint}:global_ceiling");
+    check_rate_limit(conn, GLOBAL_CEILING_BUCKET, &global_endpoint, ceiling)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +220,84 @@ mod tests {
 
         let result2 = check_rate_limit(&conn, "5.5.5.5", "/api/chat", 1);
         assert!(result2.is_err(), "Second request with limit=1 should fail");
+    }
+
+    // -----------------------------------------------------------------------
+    // check_rate_limit_with_ceiling (task #3558, ruling 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn per_visitor_limit_still_fires_below_the_global_ceiling() {
+        let conn = setup_db();
+        // Per-visitor limit (1) is tighter than the global ceiling (100):
+        // the second call from the SAME visitor must fail on the
+        // per-visitor check, never fall through to the global one.
+        check_rate_limit_with_ceiling(&conn, "9.9.9.9", "chat", 1, 100)
+            .expect("first call within the per-visitor limit must succeed");
+        let result = check_rate_limit_with_ceiling(&conn, "9.9.9.9", "chat", 1, 100);
+        assert!(
+            result.is_err(),
+            "second call must fail the per-visitor limit"
+        );
+    }
+
+    #[test]
+    fn global_ceiling_is_shared_across_distinct_visitors() {
+        let conn = setup_db();
+        let ceiling = 2;
+        // Two different visitors, each comfortably under their own
+        // per-visitor limit, together exhaust the shared ceiling.
+        check_rate_limit_with_ceiling(&conn, "1.1.1.1", "chat", 100, ceiling)
+            .expect("visitor 1 call 1 of the shared ceiling must succeed");
+        check_rate_limit_with_ceiling(&conn, "2.2.2.2", "chat", 100, ceiling)
+            .expect("visitor 2 call 2 of the shared ceiling must succeed");
+
+        let result = check_rate_limit_with_ceiling(&conn, "3.3.3.3", "chat", 100, ceiling);
+        assert!(
+            result.is_err(),
+            "a third, brand-new visitor must hit the exhausted global ceiling"
+        );
+    }
+
+    #[test]
+    fn chat_and_fit_ceilings_are_independent() {
+        let conn = setup_db();
+        let ceiling = 1;
+        check_rate_limit_with_ceiling(&conn, "1.1.1.1", "chat", 100, ceiling)
+            .expect("chat ceiling call 1 must succeed");
+        // "fit" is a different endpoint, so it has its own ceiling row.
+        check_rate_limit_with_ceiling(&conn, "1.1.1.1", "fit", 100, ceiling)
+            .expect("fit ceiling must be independent of chat's");
+    }
+
+    /// An `ip` value equal to [`GLOBAL_CEILING_BUCKET`] on an ORDINARY
+    /// (non-ceiling) call must not touch the shared ceiling row — the
+    /// `:global_ceiling` endpoint suffix is what keeps the two rows
+    /// distinct even when `ip` collides.
+    #[test]
+    fn ip_matching_the_ceiling_bucket_does_not_pollute_the_ceiling_counter() {
+        let conn = setup_db();
+
+        // Five ordinary calls using the ceiling bucket's own literal as
+        // the `ip` value.
+        for i in 0..5 {
+            check_rate_limit(&conn, GLOBAL_CEILING_BUCKET, "chat", 100)
+                .unwrap_or_else(|e| panic!("ordinary call {i} must succeed, got {e:?}"));
+        }
+
+        // The real global ceiling for "chat" must still read as fresh:
+        // exhausting a low ceiling from real, distinct visitors must
+        // take exactly `ceiling` calls, not `ceiling - 5`.
+        let ceiling = 3;
+        for i in 0..ceiling {
+            let visitor = format!("203.0.113.{i}");
+            check_rate_limit_with_ceiling(&conn, &visitor, "chat", 100, ceiling)
+                .unwrap_or_else(|e| panic!("call {i} within the ceiling must succeed, got {e:?}"));
+        }
+        let result = check_rate_limit_with_ceiling(&conn, "203.0.113.99", "chat", 100, ceiling);
+        assert!(
+            result.is_err(),
+            "the global ceiling must now be exhausted for a brand-new visitor"
+        );
     }
 }

@@ -15,10 +15,12 @@ use tracing;
 
 use crate::ai::anthropic_stream::stream_chat;
 use crate::ai::context::{build_fit_prompt, build_system_prompt};
-use crate::ai::rate_limit::check_rate_limit;
+use crate::ai::rate_limit::check_rate_limit_with_ceiling;
 use crate::ai::stop_reason::{StopReason, StopReasonCapture, from_anthropic_str};
 use crate::ai::types::{ChatRequest, FitRequest, FitVerdict};
-use crate::db::config::{get_max_tokens, get_model_id};
+use crate::db::config::{
+    get_chat_hourly_ceiling, get_fit_hourly_ceiling, get_max_tokens, get_model_id,
+};
 use crate::error::{AppError, sanitize_for_log};
 use crate::middleware::global_rate_limit::extract_ip_for_rate_limit;
 use crate::state::DbState;
@@ -117,7 +119,8 @@ async fn chat_inner(
             .db
             .lock()
             .map_err(|e| AppError::Internal(e.to_string()))?;
-        check_rate_limit(&conn, ip, "chat", 10)?;
+        let chat_ceiling = get_chat_hourly_ceiling(&conn);
+        check_rate_limit_with_ceiling(&conn, ip, "chat", 10, chat_ceiling)?;
         // R27: AI-disabled guard. Fires AFTER rate-limit, BEFORE the
         // config accessors — `?` returns the existing flat
         // `{"error":"AI features not configured"}` body unchanged.
@@ -222,7 +225,8 @@ async fn fit_analysis_inner(
             .db
             .lock()
             .map_err(|e| AppError::Internal(e.to_string()))?;
-        check_rate_limit(&conn, ip, "fit", 5)?;
+        let fit_ceiling = get_fit_hourly_ceiling(&conn);
+        check_rate_limit_with_ceiling(&conn, ip, "fit", 5, fit_ceiling)?;
         let client = state
             .rig_client
             .as_ref()

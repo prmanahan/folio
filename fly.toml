@@ -18,7 +18,7 @@ primary_region = "yyz"
   PORT = "8080"
   DATABASE_URL = "/app/data/site.db"
   CORS_ORIGIN = "https://peter.manahan.io"
-  TRUSTED_IP_HEADER = "fly-client-ip"
+  TRUSTED_IP_HEADER = "cf-connecting-ip"
 
 [[http_service.checks]]
   grace_period = "15s"

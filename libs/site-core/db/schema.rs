@@ -33,6 +33,11 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         "experience_visibility",
         include_str!("../../../migrations/006_experience_visibility.sql"),
     ),
+    (
+        7,
+        "ai_hourly_ceilings",
+        include_str!("../../../migrations/007_ai_hourly_ceilings.sql"),
+    ),
 ];
 
 /// Ensure the migrations tracking table exists.
