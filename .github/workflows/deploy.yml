@@ -96,3 +96,26 @@ jobs:
 
       - name: Post-deploy health check
         run: curl --retry 5 --retry-delay 5 --fail https://peter.manahan.io/api/health
+
+      # Task #3558: the public hostname (through Cloudflare) must keep
+      # serving normally, while the raw Fly origin — page and static
+      # asset alike — must reject direct traffic. A regression here means
+      # the origin lock stopped covering the path it was added to cover.
+      - name: Post-deploy origin-closure check
+        run: |
+          set -euo pipefail
+
+          check_status() {
+            local description="$1" url="$2" expected="$3"
+            local actual
+            actual=$(curl -s -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 5 "$url")
+            if [ "$actual" != "$expected" ]; then
+              echo "FAILED: $description — expected $expected from $url, got $actual"
+              exit 1
+            fi
+            echo "OK: $description ($actual)"
+          }
+
+          check_status "public site root via Cloudflare" "https://peter.manahan.io/" 200
+          check_status "raw Fly origin root" "https://folio-prmanahan.fly.dev/" 404
+          check_status "raw Fly origin static asset" "https://folio-prmanahan.fly.dev/favicon.png" 404

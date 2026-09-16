@@ -1,0 +1,1 @@
+origin-lock test fixture static asset

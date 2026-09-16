@@ -10,4 +10,5 @@ services:
       - DATABASE_URL=/app/data/site.db
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - EDGE_AUTH_TOKEN=${EDGE_AUTH_TOKEN}
     restart: unless-stopped

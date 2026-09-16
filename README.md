@@ -30,6 +30,7 @@ Edit `.env`:
 - `ADMIN_PASSWORD` — **required**, no default. The app will panic at startup without it.
 - `ANTHROPIC_API_KEY` — optional. Leave blank to disable AI chat and job-fit analysis features.
 - `CORS_ORIGIN` — defaults to `http://localhost:3000`. No change needed for local dev.
+- `EDGE_AUTH_TOKEN` — **required**, no default. Shared secret the reverse proxy injects into every request; the app rejects any request without it. See the placeholder and format note in `.env.example`.
 
 ## Running Locally
 
@@ -101,3 +102,4 @@ e2e/           Playwright end-to-end tests
 | `ADMIN_PASSWORD` | **Yes** | — | Password for the admin dashboard |
 | `CORS_ORIGIN` | No | `http://localhost:3000` | Allowed CORS origin |
 | `ANTHROPIC_API_KEY` | No | — | Anthropic API key for AI features |
+| `EDGE_AUTH_TOKEN` | **Yes** | — | Shared secret the reverse proxy injects on every request; rejected without it |
