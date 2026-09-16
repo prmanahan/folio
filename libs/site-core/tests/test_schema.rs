@@ -142,12 +142,19 @@ fn migration_005_creates_site_config_table_with_required_columns_and_constraints
     );
 }
 
-/// Test: migration 005 seeds exactly two rows with the expected values.
+/// Test: migration 005 seeds exactly its two rows with the expected values.
 ///
 /// Given: a fresh in-memory database
 /// When:  the migration runner runs
-/// Then:  `SELECT key, value FROM site_config ORDER BY key` returns exactly
+/// Then:  `SELECT key, value FROM site_config WHERE key IN
+///        ('ai.max_tokens', 'ai.model_id') ORDER BY key` returns exactly
 ///        two rows: `(ai.max_tokens, 5530)` and `(ai.model_id, claude-sonnet-4-6)`.
+///
+/// Scoped to migration 005's own keys rather than the whole table's row
+/// count (task #3558 added migration 007, which seeds two more
+/// `site_config` rows on the same fresh DB — a whole-table count would
+/// wrongly couple this test to every migration that ever seeds the
+/// table, not just the one it's about).
 ///
 /// Red-phase failure: the `site_config` table does not exist — SQL will error
 /// with "no such table: site_config".
@@ -156,9 +163,12 @@ fn migration_005_seeds_two_rows_on_fresh_db() {
     // Given: a fresh database with all migrations applied.
     let conn = common::test_db();
 
-    // When: we query all rows from site_config ordered by key.
+    // When: we query migration 005's own keys from site_config.
     let mut stmt = conn
-        .prepare("SELECT key, value FROM site_config ORDER BY key")
+        .prepare(
+            "SELECT key, value FROM site_config \
+             WHERE key IN ('ai.max_tokens', 'ai.model_id') ORDER BY key",
+        )
         .expect("SELECT from site_config must not fail — table must exist after migration 005");
 
     let rows: Vec<(String, String)> = stmt
@@ -167,11 +177,11 @@ fn migration_005_seeds_two_rows_on_fresh_db() {
         .filter_map(|r| r.ok())
         .collect();
 
-    // Then: exactly two seed rows must be present.
+    // Then: exactly migration 005's two seed rows must be present.
     assert_eq!(
         rows.len(),
         2,
-        "site_config must contain exactly 2 seed rows after migration 005; got: {:?}",
+        "site_config must contain exactly migration 005's 2 seed rows; got: {:?}",
         rows
     );
 
@@ -190,6 +200,35 @@ fn migration_005_seeds_two_rows_on_fresh_db() {
     assert_eq!(
         rows[1].1, "claude-sonnet-4-6",
         "ai.model_id seed value must be 'claude-sonnet-4-6'"
+    );
+}
+
+/// Test: migration 007 seeds exactly its two rows with the expected
+/// values (task #3558, ruling 2 — chat/fit hourly ceilings).
+#[test]
+fn migration_007_seeds_two_ceiling_rows_on_fresh_db() {
+    let conn = common::test_db();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT key, value FROM site_config \
+             WHERE key IN ('ai.chat_hourly_ceiling', 'ai.fit_hourly_ceiling') ORDER BY key",
+        )
+        .expect("SELECT from site_config must not fail — table must exist after migration 007");
+
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query_map must succeed")
+        .filter_map(|r| r.ok())
+        .collect();
+
+    assert_eq!(
+        rows,
+        vec![
+            ("ai.chat_hourly_ceiling".to_string(), "100".to_string()),
+            ("ai.fit_hourly_ceiling".to_string(), "50".to_string()),
+        ],
+        "migration 007 must seed exactly these two placeholder ceiling rows"
     );
 }
 
@@ -481,6 +520,34 @@ fn migrations_const_array_registers_006_experience_visibility() {
     assert_eq!(
         name, "experience_visibility",
         "migration name must be 'experience_visibility' (matches the \
+         MIGRATIONS entry name field)"
+    );
+}
+
+/// Test: migration 007 (task #3558, ai_hourly_ceilings) is registered in
+/// the MIGRATIONS const array. Same dedicated-registration-test pattern
+/// as `migrations_const_array_registers_006_experience_visibility` above.
+#[test]
+fn migrations_const_array_registers_007_ai_hourly_ceilings() {
+    let conn = common::test_db();
+
+    let result: rusqlite::Result<(i32, String)> = conn.query_row(
+        "SELECT version, name FROM _migrations WHERE version = 7",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    );
+
+    let (version, name) = result.expect(
+        "migration version 7 must appear in _migrations after running the \
+         migration runner — add an entry for (7, \"ai_hourly_ceilings\", \
+         include_str!(...)) to the MIGRATIONS const array in \
+         libs/site-core/db/schema.rs",
+    );
+
+    assert_eq!(version, 7, "migration version must be 7");
+    assert_eq!(
+        name, "ai_hourly_ceilings",
+        "migration name must be 'ai_hourly_ceilings' (matches the \
          MIGRATIONS entry name field)"
     );
 }

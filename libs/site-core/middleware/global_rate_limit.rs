@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -8,7 +8,27 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use crate::auth::{extract_token, validate_session};
+use crate::net::truncate_to_prefix;
 use crate::state::DbState;
+
+/// IPv6 addresses are normalised to this prefix before use as a
+/// rate-limit bucket key. A typical IPv6 allocation is a /64 or larger,
+/// so this keys the allocation rather than the individual host address.
+const RATE_LIMIT_IPV6_KEY_PREFIX: u32 = 64;
+
+/// Parse `candidate` as an IP address and, if it's IPv6, normalise it to
+/// [`RATE_LIMIT_IPV6_KEY_PREFIX`]. IPv4 addresses and anything that
+/// doesn't parse as an IP (e.g. the literal `"unknown"`, or a malformed
+/// header value) pass through unchanged — this only narrows an
+/// over-wide IPv6 key, it never invents or rejects one.
+fn normalize_rate_limit_key(candidate: String) -> String {
+    match candidate.parse::<IpAddr>() {
+        Ok(addr @ IpAddr::V6(_)) => {
+            truncate_to_prefix(addr, RATE_LIMIT_IPV6_KEY_PREFIX).to_string()
+        }
+        _ => candidate,
+    }
+}
 
 /// Per-IP sliding window entry: timestamps of recent requests within the window.
 #[derive(Default)]
@@ -96,35 +116,55 @@ impl GlobalRateLimitState {
 /// no peer-addr fallback, so it collapses every no-header client into
 /// one `"unknown"` bucket. Converging it changes an authentication path
 /// and was outside #1077's scope — reported, not fixed here.
+///
+/// Task #3558: when a trusted header IS configured but absent from this
+/// request, the fallback goes straight to the peer address — never
+/// `x-forwarded-for`. `x-forwarded-for` stays a fallback only for the
+/// no-trusted-header case (local dev without a reverse proxy). Every
+/// resolved candidate is normalized via
+/// `normalize_rate_limit_key` (IPv6 → /64) before it's returned, so this
+/// one function is the single place that decision has to be made for
+/// every caller (the global limiter, `page_hits`, and the AI routes).
 pub fn extract_ip_for_rate_limit(
     headers: &HeaderMap,
     trusted_header: Option<&str>,
     peer_addr: Option<SocketAddr>,
 ) -> String {
-    if let Some(header_name) = trusted_header
-        && let Some(val) = headers.get(header_name)
-        && let Ok(val_str) = val.to_str()
-    {
-        let trimmed = val_str.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
+    if let Some(header_name) = trusted_header {
+        if let Some(val) = headers.get(header_name)
+            && let Ok(val_str) = val.to_str()
+        {
+            let trimmed = val_str.trim();
+            if !trimmed.is_empty() {
+                return normalize_rate_limit_key(trimmed.to_string());
+            }
         }
+        // Trusted header configured but missing/empty on this request:
+        // go straight to the peer addr, skipping x-forwarded-for.
+        return normalize_rate_limit_key(match peer_addr {
+            Some(addr) => addr.ip().to_string(),
+            None => "unknown".to_string(),
+        });
     }
+
+    // No trusted header configured at all (e.g. local dev without a
+    // reverse proxy) — x-forwarded-for is the historical dev-ergonomics
+    // fallback.
     if let Some(forwarded) = headers.get("x-forwarded-for")
         && let Ok(val) = forwarded.to_str()
         && let Some(first_ip) = val.split(',').next()
     {
         let trimmed = first_ip.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_string();
+            return normalize_rate_limit_key(trimmed.to_string());
         }
     }
     // R4: prefer the ConnectInfo peer addr over the collapsing "unknown"
     // bucket; "unknown" only when no peer addr is available.
-    match peer_addr {
+    normalize_rate_limit_key(match peer_addr {
         Some(addr) => addr.ip().to_string(),
         None => "unknown".to_string(),
-    }
+    })
 }
 
 /// Axum middleware: 60 requests per IP per minute, globally.
@@ -273,12 +313,23 @@ mod tests {
             "3.3.3.3"
         );
 
-        // Trusted header configured but absent — falls back to XFF
+        // Task #3558: trusted header configured but absent on this
+        // request — falls back to the peer addr, never x-forwarded-for.
+        // x-forwarded-for remains a fallback only when no trusted header
+        // is configured at all (local dev without a reverse proxy).
         let mut xff_only = HeaderMap::new();
         xff_only.insert("x-forwarded-for", "4.4.4.4".parse().unwrap());
         assert_eq!(
+            extract_ip_for_rate_limit(&xff_only, Some("fly-client-ip"), Some(peer)),
+            "9.9.9.9",
+            "a configured-but-absent trusted header must fall to the peer \
+             addr, not the client-controlled x-forwarded-for"
+        );
+        // ...and with no peer addr available either, "unknown" — still
+        // never XFF.
+        assert_eq!(
             extract_ip_for_rate_limit(&xff_only, Some("fly-client-ip"), None),
-            "4.4.4.4"
+            "unknown"
         );
 
         // Neither header, but a peer addr → R4: use the peer addr, NOT the
@@ -291,5 +342,55 @@ mod tests {
 
         // Neither header AND no peer addr — only then fall back to "unknown".
         assert_eq!(extract_ip_for_rate_limit(&empty, None, None), "unknown");
+    }
+
+    /// Task #3558 (H2): an IPv6 trusted-header value is normalized to its
+    /// /64 — two addresses in the same /64 must share one bucket key.
+    #[test]
+    fn ipv6_trusted_header_keys_are_normalized_to_64() {
+        let mut headers_a = HeaderMap::new();
+        headers_a.insert(
+            "cf-connecting-ip",
+            "2001:db8:1234:5678:aaaa:bbbb:cccc:0001".parse().unwrap(),
+        );
+        let mut headers_b = HeaderMap::new();
+        headers_b.insert(
+            "cf-connecting-ip",
+            "2001:db8:1234:5678:ffff:ffff:ffff:ffff".parse().unwrap(),
+        );
+
+        let key_a = extract_ip_for_rate_limit(&headers_a, Some("cf-connecting-ip"), None);
+        let key_b = extract_ip_for_rate_limit(&headers_b, Some("cf-connecting-ip"), None);
+
+        assert_eq!(
+            key_a, key_b,
+            "two addresses in the same /64 must resolve to the same bucket key"
+        );
+        assert_eq!(key_a, "2001:db8:1234:5678::");
+    }
+
+    /// A different /64 must NOT collapse into the same bucket.
+    #[test]
+    fn ipv6_addresses_in_different_64s_are_independent() {
+        let mut headers_a = HeaderMap::new();
+        headers_a.insert("cf-connecting-ip", "2001:db8:0:0::1".parse().unwrap());
+        let mut headers_b = HeaderMap::new();
+        headers_b.insert("cf-connecting-ip", "2001:db8:0:1::1".parse().unwrap());
+
+        let key_a = extract_ip_for_rate_limit(&headers_a, Some("cf-connecting-ip"), None);
+        let key_b = extract_ip_for_rate_limit(&headers_b, Some("cf-connecting-ip"), None);
+
+        assert_ne!(key_a, key_b);
+    }
+
+    /// IPv4 keys are untouched by the IPv6 normalization step.
+    #[test]
+    fn ipv4_keys_are_not_truncated() {
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", "203.0.113.77".parse().unwrap());
+        assert_eq!(
+            extract_ip_for_rate_limit(&headers, Some("cf-connecting-ip"), None),
+            "203.0.113.77"
+        );
     }
 }

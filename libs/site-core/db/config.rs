@@ -40,8 +40,19 @@ pub const MAX_TOKENS_MIN: u32 = 1;
 /// while the clamp now doubles as the LLM10 cost ceiling.
 pub const MAX_TOKENS_MAX: u32 = 12_000;
 
+/// Compiled-in default for `ai.chat_hourly_ceiling` (task #3558, ruling 2).
+/// A placeholder set by Puck, not by Peter — update the `site_config` row
+/// once real Anthropic usage data is available.
+pub const DEFAULT_CHAT_HOURLY_CEILING: i64 = 100;
+
+/// Compiled-in default for `ai.fit_hourly_ceiling`. Same placeholder
+/// status as [`DEFAULT_CHAT_HOURLY_CEILING`].
+pub const DEFAULT_FIT_HOURLY_CEILING: i64 = 50;
+
 const KEY_MODEL_ID: &str = "ai.model_id";
 const KEY_MAX_TOKENS: &str = "ai.max_tokens";
+const KEY_CHAT_HOURLY_CEILING: &str = "ai.chat_hourly_ceiling";
+const KEY_FIT_HOURLY_CEILING: &str = "ai.fit_hourly_ceiling";
 
 /// Read a `site_config` value by key, trim whitespace, and treat the empty
 /// string as absent. Returns:
@@ -156,6 +167,70 @@ pub fn get_max_tokens(conn: &Connection) -> u32 {
     clamped
 }
 
+/// Return the configured site-wide hourly ceiling for the chat endpoint
+/// (task #3558, ruling 2), falling back to [`DEFAULT_CHAT_HOURLY_CEILING`]
+/// on any of: missing row, empty-after-trim value, non-positive or
+/// unparseable value, SQL error. MUST NOT panic.
+pub fn get_chat_hourly_ceiling(conn: &Connection) -> i64 {
+    get_positive_i64_config(conn, KEY_CHAT_HOURLY_CEILING, DEFAULT_CHAT_HOURLY_CEILING)
+}
+
+/// Return the configured site-wide hourly ceiling for the fit endpoint.
+/// Same fallback contract as [`get_chat_hourly_ceiling`].
+pub fn get_fit_hourly_ceiling(conn: &Connection) -> i64 {
+    get_positive_i64_config(conn, KEY_FIT_HOURLY_CEILING, DEFAULT_FIT_HOURLY_CEILING)
+}
+
+/// Shared implementation for both ceiling accessors above: read, trim,
+/// parse as `i64`, require strictly positive, falling back to `default`
+/// (with the same warn/error split as [`get_model_id`]/[`get_max_tokens`])
+/// on any failure.
+fn get_positive_i64_config(conn: &Connection, key: &str, default: i64) -> i64 {
+    let trimmed = match get_config_str_trimmed(conn, key) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            tracing::warn!(
+                key,
+                default,
+                "config row missing or empty after trim, using compiled-in default"
+            );
+            return default;
+        }
+        Err(err) => {
+            tracing::error!(
+                key,
+                error = %err,
+                default,
+                "SQL error reading config, using compiled-in default"
+            );
+            return default;
+        }
+    };
+
+    match trimmed.parse::<i64>() {
+        Ok(n) if n > 0 => n,
+        Ok(n) => {
+            tracing::warn!(
+                key,
+                value = n,
+                default,
+                "config value must be a positive integer, using compiled-in default"
+            );
+            default
+        }
+        Err(err) => {
+            tracing::warn!(
+                key,
+                value = %trimmed,
+                error = %err,
+                default,
+                "config value failed to parse as i64, using compiled-in default"
+            );
+            default
+        }
+    }
+}
+
 // ===========================================================================
 // Log-emission tests (Forge T3-impl, complementary to Glitch's contract
 // tests in `tests/test_config.rs`).
@@ -255,7 +330,9 @@ mod tests {
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             INSERT INTO site_config (key, value) VALUES ('ai.model_id', 'claude-sonnet-4-6');
-            INSERT INTO site_config (key, value) VALUES ('ai.max_tokens', '5530');",
+            INSERT INTO site_config (key, value) VALUES ('ai.max_tokens', '5530');
+            INSERT INTO site_config (key, value) VALUES ('ai.chat_hourly_ceiling', '100');
+            INSERT INTO site_config (key, value) VALUES ('ai.fit_hourly_ceiling', '50');",
         )
         .expect("schema + seed must succeed");
         conn
@@ -515,6 +592,94 @@ mod tests {
             0,
             "no WARN expected exactly at upper bound (no clamp performed), captured: {captured}"
         );
+        assert_eq!(buf.count("ERROR "), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // get_chat_hourly_ceiling / get_fit_hourly_ceiling (task #3558, ruling 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn get_chat_hourly_ceiling_reads_the_seeded_value() {
+        let conn = seeded_conn();
+        assert_eq!(get_chat_hourly_ceiling(&conn), 100);
+    }
+
+    #[test]
+    fn get_fit_hourly_ceiling_reads_the_seeded_value() {
+        let conn = seeded_conn();
+        assert_eq!(get_fit_hourly_ceiling(&conn), 50);
+    }
+
+    #[test]
+    fn chat_ceiling_falls_back_to_default_on_missing_row() {
+        let conn = seeded_conn();
+        delete_row(&conn, "ai.chat_hourly_ceiling");
+
+        let (result, buf) = capture_logs(|| get_chat_hourly_ceiling(&conn));
+        assert_eq!(result, DEFAULT_CHAT_HOURLY_CEILING);
+        assert_eq!(buf.count("WARN "), 1);
+        assert_eq!(buf.count("ERROR "), 0);
+    }
+
+    #[test]
+    fn chat_ceiling_falls_back_to_default_on_zero() {
+        let conn = seeded_conn();
+        set_value(&conn, "ai.chat_hourly_ceiling", "0");
+
+        let (result, buf) = capture_logs(|| get_chat_hourly_ceiling(&conn));
+        assert_eq!(result, DEFAULT_CHAT_HOURLY_CEILING);
+        assert_eq!(buf.count("WARN "), 1);
+    }
+
+    #[test]
+    fn chat_ceiling_falls_back_to_default_on_negative_value() {
+        let conn = seeded_conn();
+        set_value(&conn, "ai.chat_hourly_ceiling", "-5");
+
+        let (result, buf) = capture_logs(|| get_chat_hourly_ceiling(&conn));
+        assert_eq!(result, DEFAULT_CHAT_HOURLY_CEILING);
+        assert_eq!(buf.count("WARN "), 1);
+    }
+
+    #[test]
+    fn chat_ceiling_falls_back_to_default_on_parse_failure() {
+        let conn = seeded_conn();
+        set_value(&conn, "ai.chat_hourly_ceiling", "not-a-number");
+
+        let (result, buf) = capture_logs(|| get_chat_hourly_ceiling(&conn));
+        assert_eq!(result, DEFAULT_CHAT_HOURLY_CEILING);
+        assert_eq!(buf.count("WARN "), 1);
+    }
+
+    #[test]
+    fn chat_ceiling_falls_back_to_default_on_sql_error() {
+        let conn = bare_conn();
+
+        let (result, buf) = capture_logs(|| get_chat_hourly_ceiling(&conn));
+        assert_eq!(result, DEFAULT_CHAT_HOURLY_CEILING);
+        assert_eq!(buf.count("ERROR "), 1);
+        assert_eq!(buf.count("WARN "), 0);
+    }
+
+    #[test]
+    fn fit_ceiling_falls_back_to_default_on_missing_row() {
+        let conn = seeded_conn();
+        delete_row(&conn, "ai.fit_hourly_ceiling");
+
+        let (result, buf) = capture_logs(|| get_fit_hourly_ceiling(&conn));
+        assert_eq!(result, DEFAULT_FIT_HOURLY_CEILING);
+        assert_eq!(buf.count("WARN "), 1);
+    }
+
+    #[test]
+    fn custom_positive_ceiling_value_is_honored_with_no_log() {
+        let conn = seeded_conn();
+        set_value(&conn, "ai.chat_hourly_ceiling", "250");
+
+        let (result, buf) = capture_logs(|| get_chat_hourly_ceiling(&conn));
+        assert_eq!(result, 250);
+        assert_eq!(buf.count("WARN "), 0);
         assert_eq!(buf.count("ERROR "), 0);
     }
 }
