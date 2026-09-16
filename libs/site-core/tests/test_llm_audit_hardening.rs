@@ -42,6 +42,15 @@ use std::time::{Duration, Instant};
 
 // Path to the binary crate's main.rs, relative to libs/site-core/.
 const MAIN_RS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../cmd/server/main.rs");
+// Task #3558: the router construction this file's R1(c)/R5 wiring gates
+// check for moved from `cmd/server/main.rs::run_server()` into
+// `site_core::app::build_app` (extracted so `libs/site-core`'s own
+// integration tests — including task #3558's origin-lock router tests —
+// can build the exact production router; a binary-only crate can't be
+// imported from). The doc comment above anticipated this: "the
+// implementer may instead extract a site_core-level builder; the
+// behavior tests here work under either choice."
+const APP_RS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/app.rs");
 const ANTHROPIC_STREAM_RS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ai/anthropic_stream.rs");
 const ROUTES_AI_RS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/routes/ai.rs");
 
@@ -237,12 +246,12 @@ async fn r1b_chat_handler_emits_error_and_done_within_idle_bound_and_discards_pa
 /// Red-phase: main.rs has no TimeoutLayer today → assertion fails.
 #[test]
 fn r1c_timeout_layer_is_wired_into_the_router_construction() {
-    let main_src = std::fs::read_to_string(MAIN_RS)
-        .unwrap_or_else(|e| panic!("cmd/server/main.rs must be readable at {MAIN_RS}: {e}"));
+    let app_src = std::fs::read_to_string(APP_RS)
+        .unwrap_or_else(|e| panic!("site-core's app.rs must be readable at {APP_RS}: {e}"));
 
     assert!(
-        main_src.contains("TimeoutLayer"),
-        "R1(c): cmd/server/main.rs MUST reference tower_http's TimeoutLayer \
+        app_src.contains("TimeoutLayer"),
+        "R1(c): site_core::app MUST reference tower_http's TimeoutLayer \
          (the outer-backstop timeout layer)"
     );
     // It must be APPLIED, not merely imported: a `.layer(` call near the
@@ -251,7 +260,7 @@ fn r1c_timeout_layer_is_wired_into_the_router_construction() {
     // for cors/middleware, so the meaningful new signal is the symbol; the
     // combined check guards an import-but-unused regression).
     assert!(
-        main_src.contains(".layer(") && main_src.contains("TimeoutLayer"),
+        app_src.contains(".layer(") && app_src.contains("TimeoutLayer"),
         "R1(c): TimeoutLayer MUST be applied to the router via `.layer(...)`"
     );
 }
@@ -383,16 +392,15 @@ async fn r5_normal_sized_body_is_unaffected_by_the_limit() {
 /// modifying. Red-phase: no DefaultBodyLimit in main.rs → fails.
 #[test]
 fn r5_default_body_limit_is_wired_with_an_explicit_byte_cap() {
-    let main_src = std::fs::read_to_string(MAIN_RS)
-        .unwrap_or_else(|e| panic!("cmd/server/main.rs must be readable at {MAIN_RS}: {e}"));
+    let app_src = std::fs::read_to_string(APP_RS)
+        .unwrap_or_else(|e| panic!("site-core's app.rs must be readable at {APP_RS}: {e}"));
     assert!(
-        main_src.contains("DefaultBodyLimit"),
-        "R5: cmd/server/main.rs MUST configure axum's DefaultBodyLimit \
+        app_src.contains("DefaultBodyLimit"),
+        "R5: site_core::app MUST configure axum's DefaultBodyLimit \
          (explicit byte cap aligned with the semantic cap)"
     );
     assert!(
-        main_src.contains("DefaultBodyLimit::max(")
-            || main_src.contains("DefaultBodyLimit :: max ("),
+        app_src.contains("DefaultBodyLimit::max(") || app_src.contains("DefaultBodyLimit :: max ("),
         "R5: DefaultBodyLimit MUST set an explicit byte cap via \
          `DefaultBodyLimit::max(<bytes>)`"
     );

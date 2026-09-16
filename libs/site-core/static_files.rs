@@ -1,3 +1,6 @@
+use axum::extract::Path;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_status::SetStatus;
 
@@ -29,5 +32,42 @@ pub fn validate_static_dir(path: &str) {
              Run the frontend build first.",
             path
         );
+    }
+}
+
+/// Serve an avatar image from `AVATAR_DIR` (default `data/avatars`).
+///
+/// `filename` is sanitized against path traversal: only alphanumerics,
+/// `-`, `_` and `.` are allowed, and a leading dot or an embedded `..` is
+/// rejected before the path is ever joined and read.
+pub async fn serve_avatar(Path(filename): Path<String>) -> Response {
+    if !filename
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        || filename.starts_with('.')
+        || filename.contains("..")
+    {
+        return (StatusCode::BAD_REQUEST, "Invalid filename").into_response();
+    }
+
+    let avatar_dir = std::env::var("AVATAR_DIR").unwrap_or_else(|_| "data/avatars".to_string());
+    let path = std::path::Path::new(&avatar_dir).join(&filename);
+
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => {
+            let mime = mime_guess::from_path(&filename)
+                .first_or_octet_stream()
+                .to_string();
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Avatar not found").into_response(),
     }
 }

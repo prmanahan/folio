@@ -15,10 +15,21 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 
-/// Health check handler — executes SELECT 1 to verify the DB connection is live.
-/// Returns 200 "ok" on success, 503 "db unavailable" on failure.
-pub async fn health_check(State(state): State<DbState>) -> (StatusCode, &'static str) {
-    let db = state.db.lock().unwrap();
+/// Runs `SELECT 1` against the shared DB connection and renders the
+/// health-check status. Shared by the normal `/api/health` route and
+/// `middleware::origin_lock`'s exempt fast path (task #3558 C3), so both
+/// retain exactly one implementation of the DB-liveness check.
+///
+/// Returns 200 "ok" on success, 503 "db unavailable" on a query failure
+/// or a poisoned lock — never panics on either.
+pub fn health_check_body(state: &DbState) -> (StatusCode, &'static str) {
+    let db = match state.db.lock() {
+        Ok(db) => db,
+        Err(_) => {
+            tracing::error!("health check: db lock poisoned");
+            return (StatusCode::SERVICE_UNAVAILABLE, "db unavailable");
+        }
+    };
     match db.query_row("SELECT 1", [], |_| Ok(())) {
         Ok(_) => (StatusCode::OK, "ok"),
         Err(e) => {
@@ -26,6 +37,11 @@ pub async fn health_check(State(state): State<DbState>) -> (StatusCode, &'static
             (StatusCode::SERVICE_UNAVAILABLE, "db unavailable")
         }
     }
+}
+
+/// Health check handler — the normal routed path. See [`health_check_body`].
+pub async fn health_check(State(state): State<DbState>) -> (StatusCode, &'static str) {
+    health_check_body(&state)
 }
 
 pub fn public_router() -> Router<DbState> {

@@ -1,21 +1,12 @@
-use axum::extract::{DefaultBodyLimit, Path};
-use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use axum::{Router, routing::get};
 use clap::{Parser, Subcommand};
+use site_core::app::build_app;
 use site_core::auth;
 use site_core::config::Config;
 use site_core::db;
-use site_core::middleware::global_rate_limit::{
-    GlobalRateLimitState, global_rate_limit_middleware,
-};
-use site_core::middleware::page_hits::page_hits_middleware;
-use site_core::routes;
+use site_core::middleware::origin_lock::OriginLockState;
 use site_core::state::{AppState, DbState};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use tower_http::cors::CorsLayer;
-use tower_http::timeout::TimeoutLayer;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -29,68 +20,6 @@ struct Cli {
 enum Commands {
     /// Start the web server (default)
     Serve,
-}
-
-async fn security_headers(
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let mut response = next.run(request).await;
-    let headers = response.headers_mut();
-    headers.insert(
-        "content-security-policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
-            .parse().unwrap(),
-    );
-    headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-    headers.insert("x-frame-options", "DENY".parse().unwrap());
-    headers.insert(
-        "referrer-policy",
-        "strict-origin-when-cross-origin".parse().unwrap(),
-    );
-    headers.insert(
-        "permissions-policy",
-        "camera=(), microphone=(), geolocation=()".parse().unwrap(),
-    );
-    headers.insert(
-        "strict-transport-security",
-        "max-age=31536000; includeSubDomains".parse().unwrap(),
-    );
-    response
-}
-
-async fn serve_avatar(Path(filename): Path<String>) -> Response {
-    // Sanitize: only allow alphanumeric, dash, underscore, dot
-    // Also reject dotfiles and path traversal attempts
-    if !filename
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-        || filename.starts_with('.')
-        || filename.contains("..")
-    {
-        return (StatusCode::BAD_REQUEST, "Invalid filename").into_response();
-    }
-
-    let avatar_dir = std::env::var("AVATAR_DIR").unwrap_or_else(|_| "data/avatars".to_string());
-    let path = std::path::Path::new(&avatar_dir).join(&filename);
-
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => {
-            let mime = mime_guess::from_path(&filename)
-                .first_or_octet_stream()
-                .to_string();
-            (
-                StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, mime),
-                    (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
-                ],
-                bytes,
-            )
-                .into_response()
-        }
-        Err(_) => (StatusCode::NOT_FOUND, "Avatar not found").into_response(),
-    }
 }
 
 async fn run_server() {
@@ -136,63 +65,13 @@ async fn run_server() {
             "http://localhost:3000".to_string()
         }
     };
-    let cors = CorsLayer::new()
-        .allow_origin(
-            cors_origin
-                .parse::<axum::http::HeaderValue>()
-                .expect("Invalid CORS_ORIGIN value"),
-        )
-        .allow_methods([
-            axum::http::Method::GET,
-            axum::http::Method::POST,
-            axum::http::Method::PUT,
-            axum::http::Method::DELETE,
-            axum::http::Method::OPTIONS,
-        ])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
-
-    let global_rate_limit = GlobalRateLimitState::new();
-
-    let app = Router::new()
-        .route("/api/health", get(routes::health_check))
-        .merge(routes::public_router())
-        .merge(routes::ai::routes_with_connect_info())
-        .merge(routes::admin::admin_router(db_state.clone()))
-        .route("/api/avatars/{filename}", get(serve_avatar))
-        .with_state(db_state.clone())
-        .layer(axum::middleware::from_fn_with_state(
-            db_state.clone(),
-            page_hits_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            db_state.clone(),
-            global_rate_limit_middleware,
-        ))
-        .layer(axum::Extension(global_rate_limit))
-        // LLM-audit L2 / R5: explicit global request-body byte cap (64 KiB).
-        // The AI routes additionally apply their own `DefaultBodyLimit` in
-        // `routes::ai::routes_with_connect_info()`; this global layer is the
-        // outer backstop covering every route (and the wiring the R5 gate
-        // checks for in main.rs). Aligns the byte cap with the semantic
-        // caps so oversized bodies are rejected pre-parse with 413 rather
-        // than relying on axum's 2 MiB default.
-        .layer(DefaultBodyLimit::max(64 * 1024))
-        // LLM-audit M1 / R1: outer-backstop request timeout. The fit
-        // handler bounds its single upstream await and the chat consumer
-        // bounds its SSE loop in-handler; this `TimeoutLayer` is the
-        // router-level safety net for any path/await not individually
-        // bounded. 60 s is generous (well above the in-handler 12–20 s
-        // AI bounds) so it never pre-empts the finer-grained AI deadlines
-        // but still caps a wedged request.
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            std::time::Duration::from_secs(60),
-        ))
-        .layer(cors)
-        .layer(axum::middleware::from_fn(security_headers))
-        .fallback_service(site_core::static_files::static_file_service(
-            &config.static_dir,
-        ));
+    let origin_lock_state = OriginLockState::new(&config.edge_auth_token);
+    let app = build_app(
+        db_state,
+        origin_lock_state,
+        &config.static_dir,
+        &cors_origin,
+    );
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.port))
         .await
