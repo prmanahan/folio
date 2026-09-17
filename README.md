@@ -30,29 +30,35 @@ Edit `.env`:
 - `ADMIN_PASSWORD` — **required**, no default. The app will panic at startup without it.
 - `ANTHROPIC_API_KEY` — optional. Leave blank to disable AI chat and job-fit analysis features.
 - `CORS_ORIGIN` — defaults to `http://localhost:3000`. No change needed for local dev.
-- `EDGE_AUTH_TOKEN` — **required**, no default. Shared secret the reverse proxy injects into every request; the app rejects any request without it. See the placeholder and format note in `.env.example`.
+- `EDGE_AUTH_TOKEN` — **required**, no default, and the `.env.example` placeholder is deliberately invalid — generate your own (`EDGE_AUTH_TOKEN="folio_edge_$(openssl rand -hex 32)"`) before running anything. Shared secret the reverse proxy injects into every request; the app rejects any request without it.
 
 ## Running Locally
 
-### Full stack (recommended)
+Every request to the backend — page loads included — now requires the `EDGE_AUTH_TOKEN` value as an `X-Folio-Edge-Auth` header. A plain browser can't add that header, so **browse through the Vite dev server on :5173**, not the backend's own port directly.
 
-Builds the frontend and starts the backend:
+### Frontend hot-reload (recommended for browsing)
+
+In one terminal, run the backend:
 
 ```bash
-just run
+cargo run
 ```
 
-The server starts on port 3000 (or whatever `PORT` is set to in `.env`). Open `http://localhost:3000`.
-
-### Frontend hot-reload
-
-In a separate terminal, run the Vite dev server for instant UI feedback:
+In a separate terminal, run the Vite dev server:
 
 ```bash
 just frontend-dev   # serves on port 5173
 ```
 
-The frontend proxies API calls to `http://localhost:3000`, so the backend must be running (`cargo run` in another terminal).
+Open `http://localhost:5173` in a browser. Vite serves pages directly (not through the backend), and its `/api` proxy reads `EDGE_AUTH_TOKEN` from `.env` and attaches it to every proxied request on your behalf — so this is the one entry point the origin lock doesn't block.
+
+### Full stack
+
+```bash
+just run
+```
+
+Builds the frontend and starts the backend serving it directly on port 3000 (or whatever `PORT` is set to in `.env`). Useful for confirming the built binary serves correctly — e.g. `curl -H "X-Folio-Edge-Auth: $EDGE_AUTH_TOKEN" http://localhost:3000/` — but **not for interactive browsing**: every page, not just `/api`, is behind the origin lock here, and a browser has no way to attach the header.
 
 ### Docker
 

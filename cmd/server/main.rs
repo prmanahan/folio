@@ -3,11 +3,18 @@ use site_core::app::build_app;
 use site_core::auth;
 use site_core::config::Config;
 use site_core::db;
+use site_core::middleware::global_rate_limit::GlobalRateLimitState;
 use site_core::middleware::origin_lock::OriginLockState;
 use site_core::state::{AppState, DbState};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tracing_subscriber::EnvFilter;
+
+/// Sliding window used by `global_rate_limit_middleware` (60 req/min) and
+/// the interval this purges stale buckets on. Same value on purpose: an
+/// entry can't go stale faster than the window it's measured against.
+const GLOBAL_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Parser)]
 #[command(name = "folio")]
@@ -66,9 +73,25 @@ async fn run_server() {
         }
     };
     let origin_lock_state = OriginLockState::new(&config.edge_auth_token);
+
+    let global_rate_limit = GlobalRateLimitState::new();
+    // Task #3558: Phase 2 keys rate-limit buckets per visitor rather than
+    // per Cloudflare edge, widening this map's key space for the life of
+    // the process. Purge on the same cadence as the limiter's own
+    // window so an entry can't go stale faster than it's purged.
+    let purge_state = global_rate_limit.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(GLOBAL_RATE_LIMIT_WINDOW);
+        loop {
+            interval.tick().await;
+            purge_state.purge_stale(GLOBAL_RATE_LIMIT_WINDOW);
+        }
+    });
+
     let app = build_app(
         db_state,
         origin_lock_state,
+        global_rate_limit,
         &config.static_dir,
         &cors_origin,
     );

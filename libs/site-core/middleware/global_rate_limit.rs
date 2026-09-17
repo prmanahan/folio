@@ -21,7 +21,11 @@ const RATE_LIMIT_IPV6_KEY_PREFIX: u32 = 64;
 /// doesn't parse as an IP (e.g. the literal `"unknown"`, or a malformed
 /// header value) pass through unchanged — this only narrows an
 /// over-wide IPv6 key, it never invents or rejects one.
-fn normalize_rate_limit_key(candidate: String) -> String {
+///
+/// `pub(crate)` so `auth::extract_client_ip` — a second, older IP
+/// extractor that keys the login-failure limiter — can share the same
+/// normalisation rather than drift from it (task #3558 F2).
+pub(crate) fn normalize_rate_limit_key(candidate: String) -> String {
     match candidate.parse::<IpAddr>() {
         Ok(addr @ IpAddr::V6(_)) => {
             truncate_to_prefix(addr, RATE_LIMIT_IPV6_KEY_PREFIX).to_string()
@@ -68,8 +72,13 @@ impl GlobalRateLimitState {
     }
 
     /// Purge all IPs that have no timestamps within the window.
-    /// Call periodically to bound memory usage (optional, not wired up by default).
-    #[allow(dead_code)]
+    ///
+    /// Called on an interval from `main.rs::run_server` (task #3558):
+    /// Phase 2 keys buckets per visitor rather than per Cloudflare edge,
+    /// which widens this map's key space for the life of the process. An
+    /// unpurged entry never affects correctness (a stale entry's own
+    /// timestamps are filtered on each `check()`), only memory — this
+    /// bounds that growth rather than leaving it to a manual call.
     pub fn purge_stale(&self, window: Duration) {
         let mut store = self.0.lock().expect("global rate limit lock poisoned");
         let now = Instant::now();
@@ -290,6 +299,49 @@ mod tests {
         assert!(
             state.check("5.5.5.5", limit, window),
             "after window expires, requests should be allowed again"
+        );
+    }
+
+    /// Task #3558 (F6): `purge_stale` is now wired on an interval in
+    /// `main.rs` — Phase 2 keys buckets per visitor, widening this map's
+    /// key space for the life of the process, so an entry whose
+    /// timestamps have all fallen outside `window` must actually be
+    /// removed, not merely have its own timestamp `Vec` emptied in place.
+    #[test]
+    fn purge_stale_removes_an_entry_with_no_timestamps_in_window() {
+        let state = GlobalRateLimitState::new();
+        let window = Duration::from_millis(10);
+
+        state.check("6.6.6.6", 5, window);
+        assert_eq!(
+            state.0.lock().unwrap().len(),
+            1,
+            "a checked IP must have a map entry"
+        );
+
+        std::thread::sleep(Duration::from_millis(20));
+        state.purge_stale(window);
+
+        assert_eq!(
+            state.0.lock().unwrap().len(),
+            0,
+            "an entry with no timestamps inside the window must be purged, \
+             not just have its timestamp list emptied"
+        );
+    }
+
+    #[test]
+    fn purge_stale_keeps_an_entry_with_a_recent_timestamp() {
+        let state = GlobalRateLimitState::new();
+        let window = Duration::from_secs(60);
+
+        state.check("7.7.7.7", 5, window);
+        state.purge_stale(window);
+
+        assert_eq!(
+            state.0.lock().unwrap().len(),
+            1,
+            "an entry with a timestamp inside the window must survive a purge"
         );
     }
 

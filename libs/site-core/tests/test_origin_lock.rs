@@ -11,6 +11,7 @@ mod common;
 
 use axum::http::StatusCode;
 use site_core::app::build_app;
+use site_core::middleware::global_rate_limit::GlobalRateLimitState;
 use site_core::middleware::origin_lock::OriginLockState;
 
 const EDGE_AUTH_HEADER: &str = "x-folio-edge-auth";
@@ -27,6 +28,7 @@ fn locked_server() -> axum_test::TestServer {
     let app = build_app(
         db_state,
         origin_lock_state,
+        GlobalRateLimitState::new(),
         STATIC_FIXTURE_DIR,
         TEST_CORS_ORIGIN,
     );
@@ -224,20 +226,26 @@ async fn rejected_requests_never_reach_the_global_limiter() {
     }
 }
 
+/// NOT YET a regression check on `origin_lock` specifically — see #3634.
+/// This asserts the observed fact (the table is empty after only
+/// rejected requests), not a claim that page_hits was reachable and
+/// produced nothing: it currently records no row for this path
+/// regardless of origin_lock's correctness, so a regression that made
+/// origin_lock call `next` on the reject path would NOT flip this
+/// assertion. Becomes a real, falsifiable control once #3634 lands.
 #[tokio::test]
-async fn rejected_requests_never_write_a_page_hit() {
+async fn page_hits_table_stays_empty_after_rejected_requests_pending_3634() {
     let (_unused_server, db_state) = common::test_app_with_state();
     let origin_lock_state = OriginLockState::new(TEST_SECRET);
     let app = build_app(
         db_state.clone(),
         origin_lock_state,
+        GlobalRateLimitState::new(),
         STATIC_FIXTURE_DIR,
         TEST_CORS_ORIGIN,
     );
     let server = axum_test::TestServer::new(app);
 
-    // "/" is a page_hits-tracked path. Without the secret, origin_lock
-    // must reject before `page_hits_middleware` ever runs.
     for _ in 0..5 {
         server.get("/").await.assert_status_not_found();
     }
@@ -250,16 +258,4 @@ async fn rejected_requests_never_write_a_page_hit() {
         counts.is_empty(),
         "no page-hit row should exist after only rejected requests, got: {counts:?}"
     );
-
-    // This is a STRUCTURAL guarantee, not an empirically falsifiable one:
-    // origin_lock returns before ever calling `next`, so
-    // `page_hits_middleware` is unreachable on the reject path by
-    // construction, independent of whether page_hits fires on an
-    // authorized request to the same path. It currently does not — "/"
-    // is served through the static-file fallback, which sits OUTSIDE
-    // page_hits_middleware's own layer boundary (the same layering cause
-    // as this task's H1, but pre-existing and out of #3558's scope; see
-    // task #3634).  An authorized-request positive control was tried and
-    // removed here for that reason: it would fail regardless of
-    // origin_lock's correctness, for an unrelated, already-tracked cause.
 }
