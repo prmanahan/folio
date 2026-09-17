@@ -139,4 +139,29 @@ mod tests {
         );
         assert!(validate_edge_auth_token(&token).is_err());
     }
+
+    /// Task #3558 (F5): `.env.example`'s `EDGE_AUTH_TOKEN` placeholder is
+    /// deliberately shape-invalid, so a copy-paste that skips generating
+    /// a real value panics loudly at startup instead of running on a
+    /// value every clone of this public repo shares. This reads the real
+    /// file rather than a copy of its value, so an edit that accidentally
+    /// makes the placeholder valid-shaped fails here, not silently.
+    #[test]
+    fn dot_env_example_placeholder_is_deliberately_invalid() {
+        let env_example =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.env.example"))
+                .expect(".env.example must be readable");
+
+        let placeholder = env_example
+            .lines()
+            .find_map(|line| line.strip_prefix("EDGE_AUTH_TOKEN="))
+            .expect(".env.example must set EDGE_AUTH_TOKEN");
+
+        assert!(
+            validate_edge_auth_token(placeholder).is_err(),
+            ".env.example's EDGE_AUTH_TOKEN placeholder ({placeholder:?}) must \
+             FAIL startup validation — a shape-valid placeholder would let a \
+             copy-paste run on a value every clone of this public repo shares"
+        );
+    }
 }

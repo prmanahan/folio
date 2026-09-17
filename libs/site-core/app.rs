@@ -64,14 +64,21 @@ async fn security_headers(
 /// above it — that ordering is what makes `origin_lock` wrap the
 /// fallback as well as every routed path, making it the true outermost
 /// layer: nothing else in this router is reachable around it.
+///
+/// `global_rate_limit` is a caller-supplied instance rather than
+/// constructed here: the caller (`main.rs::run_server`) also owns
+/// spawning its periodic `purge_stale` task, and that task must be tied
+/// to the one instance actually wired into the router's `Extension`
+/// layer, not a second one this function would otherwise create. Keeps
+/// `build_app` itself free of background-task side effects, which
+/// matters for the test callers that build a fresh router per test.
 pub fn build_app(
     db_state: DbState,
     origin_lock_state: OriginLockState,
+    global_rate_limit: GlobalRateLimitState,
     static_dir: &str,
     cors_origin: &str,
 ) -> Router {
-    let global_rate_limit = GlobalRateLimitState::new();
-
     let cors = CorsLayer::new()
         .allow_origin(
             cors_origin

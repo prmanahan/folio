@@ -60,7 +60,7 @@ const FIT_PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 
 /// Chat handler that uses ConnectInfo (requires into_make_service_with_connect_info).
 /// Used in production where ConnectInfo is available.
-#[tracing::instrument(skip(state, headers, payload))]
+#[tracing::instrument(skip_all)]
 pub async fn chat_with_addr(
     State(state): State<DbState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -72,7 +72,7 @@ pub async fn chat_with_addr(
 }
 
 /// Chat handler without ConnectInfo (for testing or when ConnectInfo is not configured).
-#[tracing::instrument(skip(state, headers, payload))]
+#[tracing::instrument(skip_all)]
 pub async fn chat(
     State(state): State<DbState>,
     headers: HeaderMap,
@@ -144,7 +144,7 @@ async fn chat_inner(
 }
 
 /// Fit analysis handler with ConnectInfo (production).
-#[tracing::instrument(skip(state, headers, payload))]
+#[tracing::instrument(skip_all)]
 pub async fn fit_analysis_with_addr(
     State(state): State<DbState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -160,7 +160,7 @@ pub async fn fit_analysis_with_addr(
 }
 
 /// Fit analysis handler without ConnectInfo (for testing).
-#[tracing::instrument(skip(state, headers, payload))]
+#[tracing::instrument(skip_all)]
 pub async fn fit_analysis(
     State(state): State<DbState>,
     headers: HeaderMap,
