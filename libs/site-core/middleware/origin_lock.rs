@@ -15,14 +15,11 @@
 //! secret, so the exemption is load-bearing for availability, not just a
 //! convenience.
 
-use std::net::SocketAddr;
-
-use axum::extract::{ConnectInfo, State};
+use axum::extract::State;
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use sha2::{Digest, Sha256};
 
-use crate::middleware::client_ip_log::log_client_ip_fields;
 use crate::routes::health_check_body;
 use crate::state::DbState;
 
@@ -82,12 +79,6 @@ pub async fn origin_lock_middleware(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    let peer_addr = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0);
-    log_client_ip_fields(request.headers(), peer_addr);
-
     if is_health_check(request.method(), request.uri()) {
         return health_check_body(&db_state).into_response();
     }
