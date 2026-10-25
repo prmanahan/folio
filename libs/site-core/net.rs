@@ -1,12 +1,9 @@
 //! Shared IP-address prefix-truncation helpers.
 //!
-//! Two independent call sites mask an address down to a network prefix at
-//! different widths: rate-limit keying truncates IPv6 to /64 (keys the
-//! allocation, not the individual host address) and Phase-0 request
-//! logging truncates IPv4 to /24 and IPv6 to /48 (data minimisation on a
-//! value that is never a rate-limit key). One masking primitive, several
-//! callers, so the truncation widths can't silently drift into separate
-//! implementations.
+//! Rate-limit keying (`middleware::global_rate_limit`) is the one caller:
+//! it truncates IPv6 to /64 so the key covers the allocation, not the
+//! individual host address. The primitive takes the width as an argument
+//! and is tested at other widths on its own.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
