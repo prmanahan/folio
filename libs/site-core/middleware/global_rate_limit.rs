@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,11 +22,7 @@ const RATE_LIMIT_IPV6_KEY_PREFIX: u32 = 64;
 /// doesn't parse as an IP (e.g. the literal `"unknown"`, or a malformed
 /// header value) pass through unchanged — this only narrows an
 /// over-wide IPv6 key, it never invents or rejects one.
-///
-/// `pub(crate)` so `auth::extract_client_ip` — a second, older IP
-/// extractor that keys the login-failure limiter — can share the same
-/// normalisation rather than drift from it (task #3558 F2).
-pub(crate) fn normalize_rate_limit_key(candidate: String) -> String {
+fn normalize_rate_limit_key(candidate: String) -> String {
     match candidate.parse::<IpAddr>() {
         Ok(addr @ IpAddr::V6(_)) => {
             truncate_to_prefix(addr, RATE_LIMIT_IPV6_KEY_PREFIX).to_string()
@@ -91,49 +88,29 @@ impl GlobalRateLimitState {
     }
 }
 
-/// Extract IP from headers using the configured trusted header →
-/// X-Forwarded-For → ConnectInfo peer addr → `"unknown"` chain.
+/// Set once the "trusted header configured but absent" warning has fired.
+static TRUSTED_HEADER_ABSENT_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Extract the rate-limit bucket key: configured trusted header → ConnectInfo
+/// peer addr → `"unknown"`. `x-forwarded-for` is never consulted (#3482): it
+/// is client-controlled, so honouring it lets one client rotate the header
+/// for unlimited attempts.
 ///
-/// `trusted_header`: the header name configured via `TRUSTED_IP_HEADER` (e.g. `fly-client-ip`).
-/// Pass `None` to skip the trusted header step and fall straight to `x-forwarded-for`.
+/// `trusted_header`: the header name configured via `TRUSTED_IP_HEADER`
+/// (e.g. `cf-connecting-ip`, set by the reverse proxy and not spoofable by
+/// clients in production). A configured header that is absent or empty on a
+/// request falls to the peer address, never to another header.
 ///
-/// `peer_addr`: the `ConnectInfo` peer socket address when available.
+/// `peer_addr`: the `ConnectInfo` peer socket address when available. The
+/// literal `"unknown"` (a single shared bucket) is used ONLY when no peer
+/// address is available.
 ///
-/// LLM-audit L1 / R4: when neither header resolves, prefer the peer
-/// address so distinct no-proxy clients get distinct rate-limit buckets.
-/// The literal `"unknown"` (a single shared bucket — one client can DoS
-/// another, many attackers share one quota) is used ONLY when no peer
-/// address is available. Header precedence is unchanged: the peer addr is
-/// a fallback, never an override of a present trusted header / XFF.
-///
-/// SECURITY NOTE: The trusted header is set by the reverse proxy and cannot be spoofed
-/// by clients in production. `x-forwarded-for` is used only as a local-dev fallback
-/// and is client-controlled; if this service is ever exposed directly (no proxy),
-/// rate limiting by XFF IP is bypassable — and, since `middleware::page_hits`
-/// hashes this same value to key unique-hit analytics, a spoofed XFF also
-/// poisons hit counts. The consequence tracks the call surface, not just the
-/// limiter: a caller added here inherits both failure modes.
-///
-/// Bucket keys for the global rate-limit middleware,
-/// `middleware::page_hits` and the AI handlers in `routes::ai` all come
-/// from here. `routes::ai` carried a character-identical private copy
-/// until #1077; a second extractor is how two callers drift into
-/// disagreeing about who gets throttled.
-///
-/// NOT the only IP read in the service. `auth::extract_client_ip` keys
-/// the login brute-force limiter and is still the pre-R4 two-arg shape:
-/// no peer-addr fallback, so it collapses every no-header client into
-/// one `"unknown"` bucket. Converging it changes an authentication path
-/// and was outside #1077's scope — reported, not fixed here.
-///
-/// Task #3558: when a trusted header IS configured but absent from this
-/// request, the fallback goes straight to the peer address — never
-/// `x-forwarded-for`. `x-forwarded-for` stays a fallback only for the
-/// no-trusted-header case (local dev without a reverse proxy). Every
-/// resolved candidate is normalized via
-/// `normalize_rate_limit_key` (IPv6 → /64) before it's returned, so this
-/// one function is the single place that decision has to be made for
-/// every caller (the global limiter, `page_hits`, and the AI routes).
+/// Callers: the global rate-limit middleware, `middleware::page_hits` (which
+/// hashes this same value to key unique-hit analytics), the AI handlers in
+/// `routes::ai`, and `auth::login` (the brute-force limiter). One function so
+/// the callers cannot drift into disagreeing about who gets throttled; every
+/// resolved candidate is normalized via `normalize_rate_limit_key` (IPv6 →
+/// /64).
 pub fn extract_ip_for_rate_limit(
     headers: &HeaderMap,
     trusted_header: Option<&str>,
@@ -149,27 +126,24 @@ pub fn extract_ip_for_rate_limit(
             }
         }
         // Trusted header configured but missing/empty on this request:
-        // go straight to the peer addr, skipping x-forwarded-for.
+        // go straight to the peer addr. Warn once per process (no client
+        // data) so a proxy that stops sending the header is visible.
+        if !TRUSTED_HEADER_ABSENT_WARNED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                header = header_name,
+                "trusted IP header configured but absent on a request; \
+                 keying rate limits on the peer address (logged once)"
+            );
+        }
         return normalize_rate_limit_key(match peer_addr {
             Some(addr) => addr.ip().to_string(),
             None => "unknown".to_string(),
         });
     }
 
-    // No trusted header configured at all (e.g. local dev without a
-    // reverse proxy) — x-forwarded-for is the historical dev-ergonomics
-    // fallback.
-    if let Some(forwarded) = headers.get("x-forwarded-for")
-        && let Ok(val) = forwarded.to_str()
-        && let Some(first_ip) = val.split(',').next()
-    {
-        let trimmed = first_ip.trim();
-        if !trimmed.is_empty() {
-            return normalize_rate_limit_key(trimmed.to_string());
-        }
-    }
-    // R4: prefer the ConnectInfo peer addr over the collapsing "unknown"
-    // bucket; "unknown" only when no peer addr is available.
+    // No trusted header configured: x-forwarded-for is client-controlled and
+    // is never consulted. R4: the ConnectInfo peer addr, and "unknown" only
+    // when no peer addr is available.
     normalize_rate_limit_key(match peer_addr {
         Some(addr) => addr.ip().to_string(),
         None => "unknown".to_string(),
@@ -349,13 +323,14 @@ mod tests {
     fn ip_extraction_priority() {
         let mut headers = HeaderMap::new();
 
-        // Only XFF present, no trusted header configured — should use XFF
-        // (peer addr present but headers win — R4 precedence preserved).
+        // #3482: x-forwarded-for is never consulted. With no trusted header
+        // configured, XFF present and a peer addr, the peer addr wins
+        // (previously this asserted "1.1.1.1", the first XFF entry).
         headers.insert("x-forwarded-for", "1.1.1.1, 2.2.2.2".parse().unwrap());
         let peer: SocketAddr = "9.9.9.9:443".parse().unwrap();
         assert_eq!(
             extract_ip_for_rate_limit(&headers, None, Some(peer)),
-            "1.1.1.1"
+            "9.9.9.9"
         );
 
         // fly-client-ip present and configured as trusted header — takes priority over XFF
@@ -367,8 +342,6 @@ mod tests {
 
         // Task #3558: trusted header configured but absent on this
         // request — falls back to the peer addr, never x-forwarded-for.
-        // x-forwarded-for remains a fallback only when no trusted header
-        // is configured at all (local dev without a reverse proxy).
         let mut xff_only = HeaderMap::new();
         xff_only.insert("x-forwarded-for", "4.4.4.4".parse().unwrap());
         assert_eq!(
@@ -433,6 +406,20 @@ mod tests {
         let key_b = extract_ip_for_rate_limit(&headers_b, Some("cf-connecting-ip"), None);
 
         assert_ne!(key_a, key_b);
+    }
+
+    /// A peer-addr key is normalized the same way as a header key, and a
+    /// spoofed x-forwarded-for (#3482) cannot move it out of its /64.
+    #[test]
+    fn ipv6_peer_addr_is_normalized_to_64_and_ignores_xff() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "198.51.100.1".parse().unwrap());
+        let peer: SocketAddr = "[2001:db8:1234:5678::1]:443".parse().unwrap();
+
+        assert_eq!(
+            extract_ip_for_rate_limit(&headers, None, Some(peer)),
+            "2001:db8:1234:5678::"
+        );
     }
 
     /// IPv4 keys are untouched by the IPv6 normalization step.

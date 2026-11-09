@@ -156,8 +156,9 @@ async fn trusted_header_takes_priority_over_xff() {
         "9.9.9.9"
     );
 
-    // Without trusted header configured — falls back to XFF
-    assert_eq!(extract_ip_for_rate_limit(&headers, None, None), "1.1.1.1");
+    // Without trusted header configured — #3482: XFF is never consulted, so
+    // with no peer addr either the key is "unknown" (was "1.1.1.1").
+    assert_eq!(extract_ip_for_rate_limit(&headers, None, None), "unknown");
 }
 
 // ===========================================================================
@@ -283,13 +284,14 @@ mod r4_peer_addr_fallback {
             "R4: trusted header MUST still take priority over the peer addr"
         );
 
-        // XFF present, no trusted header → wins over peer addr.
+        // #3482: XFF present, no trusted header → XFF is ignored, the peer
+        // addr wins (was "6.6.6.6": XFF took priority over the peer addr).
         let mut h_xff = HeaderMap::new();
         h_xff.insert("x-forwarded-for", "6.6.6.6, 7.7.7.7".parse().unwrap());
         assert_eq!(
             extract_ip_for_rate_limit(&h_xff, None, Some(peer)),
-            "6.6.6.6",
-            "R4: x-forwarded-for MUST still take priority over the peer addr"
+            "9.9.9.9",
+            "#3482: x-forwarded-for MUST NOT influence the key"
         );
     }
 } // end mod r4_peer_addr_fallback (gate removed; R4 signature live)

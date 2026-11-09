@@ -86,8 +86,9 @@ COPY --from=frontend-builder /app/frontend/build/ /app/frontend/build/
 ENV PORT=8080
 ENV STATIC_DIR=/app/frontend/build
 ENV DATABASE_URL=/app/data/site.db
-# Override in production with a unique, secret value
-ENV PAGE_HIT_SALT=change-me-in-production
+# PAGE_HIT_SALT is deliberately NOT set here: a baked default would always
+# satisfy config.rs and silence its "PAGE_HIT_SALT not set" warning. Supply it
+# at runtime (Fly secret).
 EXPOSE 8080
 
 CMD ["./folio"]
