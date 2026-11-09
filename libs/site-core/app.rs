@@ -25,7 +25,7 @@ use crate::static_files::{self, serve_avatar};
 const GLOBAL_BODY_LIMIT_BYTES: usize = 64 * 1024;
 
 /// LLM-audit M1 / R1: outer-backstop request timeout.
-const REQUEST_TIMEOUT_SECS: u64 = 60;
+pub(crate) const REQUEST_TIMEOUT_SECS: u64 = 60;
 
 async fn security_headers(
     request: axum::extract::Request,

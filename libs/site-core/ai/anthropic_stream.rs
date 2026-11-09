@@ -65,9 +65,9 @@ const SSE_CHANNEL_CAPACITY: usize = 64;
 
 /// LLM-audit M1 / R1: per-event idle deadline on the chat SSE consume
 /// loop. If the upstream stalls mid-stream and no new frame arrives within
-/// this window, the loop aborts. 12 s matches the fit handler's bound and
-/// sits well under the R1 acceptance test's 25 s wall-clock assertion (the
-/// mock stalls 40 s with no terminal frame).
+/// this window, the loop aborts. 12 s sits well under the chat R1(b)
+/// acceptance test's 25 s wall-clock assertion (the mock stalls 40 s with
+/// no terminal frame).
 const CHAT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
 
 /// LLM-audit M1 / R1: total wall-clock cap on the chat SSE consume loop.

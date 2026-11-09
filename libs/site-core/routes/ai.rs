@@ -49,14 +49,20 @@ const AI_INTERNAL_OPAQUE_MESSAGE: &str = "AI request failed. Please try again la
 /// LLM-audit M1 / R1: deadline on the fit handler's single buffered
 /// `agent.prompt(...).await`.
 ///
-/// 12 s. The spec band is "single-digit to low-tens of seconds"; the R1
-/// acceptance test stalls the mock upstream for 40 s and asserts the
-/// handler returns within a 25 s wall-clock bound. 12 s sits comfortably
-/// under that bound while leaving enough room for a real (non-stalled)
-/// Sonnet fit completion, which is a single non-streaming round-trip. On
+/// 55 s (task #3633; was 12 s). Production `/api/fit` returned 500 at 12.1
+/// to 14.0 s, and the Fly log of 2026-09-16 showed the fit prompt timing
+/// out; the true completion time is unmeasured. Peter signed off 55 s
+/// against the locked spec, to be lowered to measured time plus a margin
+/// after production timing. The outer ceiling is `REQUEST_TIMEOUT_SECS`
+/// = 60 s in `app.rs`; the const assert below keeps this under it so the
+/// handler's own degraded error wins over the router's bare 408. On
 /// expiry the handler returns the existing degraded `AppError::Internal`
 /// surface (fixed opaque client string — never raw upstream text).
-const FIT_PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+const FIT_PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
+
+// Compile-time tie to the router backstop: raising this past the outer
+// timeout would hand the visitor a bare 408 instead of the degraded error.
+const _: () = assert!(FIT_PROMPT_TIMEOUT.as_secs() < crate::app::REQUEST_TIMEOUT_SECS);
 
 /// Chat handler that uses ConnectInfo (requires into_make_service_with_connect_info).
 /// Used in production where ConnectInfo is available.
@@ -258,6 +264,7 @@ async fn fit_analysis_inner(
     let prompt_fut = agent
         .prompt(payload.job_description.as_str())
         .with_hook(capture.clone());
+    let prompt_started = std::time::Instant::now();
     let response_text = match tokio::time::timeout(FIT_PROMPT_TIMEOUT, prompt_fut).await {
         Ok(Ok(text)) => text,
         Ok(Err(e)) => {
@@ -286,7 +293,7 @@ async fn fit_analysis_inner(
         .map(|s| from_anthropic_str(&s))
         .unwrap_or(StopReason::EndTurn);
 
-    match mapped {
+    let outcome = match &mapped {
         StopReason::EndTurn | StopReason::StopSequence | StopReason::PauseTurn => {
             parse_verdict(&response_text)
         }
@@ -345,7 +352,20 @@ async fn fit_analysis_inner(
             );
             Err(AppError::Internal(AI_INTERNAL_OPAQUE_MESSAGE.to_string()))
         }
+    };
+
+    // #3633: make paid use visible. Only a delivered verdict is logged;
+    // `stop_reason` here is one of the recognized values (the other arms
+    // return errors above), and no client address, prompt or response
+    // text is included.
+    if outcome.is_ok() {
+        tracing::info!(
+            elapsed_ms = prompt_started.elapsed().as_millis() as u64,
+            stop_reason = ?mapped,
+            "fit: completed"
+        );
     }
+    outcome
 }
 
 /// Parse a fit-handler response into a `FitVerdict`, attempting a direct
