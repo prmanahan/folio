@@ -73,9 +73,30 @@ const CHAT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12
 /// LLM-audit M1 / R1: total wall-clock cap on the chat SSE consume loop.
 /// Even if frames keep trickling in just under the idle bound, the whole
 /// stream is hard-capped here so a slow-drip upstream cannot pin the
-/// spawned task and connection indefinitely. 20 s is bounded well under
-/// any proxy/LB timeout while allowing a normal multi-delta completion.
-const CHAT_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// spawned task and connection indefinitely.
+///
+/// 45 s (task #4656; was 20 s). Chosen to match `FIT_PROMPT_TIMEOUT` in
+/// `routes/ai.rs`, not derived from measurements. The measurements are
+/// three long-answer requests on production, biased to long answers
+/// (n=3): 17.77 s delivered, and 21.90 s and 20.18 s that were CUT OFF at
+/// the old 20 s cap, so the true completion time of those two is unknown.
+/// Bounded above by the router's `REQUEST_TIMEOUT_SECS` (60 s), which the
+/// assert below enforces.
+const CHAT_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+const _: () = assert!(CHAT_TOTAL_TIMEOUT.as_secs() < crate::app::REQUEST_TIMEOUT_SECS);
+
+/// The two consume-loop bounds, injectable so a test can fire the total
+/// deadline in milliseconds. Production passes [`CHAT_TIMEOUTS`].
+struct ChatTimeouts {
+    idle: std::time::Duration,
+    total: std::time::Duration,
+}
+
+const CHAT_TIMEOUTS: ChatTimeouts = ChatTimeouts {
+    idle: CHAT_IDLE_TIMEOUT,
+    total: CHAT_TOTAL_TIMEOUT,
+};
 
 /// Local deserialization shape for Anthropic's SSE `event: error` frame.
 /// Anthropic wires it as `{"type":"error","error":{"type":"<kind>",
@@ -164,7 +185,9 @@ fn build_chat_body(
 ///
 /// Returns the receiver immediately; the SSE consume + dispatch runs on a
 /// background tokio task whose lifetime is bounded by the receiver — when
-/// the consumer drops, the task's next `tx.send` fails and the task exits.
+/// the consumer drops, the consume loop sees `tx.closed()`, drops the
+/// upstream source (ending the paid call) and exits without a terminal
+/// frame.
 ///
 /// All terminal states emit `data: [DONE]\n\n` as the final frame so the
 /// browser-side EventSource can finalize cleanly.
@@ -180,6 +203,24 @@ pub fn stream_chat(
     system_preamble: &str,
     user_message: &str,
     max_tokens: u64,
+) -> Result<mpsc::Receiver<Result<SseEvent, Infallible>>, AppError> {
+    stream_chat_with(
+        client,
+        model,
+        system_preamble,
+        user_message,
+        max_tokens,
+        CHAT_TIMEOUTS,
+    )
+}
+
+fn stream_chat_with(
+    client: &anthropic::Client,
+    model: &str,
+    system_preamble: &str,
+    user_message: &str,
+    max_tokens: u64,
+    timeouts: ChatTimeouts,
 ) -> Result<mpsc::Receiver<Result<SseEvent, Infallible>>, AppError> {
     // Build the request synchronously so we can return AppError before the
     // spawn. Body construction errors here would indicate a serde / http
@@ -246,7 +287,7 @@ pub fn stream_chat(
     use tracing::instrument::WithSubscriber;
     tokio::spawn(
         async move {
-            run_chat_stream(source, tx).await;
+            run_chat_stream(source, tx, timeouts).await;
         }
         .in_current_span()
         .with_current_subscriber(),
@@ -282,6 +323,7 @@ pub fn stream_chat(
 async fn run_chat_stream<HttpClient>(
     mut source: GenericEventSource<HttpClient, Vec<u8>>,
     tx: mpsc::Sender<Result<SseEvent, Infallible>>,
+    timeouts: ChatTimeouts,
 ) where
     HttpClient: rig_core::http_client::HttpClientExt + Clone + 'static,
 {
@@ -289,17 +331,29 @@ async fn run_chat_stream<HttpClient>(
     let mut terminal_emitted = false;
 
     // R1: total wall-clock deadline for the entire consume loop.
-    let total_deadline = tokio::time::Instant::now() + CHAT_TOTAL_TIMEOUT;
+    let started = tokio::time::Instant::now();
+    let total_deadline = started + timeouts.total;
 
     loop {
         // R1: per-event idle timeout AND the remaining total budget. We
         // wait on `source.next()` with whichever bound is tighter; on
         // either expiry, discard the buffer and emit a generic error.
-        let next_frame = tokio::time::timeout_at(
-            (tokio::time::Instant::now() + CHAT_IDLE_TIMEOUT).min(total_deadline),
-            source.next(),
-        )
-        .await;
+        // A visitor who has gone (receiver dropped) ends the wait: return
+        // drops `source`, which ends the paid upstream call. Nothing is
+        // sent (no one to receive it) and no completion line is logged.
+        let next_frame = tokio::select! {
+            r = tokio::time::timeout_at(
+                (tokio::time::Instant::now() + timeouts.idle).min(total_deadline),
+                source.next(),
+            ) => r,
+            _ = tx.closed() => {
+                tracing::info!(
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "chat: client disconnected; abandoning upstream stream"
+                );
+                return;
+            }
+        };
 
         let frame_result = match next_frame {
             Ok(Some(frame_result)) => frame_result,
@@ -309,10 +363,11 @@ async fn run_chat_stream<HttpClient>(
                 // DROP buffered_text (do NOT flush partial model text).
                 let timed_out_total = tokio::time::Instant::now() >= total_deadline;
                 tracing::error!(
-                    idle_timeout_secs = CHAT_IDLE_TIMEOUT.as_secs(),
-                    total_timeout_secs = CHAT_TOTAL_TIMEOUT.as_secs(),
+                    idle_timeout_secs = timeouts.idle.as_secs(),
+                    total_timeout_secs = timeouts.total.as_secs(),
                     total_deadline_hit = timed_out_total,
-                    "chat: upstream SSE stalled; discarding buffer and \
+                    "chat: upstream SSE cut off by idle or total deadline \
+                     (see total_deadline_hit); discarding buffer and \
                      emitting degraded error"
                 );
                 buffered_text.clear();
@@ -444,7 +499,22 @@ async fn run_chat_stream<HttpClient>(
                     },
             } => {
                 let mapped = from_anthropic_str(&wire);
-                emit_terminal(&tx, &mapped, &buffered_text).await;
+                // Captured before the flush, which can wait on the client.
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                let outcome = emit_terminal(&tx, &mapped, &buffered_text).await;
+                // #4656: make paid use visible. Logged when the model's
+                // answer was produced (what `emit_terminal` flushes),
+                // whether or not the visitor was still there to receive
+                // it: the upstream call was paid for either way. No
+                // message or response text, no visitor identifier.
+                if outcome.answer_produced {
+                    tracing::info!(
+                        elapsed_ms,
+                        stop_reason = ?mapped,
+                        client_connected = outcome.client_connected,
+                        "chat: completed"
+                    );
+                }
                 terminal_emitted = true;
                 break;
             }
@@ -471,6 +541,16 @@ async fn run_chat_stream<HttpClient>(
     let _ = tx.send(Ok(SseEvent::default().data("[DONE]"))).await;
 }
 
+/// What `emit_terminal` did, for the completion log.
+struct TerminalOutcome {
+    /// The model's answer was flushed (the `EndTurn` / `StopSequence` /
+    /// `PauseTurn` / `MaxTokens` arms). The single source of truth for
+    /// which stop reasons count as a produced answer.
+    answer_produced: bool,
+    /// Every send into the client channel succeeded.
+    client_connected: bool,
+}
+
 /// Emit the buffered content + terminal frame for the dispatched
 /// `StopReason`. Buffer is dropped for `Refusal` / `ContextExceeded` /
 /// `ToolUse` / `Other(_)` per R29 — those paths never surface model text
@@ -479,23 +559,27 @@ async fn emit_terminal(
     tx: &mpsc::Sender<Result<SseEvent, Infallible>>,
     mapped: &StopReason,
     buffered_text: &[String],
-) {
-    match mapped {
+) -> TerminalOutcome {
+    let mut connected = true;
+    let answer_produced = match mapped {
         StopReason::EndTurn | StopReason::StopSequence | StopReason::PauseTurn => {
             for text in buffered_text {
-                let _ = tx.send(Ok(SseEvent::default().data(text))).await;
+                connected &= tx.send(Ok(SseEvent::default().data(text))).await.is_ok();
             }
+            true
         }
         StopReason::MaxTokens => {
             for text in buffered_text {
-                let _ = tx.send(Ok(SseEvent::default().data(text))).await;
+                connected &= tx.send(Ok(SseEvent::default().data(text))).await.is_ok();
             }
             tracing::warn!("anthropic stop_reason=max_tokens; response truncated");
-            let _ = tx
+            connected &= tx
                 .send(Ok(SseEvent::default()
                     .event("truncated")
                     .data(TRUNCATED_CLIENT_MESSAGE)))
-                .await;
+                .await
+                .is_ok();
+            true
         }
         StopReason::Refusal => {
             // R29: discard buffered model text. R17: sanitized log only.
@@ -505,11 +589,13 @@ async fn emit_terminal(
                 raw_model_text = %sanitized,
                 "anthropic stop_reason=refusal; client receives canned message"
             );
-            let _ = tx
+            connected &= tx
                 .send(Ok(SseEvent::default()
                     .event("refusal")
                     .data(REFUSAL_CLIENT_MESSAGE)))
-                .await;
+                .await
+                .is_ok();
+            false
         }
         StopReason::ContextExceeded => {
             let raw_concat: String = buffered_text.join("");
@@ -518,19 +604,23 @@ async fn emit_terminal(
                 raw_model_text = %sanitized,
                 "anthropic stop_reason=context_exceeded; client receives canned message"
             );
-            let _ = tx
+            connected &= tx
                 .send(Ok(SseEvent::default()
                     .event("context_exceeded")
                     .data(CONTEXT_EXCEEDED_CLIENT_MESSAGE)))
-                .await;
+                .await
+                .is_ok();
+            false
         }
         StopReason::ToolUse => {
             tracing::error!("anthropic stop_reason=tool_use; folio is no-tools — unexpected");
-            let _ = tx
+            connected &= tx
                 .send(Ok(SseEvent::default()
                     .event("error")
                     .data("AI response failed. Please try again.")))
-                .await;
+                .await
+                .is_ok();
+            false
         }
         StopReason::Other(value) => {
             // The mapping function already emitted a `warn!` naming the
@@ -540,12 +630,18 @@ async fn emit_terminal(
                 stop_reason = %value,
                 "anthropic stop_reason mapped to Other; client receives generic error"
             );
-            let _ = tx
+            connected &= tx
                 .send(Ok(SseEvent::default()
                     .event("error")
                     .data("AI response failed. Please try again.")))
-                .await;
+                .await
+                .is_ok();
+            false
         }
+    };
+    TerminalOutcome {
+        answer_produced,
+        client_connected: connected,
     }
 }
 
@@ -766,5 +862,213 @@ mod tests {
     #[test]
     fn m2_decoded_lossy_extract_returns_none_when_no_text_anchor() {
         assert_eq!(extract_decoded_text_delta_lossy(r#"{"type":"ping"}"#), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // #4656 — consume-loop bounds, driven with millisecond timeouts through
+    // `stream_chat_with` against a mockito upstream.
+    // -----------------------------------------------------------------------
+
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[derive(Clone, Default)]
+    struct LogSink(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log sink").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl LogSink {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().expect("log sink")).into_owned()
+        }
+    }
+
+    fn capture_logs() -> (LogSink, tracing::subscriber::DefaultGuard) {
+        let sink = LogSink::default();
+        let writer = sink.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_target(false)
+            .without_time()
+            .finish();
+        (sink, tracing::subscriber::set_default(subscriber))
+    }
+
+    const SLOW_MARKER: &str = "UNIT-MODEL-TEXT-4656";
+
+    /// Mock upstream: SSE preamble, then `deltas` text deltas `gap` apart,
+    /// with no terminal frame.
+    async fn drip_upstream(
+        server: &mut mockito::ServerGuard,
+        gap: Duration,
+        deltas: usize,
+    ) -> mockito::Mock {
+        server
+            .mock("POST", "/v1/messages")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| {
+                w.write_all(
+                    b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"x\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+                )?;
+                w.flush()?;
+                for _ in 0..deltas {
+                    std::thread::sleep(gap);
+                    w.write_all(
+                        format!("event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{SLOW_MARKER}\"}}}}\n\n")
+                            .as_bytes(),
+                    )?;
+                    w.flush()?;
+                }
+                Ok(())
+            })
+            .create_async()
+            .await
+    }
+
+    fn test_client(base_url: &str) -> anthropic::Client {
+        anthropic::Client::builder()
+            .api_key("test-key-not-used-mockito-intercepts")
+            .base_url(base_url)
+            .build()
+            .expect("client must build")
+    }
+
+    /// Frames arrive every 100 ms for 5 s against a 700 ms total cap and a
+    /// 30 s idle bound, so the idle bound cannot fire however slow the
+    /// producer thread is: only the TOTAL deadline can end this early. With
+    /// `.min(total_deadline)` removed the stream runs its full 5 s and
+    /// ends in a transport close, which overshoots the 4 s bound.
+    #[tokio::test]
+    async fn total_deadline_cuts_a_stream_whose_frames_keep_arriving_inside_the_idle_bound() {
+        let (logs, _guard) = capture_logs();
+        let mut server = mockito::Server::new_async().await;
+        let _mock = drip_upstream(&mut server, Duration::from_millis(100), 50).await;
+        let timeouts = ChatTimeouts {
+            idle: Duration::from_secs(30),
+            total: Duration::from_millis(700),
+        };
+
+        let mut rx = stream_chat_with(&test_client(&server.url()), "m", "p", "hi", 10, timeouts)
+            .expect("stream starts");
+        let started = std::time::Instant::now();
+        let mut events = Vec::new();
+        while let Some(Ok(ev)) = rx.recv().await {
+            events.push(format!("{ev:?}"));
+        }
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "stream must be cut near the 700 ms total, not run its 5 s; {elapsed:?}"
+        );
+        assert_eq!(events.len(), 2, "error then [DONE] only; events={events:?}");
+        assert!(events[0].contains("event: error"), "events={events:?}");
+        assert!(events[1].contains("[DONE]"), "events={events:?}");
+        assert!(
+            !events.iter().any(|e| e.contains(SLOW_MARKER)),
+            "buffered model text MUST be discarded; events={events:?}"
+        );
+        let logs = logs.text();
+        assert!(logs.contains("total_deadline_hit=true"), "logs={logs}");
+        assert!(!logs.contains("chat: completed"), "logs={logs}");
+    }
+
+    /// A visitor who leaves (receiver dropped) ends the consume task and
+    /// its upstream call promptly, with no completion line.
+    #[tokio::test]
+    async fn dropped_receiver_ends_the_task_before_the_stream_would_have_finished() {
+        let (logs, _guard) = capture_logs();
+        let mut server = mockito::Server::new_async().await;
+        // 5 s of upstream frames; the idle/total bounds are far above that
+        // so only the disconnect can end the task early.
+        let _mock = drip_upstream(&mut server, Duration::from_millis(100), 50).await;
+        let timeouts = ChatTimeouts {
+            idle: Duration::from_secs(10),
+            total: Duration::from_secs(30),
+        };
+
+        let rx = stream_chat_with(&test_client(&server.url()), "m", "p", "hi", 10, timeouts)
+            .expect("stream starts");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(rx);
+        let dropped_at = std::time::Instant::now();
+
+        while dropped_at.elapsed() < Duration::from_millis(2500)
+            && !logs.text().contains("chat: client disconnected")
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Read once more after the loop: a stalled thread must not miss a
+        // line that is already present.
+        let logs = logs.text();
+        assert!(
+            logs.contains("chat: client disconnected"),
+            "task must notice the dropped receiver within 2.5 s (stream runs 5 s); logs={logs}"
+        );
+        assert!(logs.contains("elapsed_ms="), "logs={logs}");
+        assert!(!logs.contains("chat: completed"), "logs={logs}");
+        assert!(!logs.contains(SLOW_MARKER), "logs={logs}");
+    }
+
+    /// An upstream that stalls after the preamble is cut by the IDLE bound
+    /// (200 ms) long before the 30 s total, and the log says so.
+    #[tokio::test]
+    async fn idle_stall_is_logged_as_not_the_total_deadline() {
+        let (logs, _guard) = capture_logs();
+        let mut server = mockito::Server::new_async().await;
+        // One delta, 2 s after the preamble: the stream is silent until then.
+        let _mock = drip_upstream(&mut server, Duration::from_secs(2), 1).await;
+        let timeouts = ChatTimeouts {
+            idle: Duration::from_millis(200),
+            total: Duration::from_secs(30),
+        };
+
+        let mut rx = stream_chat_with(&test_client(&server.url()), "m", "p", "hi", 10, timeouts)
+            .expect("stream starts");
+        let mut events = Vec::new();
+        while let Some(Ok(ev)) = rx.recv().await {
+            events.push(format!("{ev:?}"));
+        }
+
+        assert_eq!(events.len(), 2, "error then [DONE] only; events={events:?}");
+        assert!(events[0].contains("event: error"), "events={events:?}");
+        let logs = logs.text();
+        assert!(logs.contains("total_deadline_hit=false"), "logs={logs}");
+        assert!(!logs.contains("total_deadline_hit=true"), "logs={logs}");
+    }
+
+    /// `client_connected` is false when the receiver is already gone, and
+    /// the answer still counts as produced (the upstream call was paid for).
+    #[tokio::test]
+    async fn emit_terminal_reports_client_gone_but_answer_produced() {
+        let (tx, rx) = mpsc::channel::<Result<SseEvent, Infallible>>(SSE_CHANNEL_CAPACITY);
+        drop(rx);
+
+        let outcome = emit_terminal(&tx, &StopReason::EndTurn, &["hello".to_string()]).await;
+
+        assert!(outcome.answer_produced);
+        assert!(!outcome.client_connected);
+    }
+
+    /// Counterpart: a live receiver reports connected.
+    #[tokio::test]
+    async fn emit_terminal_reports_client_connected_when_receiver_is_live() {
+        let (tx, mut rx) = mpsc::channel::<Result<SseEvent, Infallible>>(SSE_CHANNEL_CAPACITY);
+
+        let outcome = emit_terminal(&tx, &StopReason::EndTurn, &["hello".to_string()]).await;
+
+        assert!(outcome.answer_produced);
+        assert!(outcome.client_connected);
+        assert!(rx.recv().await.is_some());
     }
 }
