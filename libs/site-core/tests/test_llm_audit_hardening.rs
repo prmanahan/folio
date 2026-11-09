@@ -76,12 +76,11 @@ const ROUTES_AI_RS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/routes/ai.rs");
 // a terminal frame within the idle bound → fails by assertion.
 // ===========================================================================
 
-/// Upper bound the handler MUST beat. The spec lets Forge pick the actual
-/// timeout in the "single-digit to low-tens of seconds" band. We assert the
-/// handler returns the degraded error in well under this bound; the bound
-/// is deliberately generous (any sane timeout < 25s) so it holds for any
-/// in-band value Forge picks while still failing hard against the no-timeout
-/// status quo (which would hang for the full stall duration).
+/// Upper bound the CHAT handler MUST beat (R1(b) only; the fit handler's
+/// bound is `R1A_FIT_WALL_CLOCK_BOUND` below). Chat's idle (12 s) and
+/// total (20 s) deadlines both sit under this; it is deliberately generous
+/// so it still fails hard against the no-timeout status quo (which would
+/// hang for the full stall duration).
 const R1_WALL_CLOCK_BOUND: Duration = Duration::from_secs(25);
 
 /// How long the mock upstream stalls. Longer than any plausible in-band
@@ -90,30 +89,39 @@ const R1_WALL_CLOCK_BOUND: Duration = Duration::from_secs(25);
 /// teardown indefinitely.
 const R1_STALL: Duration = Duration::from_secs(40);
 
+/// Fit-only bound (task #3633): `FIT_PROMPT_TIMEOUT` is 55 s, 5 s under
+/// the router's 60 s `REQUEST_TIMEOUT_SECS`, so the 25 s / 40 s pair above
+/// no longer applies to the fit handler. The bound sits above 55 s and
+/// below the stall; the stall exceeds the bound so the handler's own
+/// timeout, not the mock, ends the request.
+const R1A_FIT_WALL_CLOCK_BOUND: Duration = Duration::from_secs(60);
+const R1A_FIT_STALL: Duration = Duration::from_secs(70);
+
 /// R1(a): fit handler — upstream never sends a terminal frame.
 ///
 /// Given a mock /v1/messages that accepts the request then stalls (never
 ///   completes the response body) for longer than any in-band timeout
 /// When a client POSTs /api/fit
-/// Then the fit handler returns an error response WITHIN R1_WALL_CLOCK_BOUND
+/// Then the fit handler returns an error response WITHIN R1A_FIT_WALL_CLOCK_BOUND
 ///   (a degraded/canned error — NOT a hang, NOT raw upstream text)
 ///
 /// Red-phase: with no `tokio::time::timeout` around the fit await, the
-/// handler blocks on the stalled upstream for the full R1_STALL (40s),
-/// far exceeding the 25s bound → the elapsed-time assertion fails.
+/// handler blocks on the stalled upstream for the full R1A_FIT_STALL (70s),
+/// far exceeding the 60s bound → the elapsed-time assertion fails.
 #[tokio::test]
 async fn r1a_fit_handler_returns_degraded_error_within_wall_clock_bound_when_upstream_never_terminates()
  {
     let mut server = mockito::Server::new_async().await;
-    let _mock = server
+    let mock = server
         .mock("POST", "/v1/messages")
+        .expect(1)
         .with_status(200)
         .with_header("content-type", "application/json")
         // Body closure runs on a dedicated OS thread (mockito ChunkedStream).
         // Sleep BEFORE writing anything → the response never terminates
         // within the handler's deadline.
         .with_chunked_body(|_w| {
-            std::thread::sleep(R1_STALL);
+            std::thread::sleep(R1A_FIT_STALL);
             Ok(())
         })
         .create_async()
@@ -129,20 +137,74 @@ async fn r1a_fit_handler_returns_degraded_error_within_wall_clock_bound_when_ups
     let elapsed = start.elapsed();
 
     assert!(
-        elapsed < R1_WALL_CLOCK_BOUND,
-        "R1(a): fit handler MUST return within {R1_WALL_CLOCK_BOUND:?} when \
+        elapsed < R1A_FIT_WALL_CLOCK_BOUND,
+        "R1(a): fit handler MUST return within {R1A_FIT_WALL_CLOCK_BOUND:?} when \
          the upstream stalls — observed {elapsed:?} (no-timeout status quo \
-         hangs for the full {R1_STALL:?} stall)"
+         hangs for the full {R1A_FIT_STALL:?} stall)"
     );
 
-    // It must be an error status (degraded surface), not a 200, and the
-    // body must not carry raw upstream text.
-    assert!(
-        response.status_code().is_server_error() || response.status_code().is_client_error(),
-        "R1(a): a stalled upstream MUST yield an error status (degraded \
-         surface), got {}",
-        response.status_code()
+    // The timeout surface is exactly the opaque 500 — not a 408 from the
+    // router backstop, not a 200, and no upstream text.
+    assert_eq!(
+        response.status_code(),
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "R1(a): a stalled upstream MUST yield the degraded 500"
     );
+    assert_eq!(
+        response.json::<Value>(),
+        serde_json::json!({ "error": "AI request failed. Please try again later." }),
+        "R1(a): the body MUST be the fixed opaque error"
+    );
+    // The request actually reached the mock (the stall was exercised).
+    mock.assert_async().await;
+}
+
+/// How long the mock upstream takes before answering validly. Between the
+/// old 12 s cap and the current 55 s one: the regression this guards
+/// (#3633) is a real completion slower than the cap being turned into a 500.
+const R1A_SLOW_SUCCESS_DELAY: Duration = Duration::from_secs(17);
+
+/// R1(a) counterpart (#3633): a slow but valid upstream is NOT cut off.
+///
+/// Given a mock /v1/messages that takes 17 s, then returns a valid fit
+///   response
+/// When a client POSTs /api/fit
+/// Then the response is 200 with the parsed verdict
+///
+/// Fails if `FIT_PROMPT_TIMEOUT` goes back to 12 s (handler returns 500).
+#[tokio::test]
+async fn r1a_fit_handler_returns_verdict_when_upstream_is_slow_but_valid() {
+    let body = anthropic_messages_response(valid_fit_verdict_json(), "end_turn");
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .expect(1)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_chunked_body(move |w| {
+            std::thread::sleep(R1A_SLOW_SUCCESS_DELAY);
+            w.write_all(body.as_bytes())?;
+            w.flush()
+        })
+        .create_async()
+        .await;
+
+    let app = ai_test_app_with_mock(&server.url());
+    let response = app
+        .post("/api/fit")
+        .json(&serde_json::json!({ "job_description": "Anything" }))
+        .await;
+
+    assert_eq!(
+        response.status_code(),
+        axum::http::StatusCode::OK,
+        "a valid upstream answer after {R1A_SLOW_SUCCESS_DELAY:?} MUST be delivered, \
+         not cut off by the fit timeout"
+    );
+    let verdict = response.json::<Value>();
+    assert_eq!(verdict["verdict"], "strong-fit");
+    assert_eq!(verdict["headline"], "Strong match");
+    mock.assert_async().await;
 }
 
 /// R1(b): chat handler — upstream stalls mid-stream.

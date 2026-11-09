@@ -86,7 +86,13 @@ pub fn check_rate_limit_with_ceiling(
 ) -> Result<(), AppError> {
     check_rate_limit(conn, ip, endpoint, max_requests)?;
     let global_endpoint = format!("{endpoint}:global_ceiling");
-    check_rate_limit(conn, GLOBAL_CEILING_BUCKET, &global_endpoint, ceiling)
+    check_rate_limit(conn, GLOBAL_CEILING_BUCKET, &global_endpoint, ceiling).inspect_err(|e| {
+        // #3633: a ceiling denial is the site-wide spend cap firing.
+        // Names the endpoint and the ceiling only — no client address.
+        if matches!(e, AppError::RateLimited(_)) {
+            tracing::warn!(endpoint, ceiling, "hourly ceiling denied a request");
+        }
+    })
 }
 
 #[cfg(test)]
