@@ -1,0 +1,103 @@
+name: Dependency advisories
+
+# Deliberately NOT a job in test.yml. deploy.yml reuses that job on every push
+# to main, so a check there would let a newly published advisory stop a deploy,
+# including the deploy of the fix for it. This workflow shares nothing with the
+# deploy path and must never be made a required status check: it is
+# path-filtered on pull_request, and a required check that never reports hangs
+# every PR that does not touch those paths. (The protect-main ruleset requires
+# only "Test & Lint".)
+#
+# Three triggers, three jobs to do:
+#   pull_request  - a PR that changes a manifest, lockfile or .npmrc is checked
+#                   before it merges.
+#   schedule      - catches advisories published against a tree nobody touched.
+#                   This is the trigger that matters: advisories arrive on
+#                   someone else's schedule. A failed scheduled run notifies the
+#                   user who created this workflow, or who last edited the cron
+#                   line below; if the schedule is disabled and re-enabled, it
+#                   notifies whoever re-enabled it. Editing the cron changes
+#                   who is told.
+#   workflow_dispatch - run it by hand.
+#
+# GitHub disables scheduled workflows in a public repository after 60 days
+# with no repository activity; nothing here detects that.
+#
+# Waivers: .cargo/audit.toml is the one deliberate place to waive a cargo-audit
+# advisory. Anything ignored there is ignored by this workflow too.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - package.json
+      - package-lock.json
+      - .npmrc
+      - frontend/package.json
+      - frontend/package-lock.json
+      - frontend/.npmrc
+      - .github/workflows/audit.yml
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Direct download, verified against a hash written here. No third-party
+      # action runs, and there is no fallback path: a hash mismatch or a 404
+      # fails the step. The hash is the sha256 of the release asset, matching
+      # the digest GitHub reports for it. Bumping means changing the version
+      # and the hash together. The advisory database is the one thing that is
+      # NOT pinned: it is fetched live, because a stale database is a check
+      # that cannot fail.
+      - name: Install cargo-audit
+        run: |
+          asset=cargo-audit-x86_64-unknown-linux-musl-v0.22.1
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$RUNNER_TEMP/$asset.tgz" "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.1/$asset.tgz"
+          echo "c32506f338bdcdaef5a17fb9f33abb6ecf9561324cfd34237fd335f9283a1eab  $RUNNER_TEMP/$asset.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$asset.tgz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$asset" >> "$GITHUB_PATH"
+
+      # Invoked as the binary, not `cargo audit`: the repo's rust-toolchain.toml
+      # would make cargo download a full 1.98.0 toolchain just to run a tool
+      # that only reads Cargo.lock. Exits 1 on any vulnerability; unmaintained
+      # and yanked warnings are printed and do not fail the run.
+      - name: cargo audit
+        run: cargo-audit audit
+
+      # `--audit-level=high` is required, not a preference: the frontend tree
+      # carries low and moderate findings that cannot be fixed without a
+      # breaking SvelteKit upgrade.
+      # `--no-offline` and the explicit registry are fail-closed guards: a
+      # tracked .npmrc with `offline=true` or a stub registry would otherwise
+      # make npm print "found 0 vulnerabilities" and exit 0 on a lockfile with
+      # a critical advisory. `--package-lock-only` guards against
+      # `package-lock=false` in .npmrc, which would make npm audit ignore the
+      # lockfile. `--include=dev` guards against `omit=dev` in .npmrc, which
+      # would drop nearly the whole tree (frontend/ has 1 dependency and 22
+      # devDependencies). No package script runs with or without these flags;
+      # nothing is installed. `!cancelled()` so a failure in one step does not
+      # hide the next.
+      - name: npm audit (frontend)
+        if: ${{ !cancelled() }}
+        working-directory: frontend
+        run: npm audit --audit-level=high --package-lock-only --include=dev --no-offline --registry=https://registry.npmjs.org/
+
+      # Root manifest: Playwright and axe, which run e2e from the repo root.
+      - name: npm audit (root, e2e tooling)
+        if: ${{ !cancelled() }}
+        run: npm audit --audit-level=high --package-lock-only --include=dev --no-offline --registry=https://registry.npmjs.org/
