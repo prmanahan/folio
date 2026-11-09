@@ -12,7 +12,7 @@
 # test.yml gives PR authors fast feedback without deploy side effects.
 #
 # Required secret: FLY_API_TOKEN, an Environment secret on `production` (deployment
-# branch policy: main only), generate with: fly tokens create deploy -a folio-prmanahan
+# branch policy: main only), generate with: fly tokens create deploy -a folio-prmanahan -x 8760h
 
 name: Deploy
 
