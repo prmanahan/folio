@@ -11,7 +11,8 @@
 # On push to main, this workflow runs the full test+deploy sequence.
 # test.yml gives PR authors fast feedback without deploy side effects.
 #
-# Required secret: FLY_API_TOKEN (repo secret, generate with: fly tokens create deploy)
+# Required secret: FLY_API_TOKEN, an Environment secret on `production` (deployment
+# branch policy: main only), generate with: fly tokens create deploy -a folio-prmanahan
 
 name: Deploy
 
@@ -82,6 +83,7 @@ jobs:
     name: Deploy to Fly.io
     runs-on: ubuntu-latest
     needs: [test]
+    environment: production
 
     steps:
       - uses: actions/checkout@v6.0.2
