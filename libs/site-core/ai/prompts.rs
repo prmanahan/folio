@@ -1,4 +1,4 @@
-// Template for the main system prompt. Placeholders are replaced by build_system_prompt().
+// Template for the main system prompt. Placeholders are replaced by build_base_prompt() (shared by chat and fit).
 // The actual prompt is built programmatically in context.rs. The constants below are section
 // delimiters and the fit-wrapper template that are used verbatim.
 

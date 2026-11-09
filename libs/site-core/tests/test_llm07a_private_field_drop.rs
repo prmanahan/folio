@@ -6,7 +6,7 @@
 //!
 //! The DB still stores `would_do_differently`, `manager_would_say`,
 //! `honest_notes` (admin-managed data). Only the prompt-construction path
-//! (`ai/context.rs::build_system_prompt`) must stop reading them. These
+//! (`ai/context.rs::build_base_prompt`, via `build_system_prompt`) must stop reading them. These
 //! tests assert the *constructed prompt string* and the *construction code
 //! path*, never the storage layer — schema columns / struct fields / admin
 //! CRUD are explicitly out of scope and stay.

@@ -79,3 +79,14 @@ pub const RESPONSE_GUIDELINES: &str = "\n## RESPONSE GUIDELINES\n\
 - Keep responses compressed unless detail is requested\n\
 - Be upfront about gaps and limitations\n\
 - If a role is clearly not a fit, say so directly\n";
+
+// Chat only (#4656): fit shares RESPONSE_GUIDELINES via the base prompt and must not get this.
+// Estimate, n=3 long prompts on 2026-11-09: ~27 words/s, so the 45 s chat cap is ~1,200 words
+// (27 x 45), ignoring time to first token. Chat is stateless (one user message per request, no
+// history), so the model must never ask a yes/no follow-up: a bare "yes" arrives with no context.
+pub const CHAT_LENGTH_LIMIT: &str = "\
+- Keep every response under about 700 words, even when the visitor asks for more detail or a full walkthrough. \
+If a question needs more, give the most useful ~700 words, name the parts you left out, \
+and suggest a complete question the visitor can ask about one of them. \
+Say that each message is answered without memory of earlier ones, so the question must stand alone. \
+Never ask a yes/no follow-up such as \"want me to go deeper?\"\n";
