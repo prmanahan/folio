@@ -1,15 +1,16 @@
 use axum::{
-    Json,
-    extract::State,
+    Extension, Json,
+    extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use tracing;
 
 use crate::error::AppError;
-use crate::middleware::global_rate_limit::normalize_rate_limit_key;
+use crate::middleware::global_rate_limit::extract_ip_for_rate_limit;
 use crate::state::DbState;
 
 #[derive(Deserialize)]
@@ -141,52 +142,24 @@ pub async fn require_auth(
     next.run(request).await
 }
 
-/// Extract client IP from request headers.
-///
-/// Priority: `trusted_header` (configured via `TRUSTED_IP_HEADER` env var, e.g.
-/// `fly-client-ip` on Fly.io) → `x-forwarded-for` (fallback for local dev) → "unknown".
-///
-/// Task #3558 (F2): every candidate is normalised through the same
-/// `normalize_rate_limit_key` the global limiter and `page_hits` use
-/// (IPv6 → /64), so this second, older extractor can't drift from them
-/// on that one point. It otherwise keeps its own pre-existing shape
-/// (no `ConnectInfo` peer-addr fallback) — converging the rest of it
-/// with `extract_ip_for_rate_limit` changes an authentication path and
-/// stays out of this task's scope.
-fn extract_client_ip(headers: &HeaderMap, trusted_header: Option<&str>) -> String {
-    // Prefer the configured trusted header (proxy-injected, not spoofable by clients).
-    if let Some(header_name) = trusted_header
-        && let Some(val) = headers.get(header_name)
-        && let Ok(val_str) = val.to_str()
-    {
-        let trimmed = val_str.trim();
-        if !trimmed.is_empty() {
-            return normalize_rate_limit_key(trimmed.to_string());
-        }
-    }
-    // Fall back to X-Forwarded-For for local dev (no proxy).
-    if let Some(forwarded) = headers.get("x-forwarded-for")
-        && let Ok(val) = forwarded.to_str()
-        && let Some(first_ip) = val.split(',').next()
-    {
-        let trimmed = first_ip.trim();
-        if !trimmed.is_empty() {
-            return normalize_rate_limit_key(trimmed.to_string());
-        }
-    }
-    "unknown".to_string()
-}
-
-#[tracing::instrument(skip(state, headers, payload))]
+#[tracing::instrument(skip_all)]
 pub async fn login(
     State(state): State<DbState>,
+    // `ConnectInfo` is absent when the server is not built with
+    // `into_make_service_with_connect_info` (some test harnesses); the
+    // shared extractor then falls back to "unknown" only as a last resort.
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<(StatusCode, Json<LoginResponse>), AppError> {
     // Rate limit: 5 failed attempts per IP per hour
     // Check is before password verification so brute force is blocked,
     // but only failed attempts increment the counter (below).
-    let ip = extract_client_ip(&headers, state.trusted_ip_header.as_deref());
+    // Keyed by the same extractor as every other limiter (#3482): a
+    // configured-but-absent trusted header falls to the peer address,
+    // never the client-controlled x-forwarded-for.
+    let peer_addr = connect_info.map(|Extension(ConnectInfo(addr))| addr);
+    let ip = extract_ip_for_rate_limit(&headers, state.trusted_ip_header.as_deref(), peer_addr);
     {
         let conn = state
             .db
@@ -323,55 +296,4 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
 
 fn is_leap(year: u64) -> bool {
     (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Task #3558 (F2): two IPv6 addresses in the same /64, presented via
-    /// the trusted header, must key the login-failure limiter identically
-    /// — the same guarantee `extract_ip_for_rate_limit` already gives the
-    /// global limiter, `page_hits` and the AI routes.
-    #[test]
-    fn ipv6_trusted_header_is_normalized_to_64() {
-        let mut headers_a = HeaderMap::new();
-        headers_a.insert(
-            "cf-connecting-ip",
-            "2001:db8:1234:5678:aaaa:bbbb:cccc:0001".parse().unwrap(),
-        );
-        let mut headers_b = HeaderMap::new();
-        headers_b.insert(
-            "cf-connecting-ip",
-            "2001:db8:1234:5678:ffff:ffff:ffff:ffff".parse().unwrap(),
-        );
-
-        let key_a = extract_client_ip(&headers_a, Some("cf-connecting-ip"));
-        let key_b = extract_client_ip(&headers_b, Some("cf-connecting-ip"));
-
-        assert_eq!(
-            key_a, key_b,
-            "two addresses in the same /64 must key the login limiter identically"
-        );
-        assert_eq!(key_a, "2001:db8:1234:5678::");
-    }
-
-    #[test]
-    fn ipv6_xff_fallback_is_also_normalized_to_64() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "2001:db8:1234:5678::1".parse().unwrap());
-
-        assert_eq!(extract_client_ip(&headers, None), "2001:db8:1234:5678::");
-    }
-
-    #[test]
-    fn ipv4_trusted_header_is_not_truncated() {
-        let mut headers = HeaderMap::new();
-        headers.insert("cf-connecting-ip", "203.0.113.9".parse().unwrap());
-
-        assert_eq!(
-            extract_client_ip(&headers, Some("cf-connecting-ip")),
-            "203.0.113.9"
-        );
-    }
 }

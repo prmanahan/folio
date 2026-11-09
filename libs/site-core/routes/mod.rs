@@ -56,3 +56,47 @@ pub fn public_router() -> Router<DbState> {
         .merge(faq::routes())
         .merge(agents::routes())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+    use rusqlite::Connection;
+    use std::sync::{Arc, Mutex};
+
+    fn state() -> DbState {
+        Arc::new(AppState {
+            db: Arc::new(Mutex::new(Connection::open_in_memory().unwrap())),
+            admin_password_hash: crate::test_password::password_hash(),
+            rig_client: None,
+            trusted_ip_header: None,
+            page_hit_salt: "test-salt".to_string(),
+        })
+    }
+
+    #[test]
+    fn health_check_body_ok_when_db_responds() {
+        assert_eq!(health_check_body(&state()), (StatusCode::OK, "ok"));
+    }
+
+    /// #3486: a panic while holding the db lock poisons it permanently. The
+    /// health endpoint must report 503 rather than panic, because Fly's
+    /// health check is what decides the machine is alive.
+    #[test]
+    fn health_check_body_returns_503_when_db_lock_poisoned() {
+        let state = state();
+        let db = Arc::clone(&state.db);
+        let joined = std::thread::spawn(move || {
+            let _guard = db.lock().unwrap();
+            panic!("poison the db lock");
+        })
+        .join();
+        assert!(joined.is_err(), "setup: thread must have panicked");
+        assert!(state.db.is_poisoned(), "setup: lock must be poisoned");
+
+        assert_eq!(
+            health_check_body(&state),
+            (StatusCode::SERVICE_UNAVAILABLE, "db unavailable")
+        );
+    }
+}
