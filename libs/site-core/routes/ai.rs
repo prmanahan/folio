@@ -49,16 +49,17 @@ const AI_INTERNAL_OPAQUE_MESSAGE: &str = "AI request failed. Please try again la
 /// LLM-audit M1 / R1: deadline on the fit handler's single buffered
 /// `agent.prompt(...).await`.
 ///
-/// 55 s (task #3633; was 12 s). Production `/api/fit` returned 500 at 12.1
-/// to 14.0 s, and the Fly log of 2026-09-16 showed the fit prompt timing
-/// out; the true completion time is unmeasured. Peter signed off 55 s
-/// against the locked spec, to be lowered to measured time plus a margin
-/// after production timing. The outer ceiling is `REQUEST_TIMEOUT_SECS`
+/// 45 s (task #3633; was 12 s, then 55 s). With the old 12 s cap,
+/// production `/api/fit` returned 500 at 12.1 to 14.0 s. With the cap
+/// lifted, four production requests on 2026-11-09 all returned 200 with a
+/// complete verdict in 15.90, 15.94, 19.28 and 29.94 s. That is four
+/// samples, slowest 29.94 s, not a p99; 45 s is measured time plus
+/// margin, as Peter signed off. The outer ceiling is `REQUEST_TIMEOUT_SECS`
 /// = 60 s in `app.rs`; the const assert below keeps this under it so the
 /// handler's own degraded error wins over the router's bare 408. On
 /// expiry the handler returns the existing degraded `AppError::Internal`
 /// surface (fixed opaque client string — never raw upstream text).
-const FIT_PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
+const FIT_PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 // Compile-time tie to the router backstop: raising this past the outer
 // timeout would hand the visitor a bare 408 instead of the degraded error.
