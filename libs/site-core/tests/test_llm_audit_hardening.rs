@@ -89,13 +89,13 @@ const R1_WALL_CLOCK_BOUND: Duration = Duration::from_secs(25);
 /// teardown indefinitely.
 const R1_STALL: Duration = Duration::from_secs(40);
 
-/// Fit-only bound (task #3633): `FIT_PROMPT_TIMEOUT` is 55 s, 5 s under
-/// the router's 60 s `REQUEST_TIMEOUT_SECS`, so the 25 s / 40 s pair above
-/// no longer applies to the fit handler. The bound sits above 55 s and
-/// below the stall; the stall exceeds the bound so the handler's own
-/// timeout, not the mock, ends the request.
-const R1A_FIT_WALL_CLOCK_BOUND: Duration = Duration::from_secs(60);
-const R1A_FIT_STALL: Duration = Duration::from_secs(70);
+/// Fit-only bound (task #3633): `FIT_PROMPT_TIMEOUT` is 45 s, so the
+/// 25 s / 40 s pair above no longer applies to the fit handler. The bound
+/// sits 7 s above 45 s (slack for a loaded machine) and below the stall;
+/// the stall exceeds the bound so the handler's own timeout, not the mock,
+/// ends the request.
+const R1A_FIT_WALL_CLOCK_BOUND: Duration = Duration::from_secs(52);
+const R1A_FIT_STALL: Duration = Duration::from_secs(65);
 
 /// R1(a): fit handler — upstream never sends a terminal frame.
 ///
@@ -106,8 +106,8 @@ const R1A_FIT_STALL: Duration = Duration::from_secs(70);
 ///   (a degraded/canned error — NOT a hang, NOT raw upstream text)
 ///
 /// Red-phase: with no `tokio::time::timeout` around the fit await, the
-/// handler blocks on the stalled upstream for the full R1A_FIT_STALL (70s),
-/// far exceeding the 60s bound → the elapsed-time assertion fails.
+/// handler blocks on the stalled upstream for the full R1A_FIT_STALL (65s),
+/// far exceeding the 52s bound → the elapsed-time assertion fails.
 #[tokio::test]
 async fn r1a_fit_handler_returns_degraded_error_within_wall_clock_bound_when_upstream_never_terminates()
  {
@@ -160,7 +160,7 @@ async fn r1a_fit_handler_returns_degraded_error_within_wall_clock_bound_when_ups
 }
 
 /// How long the mock upstream takes before answering validly. Between the
-/// old 12 s cap and the current 55 s one: the regression this guards
+/// old 12 s cap and the current 45 s one: the regression this guards
 /// (#3633) is a real completion slower than the cap being turned into a 500.
 const R1A_SLOW_SUCCESS_DELAY: Duration = Duration::from_secs(17);
 

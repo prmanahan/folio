@@ -31,7 +31,7 @@ Each requirement is `file:line` anchored to the audit. Line numbers are at the p
 2. For chat, add **both** a per-event idle deadline (timeout around `source.next()`) **and** a total wall-clock cap on `run_chat_stream`. On expiry, emit the existing generic `event: error` + `[DONE]` and discard the SSE buffer (same path as refusal/context-exceeded).
 3. Install a `tower_http::timeout::TimeoutLayer` in `main.rs` as the outer backstop.
 
-`N` (the fit timeout) is 55 seconds, signed off by Peter on 2026-11-09 under #3633, to be lowered to measured time plus a margin after production timing; chat idle/total values: single-digit to low-tens of seconds idle, total bounded well under any proxy/LB timeout, chosen values and reasoning stated in the completion report.
+`N` (the fit timeout) is 45 seconds, signed off by Peter on 2026-11-09 under #3633 as measured time plus a margin (four production samples that day: 15.90, 15.94, 19.28 and 29.94 s, slowest 29.94 s; not a p99); chat idle/total values: single-digit to low-tens of seconds idle, total bounded well under any proxy/LB timeout, chosen values and reasoning stated in the completion report.
 
 **Acceptance.**
 - A mock upstream that never sends a terminal frame causes the fit handler to return the degraded error within the configured bound (asserted on wall-clock, not just "the timeout value is configured").
