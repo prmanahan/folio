@@ -289,6 +289,7 @@ async fn chat_handler_emits_event_refusal_with_canned_data_on_refusal_stop_reaso
         .create_async()
         .await;
 
+    let (buf, _guard) = install_log_capture();
     let app = ai_test_app_with_mock(&server.url());
     let response = app
         .post("/api/chat")
@@ -314,6 +315,8 @@ async fn chat_handler_emits_event_refusal_with_canned_data_on_refusal_stop_reaso
         "response body MUST NOT contain raw model text on refusal (R29); body={}",
         body_str
     );
+    // #4656: a refusal is not a completed answer.
+    assert_eq!(buf.count("chat: completed"), 0, "logs={}", buf.captured());
 }
 
 // ===========================================================================
@@ -341,6 +344,7 @@ async fn chat_handler_emits_event_context_exceeded_with_canned_data_on_model_con
         .create_async()
         .await;
 
+    let (buf, _guard) = install_log_capture();
     let app = ai_test_app_with_mock(&server.url());
     let response = app
         .post("/api/chat")
@@ -363,6 +367,8 @@ async fn chat_handler_emits_event_context_exceeded_with_canned_data_on_model_con
         "response body MUST NOT contain raw model text (R29); body={}",
         body_str
     );
+    // #4656: a context-exceeded stop is not a completed answer.
+    assert_eq!(buf.count("chat: completed"), 0, "logs={}", buf.captured());
 }
 
 // ===========================================================================
@@ -388,6 +394,7 @@ async fn chat_handler_emits_event_truncated_with_canned_data_on_max_tokens() {
         .create_async()
         .await;
 
+    let (buf, _guard) = install_log_capture();
     let app = ai_test_app_with_mock(&server.url());
     let response = app
         .post("/api/chat")
@@ -416,6 +423,12 @@ async fn chat_handler_emits_event_truncated_with_canned_data_on_max_tokens() {
         "event:truncated data MUST be the canned message"
     );
     assert_terminates_with_done(&frames);
+
+    // #4656: a truncated answer was still produced and delivered.
+    let logs = buf.captured();
+    assert_eq!(buf.count("chat: completed"), 1, "logs={logs}");
+    assert!(logs.contains("stop_reason=MaxTokens"), "logs={logs}");
+    assert!(logs.contains("client_connected=true"), "logs={logs}");
 }
 
 // ===========================================================================

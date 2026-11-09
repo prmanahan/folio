@@ -77,10 +77,10 @@ const ROUTES_AI_RS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/routes/ai.rs");
 // ===========================================================================
 
 /// Upper bound the CHAT handler MUST beat (R1(b) only; the fit handler's
-/// bound is `R1A_FIT_WALL_CLOCK_BOUND` below). Chat's idle (12 s) and
-/// total (20 s) deadlines both sit under this; it is deliberately generous
-/// so it still fails hard against the no-timeout status quo (which would
-/// hang for the full stall duration).
+/// bound is `R1A_FIT_WALL_CLOCK_BOUND` below). Chat's idle deadline (12 s)
+/// ends the R1(b) stall under this (its 45 s total cap does not, #4656);
+/// it is deliberately generous so it still fails hard against the
+/// no-timeout status quo (which would hang for the full stall duration).
 const R1_WALL_CLOCK_BOUND: Duration = Duration::from_secs(25);
 
 /// How long the mock upstream stalls. Longer than any plausible in-band
@@ -296,6 +296,128 @@ async fn r1b_chat_handler_emits_error_and_done_within_idle_bound_and_discards_pa
         "R1(b): partial model text MUST NOT reach the client when the \
          stream is cut by the idle timeout (R29 — buffer discarded); \
          body={body_str}"
+    );
+}
+
+/// Gap between content deltas in the slow-success chat test. Under the 12 s
+/// idle bound; four gaps put the last frame at ~24 s, past the old 20 s
+/// total cap and well under the current one.
+const R1B_SLOW_SUCCESS_GAP: Duration = Duration::from_secs(6);
+const R1B_SLOW_SUCCESS_DELTAS: usize = 4;
+
+/// R1(b) counterpart (#4656): a slow but live chat stream is NOT cut off.
+///
+/// Given a mock that keeps sending content deltas every 6 s (never idle
+///   for 12 s) and finishes with `end_turn` after ~24 s in total
+/// When a client POSTs /api/chat
+/// Then the client receives every delta in order, no `event: error`, and
+///   `[DONE]`; and the server logs `chat: completed` with `elapsed_ms`
+///   and `stop_reason`, and none of the model text
+///
+/// Fails while `CHAT_TOTAL_TIMEOUT` is 20 s (the stream is cut at 20 s and
+/// the client gets `event: error`). Asserts on observed behaviour, not on
+/// the constant.
+#[tokio::test]
+async fn r1b_chat_handler_delivers_answer_when_frames_keep_arriving_past_old_total_cap() {
+    const LEAK_MARKER: &str = "SLOW-CHAT-MODEL-TEXT-r1b";
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_chunked_body(move |w| {
+            let preamble = concat!(
+                "event: message_start\n",
+                "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-6\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+                "event: content_block_start\n",
+                "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            );
+            w.write_all(preamble.as_bytes())?;
+            w.flush()?;
+            for i in 0..R1B_SLOW_SUCCESS_DELTAS {
+                std::thread::sleep(R1B_SLOW_SUCCESS_GAP);
+                w.write_all(
+                    format!(
+                        "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{LEAK_MARKER}-{i}\"}}}}\n\n"
+                    )
+                    .as_bytes(),
+                )?;
+                w.flush()?;
+            }
+            let tail = concat!(
+                "event: content_block_stop\n",
+                "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                "event: message_delta\n",
+                "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":2}}\n\n",
+                "event: message_stop\n",
+                "data: {\"type\":\"message_stop\"}\n\n",
+            );
+            w.write_all(tail.as_bytes())?;
+            w.flush()?;
+            Ok(())
+        })
+        .create_async()
+        .await;
+
+    let (buf, _guard) = install_log_capture();
+    let app = ai_test_app_with_mock(&server.url());
+
+    let start = Instant::now();
+    let response = app
+        .post("/api/chat")
+        .json(&serde_json::json!({ "message": "Hi" }))
+        .await;
+    let elapsed = start.elapsed();
+
+    let frames = parse_sse_frames(response.as_bytes());
+    assert!(
+        !frames.iter().any(|(ev, _)| ev.as_deref() == Some("error")),
+        "a live stream finishing under the total cap MUST NOT end in `event: error`; \
+         observed {elapsed:?}, frames={frames:?}"
+    );
+    let delivered: Vec<&str> = frames
+        .iter()
+        .filter(|(ev, data)| ev.is_none() && data != "[DONE]")
+        .map(|(_, data)| data.as_str())
+        .collect();
+    let expected: Vec<String> = (0..R1B_SLOW_SUCCESS_DELTAS)
+        .map(|i| format!("{LEAK_MARKER}-{i}"))
+        .collect();
+    assert_eq!(delivered, expected, "every delta delivered, in order");
+    assert!(
+        frames
+            .last()
+            .map(|(ev, data)| ev.is_none() && data == "[DONE]")
+            .unwrap_or(false),
+        "stream MUST end with [DONE]; frames={frames:?}"
+    );
+
+    // Observability: one completion line, with timing and stop reason, and
+    // no model text.
+    let logs = buf.captured();
+    assert_eq!(buf.count("chat: completed"), 1, "logs={logs}");
+    let elapsed_ms: u64 = logs
+        .split("elapsed_ms=")
+        .nth(1)
+        .and_then(|rest| {
+            rest.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .ok()
+        })
+        .unwrap_or_else(|| panic!("elapsed_ms must be logged as a number; logs={logs}"));
+    assert!(
+        elapsed_ms >= 20_000,
+        "the stream outlasted the old 20 s cap, so elapsed_ms must say so; \
+         elapsed_ms={elapsed_ms} wall={elapsed:?}"
+    );
+    assert!(logs.contains("stop_reason=EndTurn"), "logs={logs}");
+    assert!(logs.contains("client_connected=true"), "logs={logs}");
+    assert!(
+        !logs.contains(LEAK_MARKER),
+        "completion log MUST NOT carry model text; logs={logs}"
     );
 }
 
