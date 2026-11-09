@@ -12,18 +12,12 @@ Peter's personal portfolio and resume site. Showcases work, serves the resume, h
 active
 </status>
 
-<landmines>
-Drift-prone facts that have tripped Puck before. Verify against code, not README or memory, when in doubt.
-
-- **Static file serving: `ServeDir`, NOT `rust_embed`.** The README currently claims "SPA baked into the binary at compile time via rust-embed", but the code uses `tower_http::services::ServeDir` (`libs/site-core/static_files.rs:9`). Per G-0002 (no compile-time asset embedding), the code is correct — the README is stale. **Fix dispatched 2026-04-13 (task pending).** Once README is updated, this landmine can be removed.
-</landmines>
-
 <guardrails>
 Project-specific rules. These extend the DEFAULTS.md projection.
 
-- **90% line + function coverage** (per G-0001). Hard gate before merge.
-- **No `rust_embed` or compile-time asset embedding** (per G-0002). Static files served via `ServeDir`, Docker multi-stage build copies both binary and frontend assets.
-- **Deployment: Fly.io.** `fly.toml` at project root. Never deploy without Peter's explicit approval.
+- **90% line + function coverage is the target, not a gate.** Measured by `just backend-coverage` and `just frontend-coverage`; no recipe or CI step fails on a coverage figure (#2750).
+- **No `rust_embed` or compile-time asset embedding.** Static files served via `ServeDir`, Docker multi-stage build copies both binary and frontend assets.
+- **Deployment: Fly.io.** `fly.toml` at project root. A merge to `main` deploys to Fly via CI (`.github/workflows/deploy.yml`: tests, then `flyctl deploy`, then health and origin-closure checks; no path filter). Auto-deploy stands (Peter, 2026-10-25).
 - **`ADMIN_PASSWORD` required at startup by design.** The app panics if unset — this is intentional, not a bug. Local dev handled via `.env` file. Never add a default.
 </guardrails>
 
@@ -32,7 +26,8 @@ Project-specific rules. These extend the DEFAULTS.md projection.
 - **Frontend:** SvelteKit (Svelte 5), Tailwind CSS v4, DaisyUI v5, Vite
 - **Database:** SQLite at `data/site.db` (gitignored). Migrations auto-run at startup from `migrations/`.
 - **AI:** rig-core with Anthropic Claude. Optional — disabled if `ANTHROPIC_API_KEY` is unset.
-- **Testing:** `cargo test` (unit + integration), Playwright (e2e under `e2e/`)
+- **Runtime config:** the `site_config` SQLite key/value table is the source of truth for `ai.model_id` and `ai.max_tokens`, read at request time.
+- **Testing:** `cargo test` (unit + integration), `vitest` (frontend unit), Playwright (e2e; see `<gates>`)
 - **Deploy target:** Fly.io (Docker multi-stage)
 </tech-stack>
 
@@ -44,14 +39,14 @@ All commands via `justfile`. Run from project root.
 | `just run` | Build frontend + run backend (port 3000) |
 | `just frontend-dev` | Vite dev server with hot-reload (port 5173, proxies to backend) |
 | `just test` | Backend unit + integration tests |
-| `just e2e` | Playwright end-to-end tests (requires app on :8080) |
+| `just e2e` | Root Playwright suite over `e2e/` (starts Vite on :5173 itself; see `<gates>`) |
 | `just check` | Pre-commit: fmt + clippy (-D warnings) + test |
 | `just docker` | `docker compose up --build` |
 | `just release` | Release binary |
 
 Module layout: `cmd/server/` (Axum entry), `libs/site-core/` (core logic, DB, routes, AI, static file serving), `frontend/` (SvelteKit), `migrations/` (SQL), `e2e/` (Playwright), `data/` (SQLite + seed SQL).
 
-**Backend/frontend decoupling:** Since removing `rust_embed`, `cargo build` and `cargo test` (unit tests) run standalone without any frontend build step — no `include_str!`/`include_bytes!`/`build.rs` coupling to frontend assets. The only frontend dependency is at *runtime*: `validate_static_dir()` panics at startup if `STATIC_DIR` (default `frontend/build`) is missing, and `ServeDir` reads files live from that path. This is the correct G-0002 design.
+**Backend/frontend decoupling:** `cargo build` and `cargo test` (unit tests) run standalone without any frontend build step — no `include_str!`/`include_bytes!`/`build.rs` coupling to frontend assets. The only frontend dependency is at *runtime*: `validate_static_dir()` panics at startup if `STATIC_DIR` (default `frontend/build`) is missing, and `ServeDir` reads files live from that path. This is the intended design.
 
 **AI architecture is asymmetric (spec #572) — do not "unify" it:** the two AI paths deliberately take different routes.
 - **chat** = `ai/anthropic_stream.rs` — a custom Anthropic SSE consumer (Path X). It bypasses rig-core's `CompletionModel` *on purpose: that path drops `stop_reason`*, which chat needs to map refusal/context-exceeded/truncated terminal conditions. Refactoring chat back through rig's `CompletionModel` silently loses `stop_reason` and reintroduces the bug this spec fixed.
@@ -59,38 +54,38 @@ Module layout: `cmd/server/` (Axum entry), `libs/site-core/` (core logic, DB, ro
 </entry-points>
 
 <conventions>
-- **Test pyramid: inverted** (per G-0001). Heavy unit tests with mocks; integration tests only at real seams.
-- **Coverage: 90%** hard floor on both line and function coverage.
+- **Test pyramid: inverted.** Heavy unit tests with mocks; integration tests only at real seams.
 - **Pre-commit: `just check`** — fmt + clippy with `-D warnings` + test must all pass.
-- **Worktrees in `.worktrees/`** for all feature work.
+- **Worktrees:** harness-managed, under `.claude/worktrees/`, for all code work.
 - **Rebase-merge to main** via `/merge` skill or PR (matches mnemra-core; flipped 2026-05-15). Squash and merge-commits disabled at the GitHub repo level. No local merges to main.
 </conventions>
 
 <skills>
-Skills Puck should load into dispatches targeting this project.
+Puck plugin skills to load into dispatches targeting this project.
 
-- `skills/rust.md` — Rust conventions
-- `skills/rust-review.md` — Warden's Rust review checklist
-- `skills/sveltekit.md` — SvelteKit conventions
-- `skills/svelte-review.md` — Warden's Svelte review checklist
-- `skills/tdd.md` — test-driven workflow for new features
-- `skills/security.md` — for anything touching auth, admin, or env vars
+- `review-core` + `rust-review` — Rust review
+- `review-core` + `svelte-review` — Svelte/SvelteKit review
+- `security` — anything touching auth, admin, or env vars
+- `dev-loop` — test-first work (red-phase tests, assertion strength)
 </skills>
 
-<current-phase>
-State that changes as work progresses. Update when it drifts.
+<gates>
+What green means, per surface. CI is GitHub Actions: `test.yml` on PRs to `main` and pushes to `main`; `deploy.yml` on pushes to `main` (the same test job, then deploy).
 
-**As of 2026-05-15:**
-- `main` clean, synced with `origin/main`.
-- Active worktree: `.worktrees/spec572-impl` on branch `feat/572-sonnet-migration` — task #572 implementation.
-- Stale local branches present (no worktrees): `feat/backend-coverage`, `feat/frontend-coverage`, `chore/defaults-g0006`, `fix/admin-notebook-phase3-4`, `fix/workflow-permissions`, `ultra` — needs triage cleanup pass.
-- **Done:** task #572 — Sonnet 4 deprecation migration shipped (spec `docs/specs/2026-05-15-sonnet-migration-config-table.md`). Delivered: new `site_config` SQLite table (key/value, typed) — now the **canonical runtime source of truth** for `ai.model_id` and `ai.max_tokens` (read from the DB at request time, not hardcoded) + swap to `claude-sonnet-4-6` + rig-core 0.33 → 0.37 bump + chat handler rewrite to custom Anthropic SSE consumer (Path X, bypasses rig's CompletionModel which drops `stop_reason`) + fit handler PromptHook for `stop_reason` capture + typed refusal/context-exceeded error mapping.
-</current-phase>
+- **Backend:** `just check` from the root (fmt --check, clippy --all-targets -D warnings, cargo test). It covers no frontend code. There is no `ci` recipe.
+- **Frontend:** from `frontend/`, `npm run check` (svelte-kit sync + svelte-check) and `npm run test:unit` (vitest run). CI runs both, plus `npm run build` and `cargo test --workspace`. `just check` and `just test` are cargo only.
+- **Playwright runs in no CI job.** Two separate suites:
+  - `npm run test:e2e` from `frontend/` runs `frontend/e2e/ai-pane.spec.ts` only, chromium.
+  - `just e2e` from the root runs `playwright.config.ts` over `e2e/` (7 specs plus `fixtures.ts`) on chromium, firefox and webkit. One spec: `npx playwright test e2e/<file>`.
+  - Both start Vite on :5173 themselves (`webServer`); Vite proxies `/api` to the backend on :3000. :8080 is the Fly/Docker port, not the e2e target.
+  - `e2e/admin.spec.ts` posts `/api/admin/login` and needs the backend running; the other specs run against mocked API routes.
+  - `e2e/accessibility.spec.ts` runs axe with a mocked API and fires in no automated gate.
+</gates>
 
 <references>
 - **Project spec:** `spec.md` at project root — what folio is, goals, current state. Long-lived, serves both humans and AI.
-- **Feature specs:** `docs/specs/*.md` — per-feature specs generated by the `/spec` skill (e.g., `2026-04-09-hero-redesign.md`). Short-lived, scoped to one feature.
-- **Decisions:** `decisions/` (project-specific `P-NNNN-*.md`) and `decisions/DEFAULTS.md` (projected general standards).
+- **Feature specs:** `docs/specs/*.md` — per-feature specs (e.g., `2026-04-09-hero-redesign.md`). Short-lived, scoped to one feature.
+- **Decisions:** `decisions/DEFAULTS.md` (projected general standards); no project-specific decision files are tracked.
 - **README:** `README.md` — human-facing getting-started doc.
 - **Fly config:** `fly.toml`
 - **Docker:** `Dockerfile`, `docker-compose.yml`
