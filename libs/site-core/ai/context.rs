@@ -8,7 +8,8 @@ use crate::models::{
 use super::prompt_templates::*;
 use super::prompts::FIT_WRAPPER_TEMPLATE;
 
-/// Build the full system prompt from all data in the database.
+/// Build the base system prompt (shared by chat and fit) from all data in the
+/// database. `build_system_prompt` appends the chat-only length cap after it.
 /// Section order:
 ///  1. Identity (header — third person representative)
 ///  2. Elevator pitch + career narrative
@@ -28,7 +29,7 @@ use super::prompts::FIT_WRAPPER_TEMPLATE;
 /// 16. Articles (published only)
 /// 17. Compensation deflection
 /// 18. Response guidelines
-pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
+fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
     let prof = profile::get_full(conn)?;
     let instrs = instructions::list_all(conn)?;
     let experiences = experience::list_all(conn)?;
@@ -348,13 +349,24 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
     Ok(prompt)
 }
 
+/// Build the system prompt for chat: the shared base prompt plus the chat-only
+/// answer-length cap (#4656). Appended in code, after the DB-sourced sections,
+/// so it comes after any contradicting `ai_instructions` row (placement, not
+/// enforcement: the model still weighs both). Fit must not use this.
+pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
+    let mut prompt = build_base_prompt(conn)?;
+    prompt.push_str(CHAT_LENGTH_LIMIT);
+    Ok(prompt)
+}
+
 /// Build the system prompt for fit analysis: base prompt + FIT_WRAPPER.
 /// Loads the profile to get the candidate name for the wrapper template, then
-/// calls `build_system_prompt` to produce the full base prompt (which also loads
-/// the profile internally). The wrapper is appended after the base prompt.
+/// calls `build_base_prompt` to produce the shared base prompt (which also loads
+/// the profile internally). The wrapper is appended after the base prompt; the
+/// chat-only length cap is not part of it.
 pub fn build_fit_prompt(conn: &Connection) -> Result<String, AppError> {
     let prof = profile::get_full(conn)?;
-    let base = build_system_prompt(conn)?;
+    let base = build_base_prompt(conn)?;
     let wrapper = FIT_WRAPPER_TEMPLATE.replace("{name}", &prof.name);
     Ok(format!("{}\n\n{}", base, wrapper))
 }
@@ -835,6 +847,78 @@ mod tests {
         assert!(
             prompt.contains("use the provided answer as your primary source"),
             "FAQ verbatim-first instruction in prompt"
+        );
+    }
+
+    // #4656: long chat answers hit the 45 s cap. The length cap is chat-only;
+    // fit shares the base prompt and must not receive it. Asserts on stable
+    // fragments, not the whole sentence. Proves the text is sent, not that the
+    // model obeys it.
+    #[test]
+    fn test_chat_prompt_caps_length_and_avoids_yes_no_follow_up() {
+        let conn = setup_db();
+        seed_all(&conn);
+        let prompt = build_system_prompt(&conn).unwrap();
+        assert!(
+            prompt.ends_with(CHAT_LENGTH_LIMIT),
+            "length cap must be the tail of the chat prompt"
+        );
+        assert!(
+            prompt.contains("700 words, even when"),
+            "cap must hold even when the visitor asks for more detail"
+        );
+        assert!(
+            prompt.contains("without memory of earlier ones"),
+            "chat is stateless; follow-up must be a standalone question"
+        );
+    }
+
+    #[test]
+    fn test_fit_prompt_does_not_carry_chat_length_cap() {
+        let conn = setup_db();
+        seed_all(&conn);
+        let prompt = build_fit_prompt(&conn).unwrap();
+        assert!(
+            !prompt.contains(CHAT_LENGTH_LIMIT),
+            "fit prompt must not carry the chat length cap"
+        );
+        assert!(
+            prompt.contains("Keep responses compressed unless detail is requested"),
+            "fit keeps the shared response guidelines unchanged"
+        );
+        let wrapper = FIT_WRAPPER_TEMPLATE.replace("{name}", "Jane Doe");
+        assert_eq!(
+            prompt,
+            format!("{}\n\n{}", build_base_prompt(&conn).unwrap(), wrapper),
+            "fit prompt is exactly base + wrapper"
+        );
+    }
+
+    // Spec 2026-07-24-experiences-visible-flag R-0003 tripwire: build_fit_prompt
+    // no longer delegates to build_system_prompt, so the fit path carries its own
+    // pin. Per the spec the AI surface receives experiences regardless of `visible`.
+    #[test]
+    fn test_fit_prompt_includes_visible_and_hidden_experiences() {
+        let conn = setup_db();
+        seed_all(&conn);
+        for (name, visible) in [("ZZ-VISIBLE-Solstice-4a1c", 1), ("ZZ-HIDDEN-Umbra-9e2f", 0)] {
+            conn.execute(
+                "INSERT INTO experiences (
+                    company_name, title, location, start_date, end_date, is_current,
+                    summary, bullet_points, display_order, visible
+                 ) VALUES (?1, 'Engineer', 'Remote', '2010-01', '2012-01', 0, 'S.', '[]', 50, ?2)",
+                rusqlite::params![name, visible],
+            )
+            .unwrap();
+        }
+        let prompt = build_fit_prompt(&conn).unwrap();
+        assert!(
+            prompt.contains("ZZ-VISIBLE-Solstice-4a1c"),
+            "visible row in fit prompt"
+        );
+        assert!(
+            prompt.contains("ZZ-HIDDEN-Umbra-9e2f"),
+            "hidden row in fit prompt"
         );
     }
 }
