@@ -17,7 +17,7 @@ axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "timeout"] }
 uuid = { version = "1", features = ["v4"] }
 mime_guess = "2"

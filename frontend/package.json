@@ -13,14 +13,14 @@
 		"test:unit": "vitest run",
 		"test:unit:watch": "vitest",
 		"test:unit:coverage": "vitest run --coverage",
-		"test:e2e": "playwright test", 
+		"test:e2e": "playwright test",
 		"test": "npm run test:unit && npm run test:e2e"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.58.2",
 		"@sveltejs/adapter-auto": "^7.0.0",
-		"@sveltejs/adapter-static": "^3.0.10",
-		"@sveltejs/kit": "^2.70.3",
+		"@sveltejs/adapter-static": "^3.0.11",
+		"@sveltejs/kit": "^2.70.4",
 		"@sveltejs/vite-plugin-svelte": "^6.2.4",
 		"@tailwindcss/typography": "^0.5.19",
 		"@tailwindcss/vite": "^4.2.2",
@@ -29,7 +29,7 @@
 		"@types/dompurify": "^3.0.5",
 		"@types/marked": "^5.0.2",
 		"@types/node": "^22.20.3",
-		"@vitest/coverage-v8": "^4.1.4",
+		"@vitest/coverage-v8": "^4.1.12",
 		"daisyui": "^5.5.19",
 		"jsdom": "^29.0.1",
 		"marked": "^17.0.5",
@@ -37,10 +37,10 @@
 		"svelte-check": "^4.4.2",
 		"tailwindcss": "^4.2.2",
 		"typescript": "^5.9.3",
-		"vite": "^7.3.6",
-		"vitest": "^4.1.11"
+		"vite": "^7.3.8",
+		"vitest": "^4.1.12"
 	},
 	"dependencies": {
-		"dompurify": "^3.4.13"
+		"dompurify": "^3.4.17"
 	}
 }
