@@ -124,6 +124,7 @@ The open tension with the folio-simplification Frame is the Frame's E-1. It stay
 - **R-21** This change SHALL NOT modify `.github/workflows/test.yml`, or any existing step of either job in `.github/workflows/deploy.yml`, or their order. Its only workflow change SHALL be new steps in the `deploy` job, placed before `Deploy`.
   - Acceptance: `git diff` on the two workflow files shows only added lines, all inside the `deploy` job and above `- name: Deploy`.
 - **R-22** The exclusion, validation, ordering and failure behaviour of R-2 to R-5 and R-8 SHALL be exercised by tests that run in the existing CI gate against committed fixtures, with one seeded case per failure condition.
+  - Acceptance: reverting any one exclusion, validation or ordering rule in the fetch code makes at least one test in that gate fail.
 
 ## Out of Scope
 
