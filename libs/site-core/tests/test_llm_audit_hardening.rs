@@ -202,7 +202,7 @@ async fn r1a_fit_handler_returns_verdict_when_upstream_is_slow_but_valid() {
          not cut off by the fit timeout"
     );
     let verdict = response.json::<Value>();
-    assert_eq!(verdict["verdict"], "strong-fit");
+    assert_eq!(verdict["verdict"], "strong_fit");
     assert_eq!(verdict["headline"], "Strong match");
     mock.assert_async().await;
 }
@@ -567,7 +567,7 @@ async fn r5_normal_sized_body_is_unaffected_by_the_limit() {
     let body: Value = response.json();
     assert_eq!(
         body["verdict"].as_str(),
-        Some("strong-fit"),
+        Some("strong_fit"),
         "R5: a normal-sized request MUST pass the body limit and reach the \
          handler unaffected"
     );

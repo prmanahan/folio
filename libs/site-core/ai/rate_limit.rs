@@ -1,20 +1,17 @@
 use rusqlite::Connection;
 
+use crate::ai::opaque_internal;
 use crate::error::AppError;
 
-/// Check and enforce rate limiting for a given IP and endpoint.
+/// Record one hit for `(ip, endpoint)` and return the resulting count.
 ///
-/// Uses a per-hour sliding window stored in SQLite. On each call:
+/// Fixed per-clock-hour window stored in SQLite (not a sliding window): the
+/// count resets when the wall-clock hour rolls over. On each call:
 /// 1. Cleans up rows older than 24 hours (maintenance, not enforcement).
 /// 2. UPSERTs a row for (ip, endpoint): resets count to 1 if the current hour
 ///    window differs from the stored window, or increments count if same window.
-/// 3. Returns `AppError::RateLimited` if the resulting count exceeds `max_requests`.
-pub fn check_rate_limit(
-    conn: &Connection,
-    ip: &str,
-    endpoint: &str,
-    max_requests: i64,
-) -> Result<(), AppError> {
+/// 3. Reads back the resulting count.
+fn record_hit(conn: &Connection, ip: &str, endpoint: &str) -> Result<i64, rusqlite::Error> {
     // Step 1: Clean stale rows older than 24 hours.
     // window_start is stored as TEXT in SQLite datetime format (e.g., '2024-01-15 14:00:00').
     conn.execute(
@@ -40,18 +37,49 @@ pub fn check_rate_limit(
         rusqlite::params![ip, endpoint],
     )?;
 
-    // Step 3: Read back the current count and enforce the limit.
-    let count: i64 = conn.query_row(
+    // Step 3: Read back the current count.
+    conn.query_row(
         "SELECT request_count FROM rate_limits WHERE ip = ?1 AND endpoint = ?2",
         rusqlite::params![ip, endpoint],
         |row| row.get(0),
-    )?;
+    )
+}
 
+fn enforce(count: i64, max_requests: i64) -> Result<(), AppError> {
     if count > max_requests {
         return Err(AppError::RateLimited("Rate limit exceeded".to_string()));
     }
-
     Ok(())
+}
+
+/// Check and enforce rate limiting for a given IP and endpoint.
+///
+/// SQLite failures convert through the global `From<rusqlite::Error>` (the
+/// detail reaches the body). Its only caller outside the AI paths is the login
+/// route; AI paths go through [`check_rate_limit_with_ceiling`], which maps
+/// them to the opaque error instead.
+///
+/// Returns `AppError::RateLimited` if the resulting count exceeds `max_requests`.
+pub fn check_rate_limit(
+    conn: &Connection,
+    ip: &str,
+    endpoint: &str,
+    max_requests: i64,
+) -> Result<(), AppError> {
+    enforce(record_hit(conn, ip, endpoint)?, max_requests)
+}
+
+/// [`check_rate_limit`] for AI paths: a SQLite failure is logged and returned
+/// as the opaque AI error (#4711 F4).
+fn check_rate_limit_opaque(
+    conn: &Connection,
+    ip: &str,
+    endpoint: &str,
+    max_requests: i64,
+) -> Result<(), AppError> {
+    let count =
+        record_hit(conn, ip, endpoint).map_err(|e| opaque_internal("rate_limit: sqlite", e))?;
+    enforce(count, max_requests)
 }
 
 /// Fixed key used for the site-wide ceiling row that every visitor shares
@@ -66,7 +94,7 @@ pub const GLOBAL_CEILING_BUCKET: &str = "global";
 /// endpoint, using the same `(ip, endpoint)`-keyed table and the same
 /// enforcement function for both.
 ///
-/// The ceiling check reuses [`check_rate_limit`] with `ip` fixed to
+/// The ceiling check reuses the same enforcement function with `ip` fixed to
 /// [`GLOBAL_CEILING_BUCKET`] and `endpoint` suffixed `:global_ceiling` —
 /// every caller of this function for the same `endpoint` therefore
 /// increments the SAME shared row, regardless of the real visitor `ip`
@@ -84,15 +112,17 @@ pub fn check_rate_limit_with_ceiling(
     max_requests: i64,
     ceiling: i64,
 ) -> Result<(), AppError> {
-    check_rate_limit(conn, ip, endpoint, max_requests)?;
+    check_rate_limit_opaque(conn, ip, endpoint, max_requests)?;
     let global_endpoint = format!("{endpoint}:global_ceiling");
-    check_rate_limit(conn, GLOBAL_CEILING_BUCKET, &global_endpoint, ceiling).inspect_err(|e| {
-        // #3633: a ceiling denial is the site-wide spend cap firing.
-        // Names the endpoint and the ceiling only — no client address.
-        if matches!(e, AppError::RateLimited(_)) {
-            tracing::warn!(endpoint, ceiling, "hourly ceiling denied a request");
-        }
-    })
+    check_rate_limit_opaque(conn, GLOBAL_CEILING_BUCKET, &global_endpoint, ceiling).inspect_err(
+        |e| {
+            // #3633: a ceiling denial is the site-wide spend cap firing.
+            // Names the endpoint and the ceiling only — no client address.
+            if matches!(e, AppError::RateLimited(_)) {
+                tracing::warn!(endpoint, ceiling, "hourly ceiling denied a request");
+            }
+        },
+    )
 }
 
 #[cfg(test)]
@@ -305,5 +335,27 @@ mod tests {
             result.is_err(),
             "the global ceiling must now be exhausted for a brand-new visitor"
         );
+    }
+
+    /// #4711 F4: a SQLite failure on the AI path returns the fixed opaque
+    /// message. The login-route `check_rate_limit` is only asserted to fail
+    /// with `Internal`; its message text is deliberately not pinned (#4723
+    /// tracks the SQLite-detail leak there).
+    #[test]
+    fn sqlite_failure_is_opaque_on_the_ai_path() {
+        let conn = setup_db();
+        conn.execute("DROP TABLE rate_limits", []).unwrap();
+
+        match check_rate_limit_with_ceiling(&conn, "1.2.3.4", "chat", 10, 100) {
+            Err(AppError::Internal(msg)) => {
+                assert_eq!(msg, crate::ai::AI_INTERNAL_OPAQUE_MESSAGE)
+            }
+            other => panic!("expected opaque Internal error, got {other:?}"),
+        }
+
+        assert!(matches!(
+            check_rate_limit(&conn, "1.2.3.4", "login_fail", 5),
+            Err(AppError::Internal(_))
+        ));
     }
 }

@@ -121,6 +121,7 @@ a:hover {
 .verdict-strong { color: var(--raw-brass-light); }
 .verdict-conversation { color: var(--raw-gold); }
 .verdict-not { color: var(--raw-copper-light); }
+.verdict-unknown { color: var(--color-text-muted); }
 
 /* Shared utilities */
 .brass-gradient {

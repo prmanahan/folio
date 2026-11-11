@@ -10,6 +10,28 @@ permissions:
   contents: read
 
 jobs:
+  # #4711: the invisible-unicode strip set is generated from Node's bundled
+  # ICU data into a Rust and a TS table. Pinned to the exact Node build that
+  # generated the committed tables (24.14.0: ICU 78.2, Unicode 17.0), because
+  # the property data depends on the Node/ICU build, not only the major; the
+  # test job's Node 22 would generate a different table and fail this check
+  # for the wrong reason. Bumping Node means regenerating the tables, and
+  # editing the single pin in .node-version (read by both workflows).
+  invisible-tables:
+    name: Invisible-Unicode tables are current
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Install Node from .node-version
+        uses: actions/setup-node@v6.3.0
+        with:
+          node-version-file: .node-version
+
+      - name: Check generated tables
+        run: node scripts/gen-invisible.mjs --check
+
   test:
     name: Test & Lint
     runs-on: ubuntu-latest
@@ -61,6 +83,14 @@ jobs:
           npm run check
           npm run test:unit
           npm run build
+
+      - name: Check built CSP
+        run: cd frontend && npm run check:csp
+
+      # The guard fails closed: each bypass-shape fixture must fail, the good
+      # one must pass.
+      - name: Test the CSP guard against fixtures
+        run: cd frontend && npm run test:csp
 
       - name: Run tests
         run: cargo test --workspace

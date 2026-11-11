@@ -59,7 +59,7 @@ async function mockDataEndpoints(page: Page) {
  */
 async function mockChatEndpoint(page: Page, responseTokens: string[]) {
 	await page.route('/api/chat', async (route) => {
-		const sseBody = responseTokens.map((t) => `data: ${t}\n`).join('') + 'data: [DONE]\n';
+		const sseBody = responseTokens.map((t) => `data: ${t}\n\n`).join('') + 'data: [DONE]\n\n';
 		await route.fulfill({
 			status: 200,
 			contentType: 'text/event-stream',
@@ -224,7 +224,7 @@ test.describe('AI Pane', () => {
 		await page.getByRole('button', { name: 'Transmit message' }).click();
 
 		// Eventually the full streamed response should appear
-		await expect(page.getByText('Hi there!')).toBeVisible({ timeout: 5000 });
+		await expect(page.locator('.assistant-bubble').getByText('Hi there!')).toBeVisible({ timeout: 5000 });
 	});
 
 	test('typing indicator (spinner) disappears after stream completes', async ({ page }) => {

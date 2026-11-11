@@ -1,15 +1,21 @@
-//! Red-phase acceptance tests for R3 / LLM07(a) — drop the three most
-//! sensitive private fields from the constructed prompt.
+//! Acceptance tests for R3 / LLM07(a) and #4713 — private fields dropped from the
+//! constructed prompt: six in all (`would_do_differently`, `manager_would_say`,
+//! `honest_notes` in May; `why_joined`, `why_left`, `reports_would_say` on 2026-11-11).
 //!
 //! Spec: `docs/specs/2026-05-18-llm-audit-remediation.md` R3, decision
 //! "LLM07 disposition: option (a) — narrow classify + drop."
 //!
-//! The DB still stores `would_do_differently`, `manager_would_say`,
-//! `honest_notes` (admin-managed data). Only the prompt-construction path
-//! (`ai/context.rs::build_base_prompt`, via `build_system_prompt`) must stop reading them. These
+//! The DB still stores all six (admin-managed data). Only the
+//! prompt-construction path (`ai/context.rs::build_base_prompt`, via
+//! `build_system_prompt`) must stop reading them. These
 //! tests assert the *constructed prompt string* and the *construction code
 //! path*, never the storage layer — schema columns / struct fields / admin
 //! CRUD are explicitly out of scope and stay.
+//!
+//! #4713 (2026-11-11, Peter: "Drop all three") extends the drop to
+//! `why_joined`, `why_left` and `reports_would_say`, and removes the
+//! `DATA_CLASSIFICATION` never-reveal block. Those three are pinned below
+//! exactly as the May three are.
 //!
 //! Four acceptance bullets, each with explicit coverage:
 //!  - Bullet 1 (data-absence): unique sentinels in the three fields →
@@ -48,11 +54,14 @@ const SENTINEL_WOULD_DO_DIFFERENTLY: &str = "ZZSENTINEL-would-do-differently-7f3
 const SENTINEL_MANAGER_WOULD_SAY: &str = "ZZSENTINEL-manager-would-say-1d8e4c0a-DROP";
 const SENTINEL_HONEST_NOTES: &str = "ZZSENTINEL-honest-notes-9b6f2e5d-DROP";
 
+/// #4713 additions to the dropped set.
+const SENTINEL_WHY_JOINED: &str = "ZZSENTINEL-why-joined-3c7a1f8b-DROP";
+const SENTINEL_WHY_LEFT: &str = "ZZSENTINEL-why-left-4b9d2e7a-DROP";
+const SENTINEL_REPORTS_WOULD_SAY: &str = "ZZSENTINEL-reports-would-say-2f4c8e1a-DROP";
+
 /// Sentinels in RETAINED fields — these MUST survive (bullet 3).
-const SENTINEL_WHY_JOINED: &str = "ZZSENTINEL-why-joined-3c7a1f8b-KEEP";
 const SENTINEL_ACTUAL_CONTRIBUTIONS: &str = "ZZSENTINEL-actual-contributions-5e2d9a4c-KEEP";
 const SENTINEL_LESSONS_LEARNED: &str = "ZZSENTINEL-lessons-learned-8a0b6d3f-KEEP";
-const SENTINEL_REPORTS_WOULD_SAY: &str = "ZZSENTINEL-reports-would-say-2f4c8e1a-KEEP";
 const SENTINEL_SKILL_EVIDENCE: &str = "ZZSENTINEL-skill-evidence-6d1b9c7e-KEEP";
 
 /// Migrate a fresh in-memory DB and insert a profile + one experience + one
@@ -85,17 +94,18 @@ fn db_with_sentinel_rows() -> Connection {
          ) VALUES (
             'Sentinel Corp', 'Lead', 'Remote', '2020-01', '2023-01', 0,
             'Summary text.', '[\"Public bullet\"]', 1,
-            ?1, 'Why left text', ?2, 'Proudest text',
+            ?1, ?7, ?2, 'Proudest text',
             ?3, 'Challenges text', ?4,
             ?5, ?6
          )",
         rusqlite::params![
-            SENTINEL_WHY_JOINED,           // why_joined (RETAINED)
+            SENTINEL_WHY_JOINED,           // why_joined (DROPPED, #4713)
             SENTINEL_ACTUAL_CONTRIBUTIONS, // actual_contributions (RETAINED)
             SENTINEL_WOULD_DO_DIFFERENTLY, // would_do_differently (DROPPED)
             SENTINEL_LESSONS_LEARNED,      // lessons_learned (RETAINED)
             SENTINEL_MANAGER_WOULD_SAY,    // manager_would_say (DROPPED)
-            SENTINEL_REPORTS_WOULD_SAY,    // reports_would_say (RETAINED)
+            SENTINEL_REPORTS_WOULD_SAY,    // reports_would_say (DROPPED, #4713)
+            SENTINEL_WHY_LEFT,             // why_left (DROPPED, #4713)
         ],
     )
     .expect("experience INSERT must succeed");
@@ -127,7 +137,7 @@ fn db_with_sentinel_rows() -> Connection {
 /// Red-phase: current `ai/context.rs` interpolates all three (lines 169,
 /// 181, 210), so every sentinel IS present → this fails by assertion.
 #[test]
-fn constructed_prompt_contains_none_of_the_three_dropped_field_sentinels() {
+fn constructed_prompt_contains_none_of_the_dropped_field_sentinels() {
     let conn = db_with_sentinel_rows();
     let prompt = build_system_prompt(&conn).expect("prompt build must succeed");
 
@@ -146,6 +156,17 @@ fn constructed_prompt_contains_none_of_the_three_dropped_field_sentinels() {
         "R3: skill.honest_notes data MUST NOT appear in the constructed \
          prompt (LLM07a drop). Found sentinel {SENTINEL_HONEST_NOTES:?}"
     );
+    for (field, sentinel) in [
+        ("experience.why_joined", SENTINEL_WHY_JOINED),
+        ("experience.why_left", SENTINEL_WHY_LEFT),
+        ("experience.reports_would_say", SENTINEL_REPORTS_WOULD_SAY),
+    ] {
+        assert!(
+            !prompt.contains(sentinel),
+            "#4713: {field} data MUST NOT appear in the constructed prompt. \
+             Found sentinel {sentinel:?}"
+        );
+    }
 }
 
 /// Anti-paraphrase guard: assert no high-similarity span survives. The
@@ -161,6 +182,9 @@ fn constructed_prompt_has_no_high_similarity_span_of_dropped_sentinels() {
         SENTINEL_WOULD_DO_DIFFERENTLY,
         SENTINEL_MANAGER_WOULD_SAY,
         SENTINEL_HONEST_NOTES,
+        SENTINEL_WHY_JOINED,
+        SENTINEL_WHY_LEFT,
+        SENTINEL_REPORTS_WOULD_SAY,
     ] {
         // Slide a 20-char window over the sentinel; assert no window is a
         // substring of the prompt.
@@ -203,7 +227,7 @@ fn constructed_prompt_has_no_high_similarity_span_of_dropped_sentinels() {
 /// this fails by assertion. The implementer removes the interpolation
 /// blocks; this then passes.
 #[test]
-fn context_construction_path_does_not_read_the_three_dropped_field_accessors() {
+fn context_construction_path_does_not_read_the_dropped_field_accessors() {
     let context_src =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ai/context.rs"))
             .expect("ai/context.rs must be readable");
@@ -247,6 +271,13 @@ fn context_construction_path_does_not_read_the_three_dropped_field_accessors() {
         "R3 bullet 2 (structural): `s.honest_notes` MUST NOT appear on the \
          context-construction path in ai/context.rs (format_skill closure)"
     );
+    for accessor in ["exp.why_joined", "exp.why_left", "exp.reports_would_say"] {
+        assert!(
+            !construction_region.contains(accessor),
+            "#4713 (structural): `{accessor}` MUST NOT appear on the \
+             context-construction path in ai/context.rs"
+        );
+    }
 }
 
 /// Belt-and-suspenders for bullet 2: the raw column-bound names must also
@@ -258,7 +289,7 @@ fn context_construction_path_does_not_read_the_three_dropped_field_accessors() {
 /// may still *mention* these labels harmlessly (bullet 4) — so we scan
 /// ai/context.rs construction region only, NOT prompt_templates.rs.
 #[test]
-fn context_construction_path_does_not_emit_the_three_dropped_field_labels() {
+fn context_construction_path_does_not_emit_the_dropped_field_labels() {
     let context_src =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ai/context.rs"))
             .expect("ai/context.rs must be readable");
@@ -284,6 +315,13 @@ fn context_construction_path_does_not_emit_the_three_dropped_field_labels() {
         "R3 bullet 2: the 'Manager would say:' emission MUST be removed \
          from the construction path"
     );
+    for label in ["Why joined:", "Why left:", "Reports would say:"] {
+        assert!(
+            !construction_region.contains(label),
+            "#4713: the {label:?} emission MUST be removed from the \
+             construction path"
+        );
+    }
     // honest_notes is emitted as `. Notes: {}` inside format_skill.
     assert!(
         !construction_region.contains(". Notes:"),
@@ -299,8 +337,8 @@ fn context_construction_path_does_not_emit_the_three_dropped_field_labels() {
 // skill section.
 // ===========================================================================
 
-/// Given retained-field sentinels (why_joined, actual_contributions,
-///   lessons_learned, reports_would_say on experience; evidence on skill)
+/// Given retained-field sentinels (actual_contributions, lessons_learned on
+///   experience; evidence on skill)
 /// When the system prompt is constructed
 /// Then each retained sentinel STILL appears — proving the drop is
 ///   surgical, not a blanket removal of the private-context section
@@ -316,11 +354,6 @@ fn constructed_prompt_retains_non_dropped_private_field_sentinels() {
     let prompt = build_system_prompt(&conn).expect("prompt build must succeed");
 
     assert!(
-        prompt.contains(SENTINEL_WHY_JOINED),
-        "R3 bullet 3: experience.why_joined is RETAINED — its data MUST \
-         still appear (drop must be surgical)"
-    );
-    assert!(
         prompt.contains(SENTINEL_ACTUAL_CONTRIBUTIONS),
         "R3 bullet 3: experience.actual_contributions is RETAINED — its \
          data MUST still appear"
@@ -331,15 +364,38 @@ fn constructed_prompt_retains_non_dropped_private_field_sentinels() {
          MUST still appear"
     );
     assert!(
-        prompt.contains(SENTINEL_REPORTS_WOULD_SAY),
-        "R3 bullet 3: experience.reports_would_say is RETAINED — its data \
-         MUST still appear (note: reports_would_say STAYS; only \
-         manager_would_say is dropped)"
-    );
-    assert!(
         prompt.contains(SENTINEL_SKILL_EVIDENCE),
         "R3 bullet 3: skill.evidence is RETAINED — its data MUST still \
          appear (only skill.honest_notes is dropped)"
+    );
+}
+
+// ===========================================================================
+// #4713 — the DATA_CLASSIFICATION never-reveal block is gone from the
+// assembled prompt and from its source module.
+// ===========================================================================
+
+#[test]
+fn constructed_prompt_has_no_data_classification_block() {
+    let conn = db_with_sentinel_rows();
+    let prompt = build_system_prompt(&conn).expect("prompt build must succeed");
+    assert!(
+        !prompt.to_lowercase().contains("data classification"),
+        "#4713: nothing about data classification MUST be in the prompt (case-insensitive)"
+    );
+    assert!(
+        !prompt.to_lowercase().contains("private context"),
+        "#4713: the never-reveal instruction MUST NOT be in the prompt"
+    );
+
+    let templates = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/ai/prompt_templates.rs"
+    ))
+    .expect("ai/prompt_templates.rs must be readable");
+    assert!(
+        !templates.contains("DATA_CLASSIFICATION"),
+        "#4713: DATA_CLASSIFICATION MUST NOT be defined in prompt_templates.rs"
     );
 }
 

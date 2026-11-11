@@ -190,7 +190,7 @@
               </div>
               <div style="display: flex; align-items: center; gap: 0.5rem; padding-top: 1.25rem;">
                 <input type="checkbox" id="new-visible" bind:checked={form.visible} onchange={() => isDirty = true} />
-                <label class="nb-label" for="new-visible" style="margin-bottom: 0;">Visible on public page</label>
+                <label class="nb-label" for="new-visible" style="margin-bottom: 0;">Shown on public page (the AI chat and job-fit check always see this role)</label>
               </div>
             </div>
           </FormSection>
@@ -209,11 +209,11 @@
           <FormSection title="Role Reflections" tier="ai">
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; margin-top: 0.75rem;">
               <div style="grid-column: 1 / -1;">
-                <label class="nb-label" for="new-why-joined">Why Joined</label>
+                <label class="nb-label" for="new-why-joined">Why Joined (private note: the AI does not see this)</label>
                 <textarea id="new-why-joined" class="nb-input" rows="3" bind:value={form.why_joined}></textarea>
               </div>
               <div style="grid-column: 1 / -1;">
-                <label class="nb-label" for="new-why-left">Why Left</label>
+                <label class="nb-label" for="new-why-left">Why Left (private note: the AI does not see this)</label>
                 <textarea id="new-why-left" class="nb-input" rows="3" bind:value={form.why_left}></textarea>
               </div>
               <div style="grid-column: 1 / -1;">
@@ -233,7 +233,7 @@
                 <textarea id="new-lessons-learned" class="nb-input" rows="3" bind:value={form.lessons_learned}></textarea>
               </div>
               <div style="grid-column: 1 / -1;">
-                <label class="nb-label" for="new-reports-would-say">Reports Would Say</label>
+                <label class="nb-label" for="new-reports-would-say">Reports Would Say (private note: the AI does not see this)</label>
                 <textarea id="new-reports-would-say" class="nb-input" rows="3" bind:value={form.reports_would_say}></textarea>
               </div>
             </div>
@@ -270,7 +270,7 @@
           <div style={cardBodyStyle}>
             <div style={cardTitleStyle}>{item.title}</div>
             <div style={cardMetaStyle}>{item.company_name} · {item.start_date} — {item.is_current ? 'Present' : (item.end_date ?? '')}</div>
-            <span style="{tagPillStyle} {item.visible ? 'color: #7fd4a8; background: var(--nb-green-dim);' : ''}">{item.visible ? 'visible' : 'hidden'}</span>
+            <span style="{tagPillStyle} {item.visible ? 'color: #7fd4a8; background: var(--nb-green-dim);' : ''}">{item.visible ? 'visible' : 'page-hidden · AI-visible (chat, job-fit)'}</span>
             {#if item.is_current}
               <span style={tagPillStyle}>current</span>
             {/if}
@@ -350,7 +350,7 @@
                   </div>
                   <div style="display: flex; align-items: center; gap: 0.5rem; padding-top: 1.25rem;">
                     <input type="checkbox" id="edit-visible-{item.id}" bind:checked={form.visible} onchange={() => isDirty = true} />
-                    <label class="nb-label" for="edit-visible-{item.id}" style="margin-bottom: 0;">Visible on public page</label>
+                    <label class="nb-label" for="edit-visible-{item.id}" style="margin-bottom: 0;">Shown on public page (the AI chat and job-fit check always see this role)</label>
                   </div>
                 </div>
               </FormSection>
@@ -369,11 +369,11 @@
               <FormSection title="Role Reflections" tier="ai">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; margin-top: 0.75rem;">
                   <div style="grid-column: 1 / -1;">
-                    <label class="nb-label" for="edit-why-joined-{item.id}">Why Joined</label>
+                    <label class="nb-label" for="edit-why-joined-{item.id}">Why Joined (private note: the AI does not see this)</label>
                     <textarea id="edit-why-joined-{item.id}" class="nb-input" rows="3" bind:value={form.why_joined}></textarea>
                   </div>
                   <div style="grid-column: 1 / -1;">
-                    <label class="nb-label" for="edit-why-left-{item.id}">Why Left</label>
+                    <label class="nb-label" for="edit-why-left-{item.id}">Why Left (private note: the AI does not see this)</label>
                     <textarea id="edit-why-left-{item.id}" class="nb-input" rows="3" bind:value={form.why_left}></textarea>
                   </div>
                   <div style="grid-column: 1 / -1;">
@@ -393,7 +393,7 @@
                     <textarea id="edit-lessons-learned-{item.id}" class="nb-input" rows="3" bind:value={form.lessons_learned}></textarea>
                   </div>
                   <div style="grid-column: 1 / -1;">
-                    <label class="nb-label" for="edit-reports-would-say-{item.id}">Reports Would Say</label>
+                    <label class="nb-label" for="edit-reports-would-say-{item.id}">Reports Would Say (private note: the AI does not see this)</label>
                     <textarea id="edit-reports-would-say-{item.id}" class="nb-input" rows="3" bind:value={form.reports_would_say}></textarea>
                   </div>
                 </div>

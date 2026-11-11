@@ -1,14 +1,11 @@
 <script lang="ts">
-	import { marked } from 'marked';
-	import DOMPurify from 'dompurify';
+	import { renderChatMarkdown } from '$lib/chat-markdown';
 	import type { ChatMessage } from '$lib/types';
 
 	let { message }: { message: ChatMessage } = $props();
 
 	let renderedContent = $derived(
-		message.role === 'assistant'
-			? DOMPurify.sanitize(marked(message.content) as string)
-			: ''
+		message.role === 'assistant' ? renderChatMarkdown(message.content) : ''
 	);
 </script>
 

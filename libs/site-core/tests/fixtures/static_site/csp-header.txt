@@ -1,0 +1,1 @@
+default-src 'self'; script-src 'self' 'sha256-FIXTURE+hash='; object-src 'none'; frame-ancestors 'none'

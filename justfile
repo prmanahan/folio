@@ -6,7 +6,7 @@ default:
 
 # Build frontend (required before cargo build/run)
 frontend-build:
-    cd frontend && npm install && npm run build
+    cd frontend && npm install && npm run build && npm run check:csp
 
 # Run the backend (frontend must be built first)
 run: frontend-build

@@ -71,7 +71,7 @@ async fn fit_handler_uses_agent_prompt_with_stop_reason_capture_hook() {
 
     response.assert_status_ok();
     let body: Value = response.json();
-    assert_eq!(body["verdict"].as_str(), Some("strong-fit"));
+    assert_eq!(body["verdict"].as_str(), Some("strong_fit"));
     assert_eq!(body["headline"].as_str(), Some("Strong match"));
 }
 
@@ -174,7 +174,7 @@ async fn fit_handler_stop_reason_capture_stores_raw_response_stop_reason_after_a
         .await;
     response.assert_status_ok();
     let body: Value = response.json();
-    assert_eq!(body["verdict"].as_str(), Some("strong-fit"));
+    assert_eq!(body["verdict"].as_str(), Some("strong_fit"));
 }
 
 // ===========================================================================
@@ -323,7 +323,7 @@ async fn fit_handler_logs_warn_on_max_tokens_stop_reason_and_attempts_json_parse
     let body: Value = response.json();
     assert_eq!(
         body["verdict"].as_str(),
-        Some("strong-fit"),
+        Some("strong_fit"),
         "fit handler MUST attempt JSON parse on max_tokens and return 200 if parse succeeds"
     );
 
@@ -363,7 +363,7 @@ async fn fit_handler_treats_stop_sequence_as_end_turn_equivalent() {
         .await;
     response.assert_status_ok();
     let body: Value = response.json();
-    assert_eq!(body["verdict"].as_str(), Some("strong-fit"));
+    assert_eq!(body["verdict"].as_str(), Some("strong_fit"));
 }
 
 /// Given the model returns stop_reason = "pause_turn" and a valid JSON body
@@ -390,7 +390,7 @@ async fn fit_handler_treats_pause_turn_as_end_turn_equivalent() {
         .await;
     response.assert_status_ok();
     let body: Value = response.json();
-    assert_eq!(body["verdict"].as_str(), Some("strong-fit"));
+    assert_eq!(body["verdict"].as_str(), Some("strong_fit"));
 }
 
 // ===========================================================================

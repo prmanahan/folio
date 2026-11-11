@@ -5,6 +5,7 @@ use crate::models::{
     article, education, experience, faq, gaps, instructions, profile, project, skill, values,
 };
 
+use super::opaque_internal;
 use super::prompt_templates::*;
 use super::prompts::FIT_WRAPPER_TEMPLATE;
 
@@ -16,20 +17,22 @@ use super::prompts::FIT_WRAPPER_TEMPLATE;
 ///  3. Security block (anti-injection)
 ///  4. Core directive (brutal honesty + anti-hallucination)
 ///  5. Voice direction
-///  6. Data classification rules
-///  7. Custom instructions
-///  8. About
-///  9. Work experience (with private fields)
-/// 10. Skills self-assessment
-/// 11. Explicit gaps & weaknesses
-/// 12. Education
-/// 13. Values & culture fit
-/// 14. FAQ (verbatim-first)
-/// 15. Projects (published only)
-/// 16. Articles (published only)
-/// 17. Compensation deflection
-/// 18. Response guidelines
-fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
+///  6. Custom instructions
+///  7. About
+///  8. Work experience (public fields plus the private ones not dropped by #4713)
+///  9. Skills self-assessment
+/// 10. Explicit gaps & weaknesses
+/// 11. Education
+/// 12. Values & culture fit
+/// 13. FAQ (verbatim-first)
+/// 14. Projects (published only)
+/// 15. Articles (published only)
+/// 16. Compensation deflection
+/// 17. Response guidelines
+///
+/// Returns the raw `rusqlite::Error`; the public builders map it to the opaque
+/// AI error so SQLite text never reaches a response body (#4711 F4).
+fn build_base_prompt(conn: &Connection) -> Result<String, rusqlite::Error> {
     let prof = profile::get_full(conn)?;
     let instrs = instructions::list_all(conn)?;
     let experiences = experience::list_all(conn)?;
@@ -78,10 +81,7 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
     // --- 5. Voice direction ---
     prompt.push_str(&VOICE_DIRECTION.replace("{name}", &prof.name));
 
-    // --- 6. Data classification rules ---
-    prompt.push_str(DATA_CLASSIFICATION);
-
-    // --- 7. Custom instructions ---
+    // --- 6. Custom instructions ---
     prompt.push_str(SECTION_CUSTOM_INSTRUCTIONS);
     for instr in &instrs {
         prompt.push_str(&format!(
@@ -90,7 +90,7 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
         ));
     }
 
-    // --- 8. About ---
+    // --- 7. About ---
     prompt.push_str(SECTION_ABOUT);
     prompt.push_str(&format!("Looking for: {}\n", prof.looking_for));
     prompt.push_str(&format!("Not looking for: {}\n", prof.not_looking_for));
@@ -117,7 +117,7 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
     prompt.push_str(&format!("Management style: {}\n", prof.management_style));
     prompt.push_str(&format!("Work style: {}\n", prof.work_style));
 
-    // --- 9. Work experience ---
+    // --- 8. Work experience ---
     prompt.push_str(SECTION_EXPERIENCE);
     for exp in &experiences {
         let date_range = match &exp.end_date {
@@ -148,13 +148,10 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
             }
         }
 
-        // Private context fields (for AI context only — see DATA_CLASSIFICATION)
-        if !exp.why_joined.is_empty() {
-            prompt.push_str(&format!("Why joined: {}\n", exp.why_joined));
-        }
-        if !exp.why_left.is_empty() {
-            prompt.push_str(&format!("Why left: {}\n", exp.why_left));
-        }
+        // #4713: `why_joined`, `why_left` and `reports_would_say` are
+        // intentionally NOT interpolated (same reasoning as the LLM07(a)
+        // notes below). The fields that remain in the prompt carry no
+        // withhold-instruction, so treat them as publicly extractable.
         if !exp.actual_contributions.is_empty() {
             prompt.push_str(&format!(
                 "Actual contributions: {}\n",
@@ -181,9 +178,6 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
         }
         // LLM07(a) / R3: `manager_would_say` is intentionally NOT
         // interpolated (see the `would_do_differently` note above).
-        if !exp.reports_would_say.is_empty() {
-            prompt.push_str(&format!("Reports would say: {}\n", exp.reports_would_say));
-        }
         if !exp.title_progression.is_empty() {
             prompt.push_str(&format!("Title progression: {}\n", exp.title_progression));
         }
@@ -192,7 +186,7 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
         }
     }
 
-    // --- 10. Skills self-assessment ---
+    // --- 9. Skills self-assessment ---
     prompt.push_str(SECTION_SKILLS);
 
     let strong: Vec<_> = skills.iter().filter(|s| s.category == "strong").collect();
@@ -233,7 +227,7 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
         }
     }
 
-    // --- 11. Explicit gaps & weaknesses ---
+    // --- 10. Explicit gaps & weaknesses ---
     prompt.push_str(SECTION_GAPS);
     for g in &gaps_list {
         let interest = if g.interest_in_learning { "Yes" } else { "No" };
@@ -243,7 +237,7 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
         ));
     }
 
-    // --- 12. Education ---
+    // --- 11. Education ---
     prompt.push_str(SECTION_EDUCATION);
     for e in &edu {
         prompt.push_str(&format!(
@@ -252,7 +246,7 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
         ));
     }
 
-    // --- 13. Values & culture fit ---
+    // --- 12. Values & culture fit ---
     prompt.push_str(SECTION_VALUES);
     if !vals.must_haves.is_empty() {
         prompt.push_str(&format!("Must-haves: {}\n", vals.must_haves));
@@ -291,13 +285,13 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
         ));
     }
 
-    // --- 14. FAQ (verbatim-first) ---
+    // --- 13. FAQ (verbatim-first) ---
     prompt.push_str(SECTION_FAQ);
     for f in &faqs {
         prompt.push_str(&format!("Q: {}\nA: {}\n\n", f.question, f.answer));
     }
 
-    // --- 15. Projects (published only) ---
+    // --- 14. Projects (published only) ---
     let published_projects: Vec<_> = projects.iter().filter(|p| p.published).collect();
     if !published_projects.is_empty() {
         prompt.push_str(SECTION_PROJECTS);
@@ -324,7 +318,7 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
         }
     }
 
-    // --- 16. Articles (published only) ---
+    // --- 15. Articles (published only) ---
     let published_articles: Vec<_> = articles.iter().filter(|a| a.published).collect();
     if !published_articles.is_empty() {
         prompt.push_str(SECTION_ARTICLES);
@@ -340,10 +334,10 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
         }
     }
 
-    // --- 17. Compensation deflection (no salary numbers) ---
+    // --- 16. Compensation deflection (no salary numbers) ---
     prompt.push_str(&COMPENSATION_DEFLECTION.replace("{name}", &prof.name));
 
-    // --- 18. Response guidelines ---
+    // --- 17. Response guidelines ---
     prompt.push_str(RESPONSE_GUIDELINES);
 
     Ok(prompt)
@@ -354,7 +348,8 @@ fn build_base_prompt(conn: &Connection) -> Result<String, AppError> {
 /// so it comes after any contradicting `ai_instructions` row (placement, not
 /// enforcement: the model still weighs both). Fit must not use this.
 pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
-    let mut prompt = build_base_prompt(conn)?;
+    let mut prompt =
+        build_base_prompt(conn).map_err(|e| opaque_internal("chat prompt: sqlite", e))?;
     prompt.push_str(CHAT_LENGTH_LIMIT);
     Ok(prompt)
 }
@@ -365,8 +360,8 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
 /// the profile internally). The wrapper is appended after the base prompt; the
 /// chat-only length cap is not part of it.
 pub fn build_fit_prompt(conn: &Connection) -> Result<String, AppError> {
-    let prof = profile::get_full(conn)?;
-    let base = build_base_prompt(conn)?;
+    let prof = profile::get_full(conn).map_err(|e| opaque_internal("fit prompt: sqlite", e))?;
+    let base = build_base_prompt(conn).map_err(|e| opaque_internal("fit prompt: sqlite", e))?;
     let wrapper = FIT_WRAPPER_TEMPLATE.replace("{name}", &prof.name);
     Ok(format!("{}\n\n{}", base, wrapper))
 }
@@ -555,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_contains_experience_with_private_fields() {
+    fn test_prompt_contains_experience_without_dropped_private_fields() {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
@@ -564,12 +559,12 @@ mod tests {
             "prompt must contain company name"
         );
         assert!(
-            prompt.contains("Loved the mission"),
-            "prompt must contain why_joined"
+            !prompt.contains("Loved the mission"),
+            "prompt must not contain why_joined (#4713)"
         );
         assert!(
-            prompt.contains("Acquired by BigCo"),
-            "prompt must contain why_left"
+            !prompt.contains("Acquired by BigCo"),
+            "prompt must not contain why_left (#4713)"
         );
         assert!(
             prompt.contains("Rebuilt the data pipeline"),
@@ -781,9 +776,9 @@ mod tests {
         );
     }
 
-    // Decision 4 + 7: Security and data classification sections present
+    // Decision 4: security block present; #4713: data classification block removed
     #[test]
-    fn test_prompt_contains_security_and_data_classification() {
+    fn test_prompt_contains_security_and_no_data_classification() {
         let conn = setup_db();
         seed_all(&conn);
         let prompt = build_system_prompt(&conn).unwrap();
@@ -793,13 +788,35 @@ mod tests {
             "anti-injection instruction in security block"
         );
         assert!(
-            prompt.contains("DATA CLASSIFICATION"),
-            "data classification block in prompt"
+            !prompt.to_lowercase().contains("data classification"),
+            "data classification block removed (#4713)"
         );
         assert!(
-            prompt.contains("for YOUR context only"),
-            "private context disclosure rule in prompt"
+            !prompt.to_lowercase().contains("private context"),
+            "no never-reveal rule about private context (#4713)"
         );
+    }
+
+    /// #4711 F4: a SQLite failure while reading the tables the base prompt is
+    /// built from reaches the caller as the fixed opaque message, for both
+    /// builders; the table name in the SQLite text must not escape.
+    #[test]
+    fn prompt_builders_map_sqlite_failures_to_the_opaque_message() {
+        let conn = setup_db();
+        seed_all(&conn);
+        conn.execute("DROP TABLE experiences", []).unwrap();
+
+        for (name, result) in [
+            ("build_system_prompt", build_system_prompt(&conn)),
+            ("build_fit_prompt", build_fit_prompt(&conn)),
+        ] {
+            match result {
+                Err(AppError::Internal(m)) => {
+                    assert_eq!(m, crate::ai::AI_INTERNAL_OPAQUE_MESSAGE, "{name}")
+                }
+                other => panic!("{name}: expected opaque Internal, got {other:?}"),
+            }
+        }
     }
 
     // Decision 1: Third-person representative identity

@@ -58,14 +58,10 @@ async fn spa_path_without_secret_is_404() {
     let server = locked_server();
     let response = server.get("/some/client/side/route").await;
     response.assert_status(StatusCode::NOT_FOUND);
-    // Stronger than the status code alone: `ServeDir`'s own SPA
-    // not-found fallback ALSO answers with a 404 status (it wraps the
-    // served index.html in `SetStatus::new(_, StatusCode::NOT_FOUND)`,
-    // per tower_http), so a bare 404 assertion here can't tell "origin
-    // lock rejected this" apart from "origin lock let it through and the
-    // fallback happened to 404 it too". An empty body distinguishes
-    // them: origin_lock's own rejection never touches the fallback, so
-    // it can't carry the fixture's index content.
+    // Since #4718 the SPA fallback answers 200, so the 404 above already
+    // separates origin_lock's rejection from the fallback. The body check
+    // stays as a second witness: origin_lock's own rejection never touches
+    // the fallback, so it can't carry the fixture's index content.
     let body = response.text();
     assert!(
         !body.contains("origin-lock test fixture index"),
@@ -178,13 +174,10 @@ async fn spa_path_with_secret_reaches_the_real_index_fallback() {
         .get("/some/client/side/route")
         .add_header(EDGE_AUTH_HEADER, TEST_SECRET)
         .await;
-    // `ServeDir`'s own not-found fallback answers 404 (it wraps the
-    // served index.html in `SetStatus::new(_, StatusCode::NOT_FOUND)`,
-    // per tower_http) — that status is unrelated to origin_lock, which
-    // is exactly the point: with the correct secret, this request
-    // reaches the REAL fallback and gets the REAL content, rather than
-    // origin_lock's own contentless rejection.
-    response.assert_status(StatusCode::NOT_FOUND);
+    // With the correct secret this request reaches the REAL fallback and
+    // gets the REAL content (the SPA index, 200 since #4718), rather than
+    // origin_lock's own contentless 404 rejection.
+    response.assert_status(StatusCode::OK);
     let body = response.text();
     assert!(
         body.contains("origin-lock test fixture index"),

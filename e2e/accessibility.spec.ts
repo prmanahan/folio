@@ -251,7 +251,7 @@ test.describe('Accessibility — AI pane', () => {
       route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
-        body: 'data: Peter ships reliable systems.\ndata: [DONE]\n',
+        body: 'data: Peter ships reliable systems.\n\ndata: [DONE]\n\n',
       })
     );
 
@@ -283,7 +283,7 @@ test.describe('Accessibility — AI pane', () => {
       await route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
-        body: 'data: Peter ships reliable systems.\ndata: [DONE]\n',
+        body: 'data: Peter ships reliable systems.\n\ndata: [DONE]\n\n',
       });
     });
 
