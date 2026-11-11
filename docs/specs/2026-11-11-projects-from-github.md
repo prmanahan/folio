@@ -8,7 +8,7 @@ lock_tag: ""             # brief/projects-from-github/spec-locked, stamped at sp
 
 > **Spec for:** folio task #4726
 > **Date:** 2026-11-11
-> **Design ref:** Frame `docs/intent/projects-from-github-frame.md` and intake `docs/intent/projects-from-github.md`. Both are draft, and neither lock tag is cut yet. The plan pins the Frame by `brief/projects-from-github/frame-locked` once Puck cuts it.
+> **Design ref:** Frame `docs/intent/projects-from-github-frame.md` and intake `docs/intent/projects-from-github.md`. Both are draft, and neither lock tag is cut yet. This spec was written against Frame blob `abf3239217e347c36ba3f4a5048f29b94c4ab111` (`git hash-object docs/intent/projects-from-github-frame.md`). Once Puck cuts `brief/projects-from-github/frame-locked`, the plan pins the Frame by that tag.
 
 ## Purpose
 
@@ -35,9 +35,10 @@ The open tension with the folio-simplification Frame is the Frame's E-1. It stay
   - pagination cannot be completed;
   - an owner has zero repos after the exclusions in R-4;
   - any element fails R-5.
-  - Acceptance: one seeded case per condition, each giving a non-zero exit and no file at the output path.
+  - Before making any request, the fetch SHALL delete any file already at its output path, so a failed run never leaves an earlier list behind.
+  - Acceptance: one seeded case per condition, each starting with a valid file at the output path, gives a non-zero exit and leaves no file there.
 - **R-3** The fetch SHALL NOT substitute any other list when it fails. That rules out a fixture, a cached copy, a committed copy and an earlier deploy's list.
-  - Acceptance: with the API base set to an unreachable address, the run exits non-zero even when a valid list file already sits at the output path and the committed fixtures are present in the tree.
+  - Acceptance: with the API base set to an unreachable address, a valid list file at the output path and the committed fixtures present in the tree, the run exits non-zero and no file remains at the output path.
 - **R-4** Every repo returned for an owner SHALL appear in the list unless it matches one of exactly three exclusions:
   - `fork` is true;
   - `archived` is true;
@@ -75,9 +76,9 @@ The open tension with the folio-simplification Frame is the Frame's E-1. It stay
   - `url` SHALL be composed as `https://github.com/<owner>/<name>` from the validated owner and name.
   - No other field from GitHub, such as `homepage` or `html_url`, SHALL be held.
   - Acceptance: for the shared fixture, the produced file equals a committed expected file byte for byte, apart from `fetched_at`.
-- **R-9** The generated list file SHALL NOT be tracked in git, and tests SHALL use committed fixtures whose repo names all begin `fixture-`.
+- **R-9** The generated list file SHALL NOT be tracked in git. Committed list-file fixtures, meaning any file in the list file's format that the server or page could load, SHALL have repo names that all begin `fixture-`. API-response fixtures, which are the fetch's inputs, are exempt, because they must carry names such as `.github` and invalid names for R-4 and R-5.
   - Acceptance: after running the fetch in a clean checkout, `git status --porcelain` prints nothing.
-  - Acceptance: every repo name in every committed list fixture begins `fixture-`.
+  - Acceptance: every repo name in every committed list-file fixture begins `fixture-`.
 
 **Server** (Frame D-2)
 

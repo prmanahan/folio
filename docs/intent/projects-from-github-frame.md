@@ -47,7 +47,8 @@ flowchart LR
     P3["P-3 folio server: static files, AI context"]
     DS2[("DS-2 projects table, SQLite volume")]
   end
-  EE2["EE-2 visitor browser, P-4 projects page"]
+  EE2["EE-2 visitor browser"]
+  P4["P-4 projects page, runs in EE-2"]
   EE3["EE-3 Anthropic API"]
   EE4 -- "DF-1 create repo / edit description" --> EE1
   DS3 -- "DF-2 token via env" --> P1
@@ -56,7 +57,8 @@ flowchart LR
   P1 -- "DF-5 validated list" --> DS1
   DS1 -- "DF-6 context upload" --> P2
   P2 -- "DF-7 file in frontend/build" --> P3
-  P3 -- "DF-8 list file, same origin" --> EE2
+  P3 -- "DF-8 list file, same origin" --> P4
+  P4 -- "DF-11 rendered list, text only" --> EE2
   EE2 -- "DF-9 chat prompt (existing)" --> P3
   P3 -- "DF-10 system prompt incl. projects" --> EE3
   DS2 -. "no longer read by public or AI paths" .- P3
