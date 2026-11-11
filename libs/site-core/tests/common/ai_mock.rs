@@ -376,5 +376,5 @@ pub fn anthropic_messages_response(text_content: &str, stop_reason: &str) -> Str
 /// Canonical valid `FitVerdict` JSON string for fit handler happy-path
 /// tests. Matches the `FitVerdict` shape in `libs/site-core/ai/types.rs`.
 pub fn valid_fit_verdict_json() -> &'static str {
-    r#"{"verdict":"strong-fit","headline":"Strong match","opening":"Your background aligns well","gaps":[],"transfers":[{"skill":"systems thinking","relevance":"high"}],"recommendation":"Pursue this role"}"#
+    r#"{"verdict":"strong_fit","headline":"Strong match","opening":"Your background aligns well","gaps":[],"transfers":[{"skill":"systems thinking","relevance":"high"}],"recommendation":"Pursue this role"}"#
 }

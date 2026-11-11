@@ -128,7 +128,7 @@ test.describe('AI chat — new typed terminal events (spec #572 R19/R20)', () =>
   test('refusal renders as notice, NOT as an AI content bubble (R20 / Scenario 8)', async ({
     page,
   }) => {
-    await stubChat(page, `event: refusal\ndata: ${REFUSAL_MSG}\ndata: [DONE]\n`);
+    await stubChat(page, `event: refusal\ndata: ${REFUSAL_MSG}\n\ndata: [DONE]\n\n`);
     await openChatAndSend(page);
 
     // Positive: surfaced via the error/notice treatment
@@ -144,7 +144,7 @@ test.describe('AI chat — new typed terminal events (spec #572 R19/R20)', () =>
   test('context_exceeded renders as notice, NOT as an AI content bubble (R20 / Scenario 9)', async ({
     page,
   }) => {
-    await stubChat(page, `event: context_exceeded\ndata: ${CONTEXT_MSG}\ndata: [DONE]\n`);
+    await stubChat(page, `event: context_exceeded\ndata: ${CONTEXT_MSG}\n\ndata: [DONE]\n\n`);
     await openChatAndSend(page);
 
     await expect(page.locator('[role="alert"]')).toHaveText(CONTEXT_MSG, {
@@ -160,7 +160,7 @@ test.describe('AI chat — new typed terminal events (spec #572 R19/R20)', () =>
   }) => {
     await stubChat(
       page,
-      `data: Peter ships reliable systems.\nevent: truncated\ndata: ${TRUNCATED_MSG}\ndata: [DONE]\n`
+      `data: Peter ships reliable systems.\n\nevent: truncated\ndata: ${TRUNCATED_MSG}\n\ndata: [DONE]\n\n`
     );
     await openChatAndSend(page);
 

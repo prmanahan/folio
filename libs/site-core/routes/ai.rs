@@ -18,6 +18,7 @@ use crate::ai::context::{build_fit_prompt, build_system_prompt};
 use crate::ai::rate_limit::check_rate_limit_with_ceiling;
 use crate::ai::stop_reason::{StopReason, StopReasonCapture, from_anthropic_str};
 use crate::ai::types::{ChatRequest, FitRequest, FitVerdict};
+use crate::ai::{AI_INTERNAL_OPAQUE_MESSAGE, opaque_internal};
 use crate::db::config::{
     get_chat_hourly_ceiling, get_fit_hourly_ceiling, get_max_tokens, get_model_id,
 };
@@ -38,13 +39,6 @@ const LOG_SANITIZE_MAX_CHARS: usize = 500;
 /// 413 before the handler allocates/parses) instead of relying on axum's
 /// 2 MiB default and the post-parse char check.
 const AI_BODY_LIMIT_BYTES: usize = 64 * 1024;
-
-/// Generic opaque client message for AI-path `AppError::Internal` failures
-/// whose detail (upstream/serde error text) must stay server-side only
-/// (LLM-audit residual / R7). The detailed `{e}` is logged via
-/// `tracing::error!` at each site; the client receives only this fixed
-/// string so no upstream/serde text reaches the response body.
-const AI_INTERNAL_OPAQUE_MESSAGE: &str = "AI request failed. Please try again later.";
 
 /// LLM-audit M1 / R1: deadline on the fit handler's single buffered
 /// `agent.prompt(...).await`.
@@ -125,7 +119,7 @@ async fn chat_inner(
         let conn = state
             .db
             .lock()
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+            .map_err(|e| opaque_internal("chat: db lock poisoned", e))?;
         let chat_ceiling = get_chat_hourly_ceiling(&conn);
         check_rate_limit_with_ceiling(&conn, ip, "chat", 10, chat_ceiling)?;
         // R27: AI-disabled guard. Fires AFTER rate-limit, BEFORE the
@@ -231,7 +225,7 @@ async fn fit_analysis_inner(
         let conn = state
             .db
             .lock()
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+            .map_err(|e| opaque_internal("fit: db lock poisoned", e))?;
         let fit_ceiling = get_fit_hourly_ceiling(&conn);
         check_rate_limit_with_ceiling(&conn, ip, "fit", 5, fit_ceiling)?;
         let client = state
@@ -577,6 +571,60 @@ mod m1_no_key_path_tests {
              guard. captured={:?}",
             buf.captured()
         );
+    }
+
+    /// #4711 F4: a poisoned DB mutex, and a SQLite failure in the rate-limit
+    /// write, reach the client as the fixed opaque message on both handlers.
+    /// Prompt-construction failures are covered in `ai/context.rs`.
+    #[tokio::test]
+    async fn db_failures_return_the_opaque_message_on_chat_and_fit() {
+        fn poisoned() -> DbState {
+            let state = no_key_state(db_with_missing_config_rows());
+            let db = Arc::clone(&state.db);
+            let _ = std::thread::spawn(move || {
+                let _guard = db.lock().unwrap();
+                panic!("poison the mutex");
+            })
+            .join();
+            state
+        }
+        // Table dropped: the rate-limit write fails with SQLite text that
+        // names `rate_limits`.
+        fn broken_schema() -> DbState {
+            let conn = db_with_missing_config_rows();
+            conn.execute("DROP TABLE rate_limits", []).unwrap();
+            no_key_state(conn)
+        }
+
+        for state in [poisoned(), broken_schema()] {
+            let chat = chat_inner(
+                state.clone(),
+                "1.2.3.4",
+                ChatRequest {
+                    message: "Hi".to_string(),
+                },
+            )
+            .await;
+            match chat {
+                Err(AppError::Internal(msg)) => assert_eq!(msg, AI_INTERNAL_OPAQUE_MESSAGE),
+                Err(other) => panic!("chat: expected opaque Internal, got {other:?}"),
+                Ok(_) => panic!("chat: expected an error"),
+            }
+
+            let fit = fit_analysis_inner(
+                state,
+                "1.2.3.4",
+                FitRequest {
+                    job_description: "Senior engineer".to_string(),
+                },
+            )
+            .await;
+            match fit {
+                Err(AppError::Internal(msg)) => assert_eq!(msg, AI_INTERNAL_OPAQUE_MESSAGE),
+                Err(other) => panic!("fit: expected opaque Internal, got {other:?}"),
+                Ok(_) => panic!("fit: expected an error"),
+            }
+        }
     }
 
     /// `fit_analysis_inner` symmetry — same invariant on the fit handler.

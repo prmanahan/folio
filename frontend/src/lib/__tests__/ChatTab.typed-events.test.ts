@@ -86,7 +86,7 @@ describe('ChatTab — new typed terminal events render as notice, never as conte
 
 	it('refusal: canned text is NOT in the assistant content bubble (R20 / Scenario 8)', async () => {
 		chatMock.mockResolvedValue(
-			sseResponse(`event: refusal\ndata: ${REFUSAL_MSG}\ndata: [DONE]\n`)
+			sseResponse(`event: refusal\ndata: ${REFUSAL_MSG}\n\ndata: [DONE]\n\n`)
 		);
 		const { container } = render(ChatTab);
 		await sendAndSettle();
@@ -102,7 +102,7 @@ describe('ChatTab — new typed terminal events render as notice, never as conte
 
 	it('refusal: canned text IS surfaced via the error/notice treatment (R20 / Scenario 8)', async () => {
 		chatMock.mockResolvedValue(
-			sseResponse(`event: refusal\ndata: ${REFUSAL_MSG}\ndata: [DONE]\n`)
+			sseResponse(`event: refusal\ndata: ${REFUSAL_MSG}\n\ndata: [DONE]\n\n`)
 		);
 		render(ChatTab);
 		await sendAndSettle();
@@ -113,7 +113,7 @@ describe('ChatTab — new typed terminal events render as notice, never as conte
 
 	it('context_exceeded: canned text is NOT in the assistant content bubble (R20 / Scenario 9)', async () => {
 		chatMock.mockResolvedValue(
-			sseResponse(`event: context_exceeded\ndata: ${CONTEXT_MSG}\ndata: [DONE]\n`)
+			sseResponse(`event: context_exceeded\ndata: ${CONTEXT_MSG}\n\ndata: [DONE]\n\n`)
 		);
 		const { container } = render(ChatTab);
 		await sendAndSettle();
@@ -128,7 +128,7 @@ describe('ChatTab — new typed terminal events render as notice, never as conte
 
 	it('context_exceeded: canned text IS surfaced via the error/notice treatment (R20 / Scenario 9)', async () => {
 		chatMock.mockResolvedValue(
-			sseResponse(`event: context_exceeded\ndata: ${CONTEXT_MSG}\ndata: [DONE]\n`)
+			sseResponse(`event: context_exceeded\ndata: ${CONTEXT_MSG}\n\ndata: [DONE]\n\n`)
 		);
 		render(ChatTab);
 		await sendAndSettle();
@@ -140,7 +140,7 @@ describe('ChatTab — new typed terminal events render as notice, never as conte
 	it('truncated: pre-truncation content renders, canned notice text does NOT pollute the bubble (R20 / Scenario 15)', async () => {
 		chatMock.mockResolvedValue(
 			sseResponse(
-				`data: Peter ships reliable systems.\nevent: truncated\ndata: ${TRUNCATED_MSG}\ndata: [DONE]\n`
+				`data: Peter ships reliable systems.\n\nevent: truncated\ndata: ${TRUNCATED_MSG}\n\ndata: [DONE]\n\n`
 			)
 		);
 		const { container } = render(ChatTab);
@@ -160,7 +160,7 @@ describe('ChatTab — new typed terminal events render as notice, never as conte
 	it('truncated: canned notice text IS surfaced via the notice treatment (R19 / Scenario 15)', async () => {
 		chatMock.mockResolvedValue(
 			sseResponse(
-				`data: partial.\nevent: truncated\ndata: ${TRUNCATED_MSG}\ndata: [DONE]\n`
+				`data: partial.\n\nevent: truncated\ndata: ${TRUNCATED_MSG}\n\ndata: [DONE]\n\n`
 			)
 		);
 		render(ChatTab);

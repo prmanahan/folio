@@ -116,7 +116,7 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 		it('regression: refusal payload does NOT surface as a content token (R19 / Scenario 8)', async () => {
 			// Given the server emits `event: refusal` then `[DONE]`
 			const reader = makeReader([
-				`event: refusal\ndata: ${REFUSAL_MSG}\ndata: [DONE]\n`,
+				`event: refusal\ndata: ${REFUSAL_MSG}\n\ndata: [DONE]\n\n`,
 			]);
 			// When the stream is consumed
 			const r = await consumeClassified(reader);
@@ -127,7 +127,7 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 
 		it('classifies refusal distinctly and carries its canned message verbatim (Scenario 8)', async () => {
 			const reader = makeReader([
-				`event: refusal\ndata: ${REFUSAL_MSG}\ndata: [DONE]\n`,
+				`event: refusal\ndata: ${REFUSAL_MSG}\n\ndata: [DONE]\n\n`,
 			]);
 			const r = await consumeClassified(reader);
 			// Routed to the refusal classification with the EXACT spec string
@@ -139,8 +139,8 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 
 		it('terminates cleanly relative to [DONE] on refusal — no hang (Scenario 8)', async () => {
 			const reader = makeReader([
-				`event: refusal\ndata: ${REFUSAL_MSG}\ndata: [DONE]\n`,
-				'data: should-never-be-read\n',
+				`event: refusal\ndata: ${REFUSAL_MSG}\n\ndata: [DONE]\n\n`,
+				'data: should-never-be-read\n\n',
 			]);
 			const r = await consumeClassified(reader);
 			// Consumer reached a terminal state; nothing past [DONE] leaked in
@@ -152,7 +152,7 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 	describe('Feature: context_exceeded event (Scenario 9)', () => {
 		it('regression: context_exceeded payload does NOT surface as a content token (R19 / Scenario 9)', async () => {
 			const reader = makeReader([
-				`event: context_exceeded\ndata: ${CONTEXT_MSG}\ndata: [DONE]\n`,
+				`event: context_exceeded\ndata: ${CONTEXT_MSG}\n\ndata: [DONE]\n\n`,
 			]);
 			const r = await consumeClassified(reader);
 			expect(r.content.join('')).toBe('');
@@ -161,7 +161,7 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 
 		it('classifies context_exceeded distinctly and carries its canned message verbatim (Scenario 9)', async () => {
 			const reader = makeReader([
-				`event: context_exceeded\ndata: ${CONTEXT_MSG}\ndata: [DONE]\n`,
+				`event: context_exceeded\ndata: ${CONTEXT_MSG}\n\ndata: [DONE]\n\n`,
 			]);
 			const r = await consumeClassified(reader);
 			expect(r.contextExceeded).toBe(CONTEXT_MSG);
@@ -171,8 +171,8 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 
 		it('terminates cleanly relative to [DONE] on context_exceeded — no hang (Scenario 9)', async () => {
 			const reader = makeReader([
-				`event: context_exceeded\ndata: ${CONTEXT_MSG}\ndata: [DONE]\n`,
-				'data: should-never-be-read\n',
+				`event: context_exceeded\ndata: ${CONTEXT_MSG}\n\ndata: [DONE]\n\n`,
+				'data: should-never-be-read\n\n',
 			]);
 			const r = await consumeClassified(reader);
 			expect(r.content).toEqual([]);
@@ -185,7 +185,7 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 			const reader = makeReader([
 				'data: Peter has',
 				' deep experience.',
-				`\nevent: truncated\ndata: ${TRUNCATED_MSG}\ndata: [DONE]\n`,
+				`\n\nevent: truncated\ndata: ${TRUNCATED_MSG}\n\ndata: [DONE]\n\n`,
 			]);
 			const r = await consumeClassified(reader);
 			// The truncated canned message must NOT appear among content tokens
@@ -197,8 +197,8 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 			// Given real content frames arrive, THEN `event: truncated`, THEN [DONE]
 			const reader = makeReader([
 				'data: alpha',
-				'\ndata: beta',
-				`\nevent: truncated\ndata: ${TRUNCATED_MSG}\ndata: [DONE]\n`,
+				'\n\ndata: beta',
+				`\n\nevent: truncated\ndata: ${TRUNCATED_MSG}\n\ndata: [DONE]\n\n`,
 			]);
 			const r = await consumeClassified(reader);
 			// Then all pre-truncation content is yielded normally, in order
@@ -213,7 +213,7 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 		it('classifies truncated distinctly from refusal and context_exceeded (Scenario 15)', async () => {
 			const reader = makeReader([
 				'data: partial answer',
-				`\nevent: truncated\ndata: ${TRUNCATED_MSG}\ndata: [DONE]\n`,
+				`\n\nevent: truncated\ndata: ${TRUNCATED_MSG}\n\ndata: [DONE]\n\n`,
 			]);
 			const r = await consumeClassified(reader);
 			expect(r.truncated?.message).toBe(TRUNCATED_MSG);
@@ -224,8 +224,8 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 		it('terminates cleanly relative to [DONE] on truncated — no hang (Scenario 15)', async () => {
 			const reader = makeReader([
 				'data: kept',
-				`\nevent: truncated\ndata: ${TRUNCATED_MSG}\ndata: [DONE]\n`,
-				'data: should-never-be-read\n',
+				`\n\nevent: truncated\ndata: ${TRUNCATED_MSG}\n\ndata: [DONE]\n\n`,
+				'data: should-never-be-read\n\n',
 			]);
 			const r = await consumeClassified(reader);
 			expect(r.content).toEqual(['kept']);
@@ -236,13 +236,13 @@ describe('SSE parser — new typed terminal events (spec #572 R19/R20)', () => {
 	describe('Feature: the three are mutually distinguishable (R19)', () => {
 		it('a consumer can tell refusal vs context_exceeded vs truncated apart', async () => {
 			const refusal = await consumeClassified(
-				makeReader([`event: refusal\ndata: ${REFUSAL_MSG}\ndata: [DONE]\n`])
+				makeReader([`event: refusal\ndata: ${REFUSAL_MSG}\n\ndata: [DONE]\n\n`])
 			);
 			const context = await consumeClassified(
-				makeReader([`event: context_exceeded\ndata: ${CONTEXT_MSG}\ndata: [DONE]\n`])
+				makeReader([`event: context_exceeded\ndata: ${CONTEXT_MSG}\n\ndata: [DONE]\n\n`])
 			);
 			const truncated = await consumeClassified(
-				makeReader([`data: x\nevent: truncated\ndata: ${TRUNCATED_MSG}\ndata: [DONE]\n`])
+				makeReader([`data: x\n\nevent: truncated\ndata: ${TRUNCATED_MSG}\n\ndata: [DONE]\n\n`])
 			);
 
 			// Each populates exactly its own classification, none of the others

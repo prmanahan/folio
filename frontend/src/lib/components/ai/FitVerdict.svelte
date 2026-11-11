@@ -1,15 +1,45 @@
 <script lang="ts">
 	import type { FitVerdict } from '$lib/types';
+	import { stripInvisible } from '$lib/invisible';
 
 	let { verdict }: { verdict: FitVerdict } = $props();
 
-	const verdictConfig = {
+	// Model-written text: strip invisible Unicode (same function as the chat
+	// render). Svelte text interpolation does not decode character references,
+	// so one pass is enough here.
+	const clean = $derived({
+		headline: stripInvisible(verdict.headline),
+		opening: stripInvisible(verdict.opening),
+		recommendation: stripInvisible(verdict.recommendation),
+		gaps: verdict.gaps.map((g) => ({
+			requirement: stripInvisible(g.requirement),
+			gap_title: stripInvisible(g.gap_title),
+			explanation: stripInvisible(g.explanation)
+		})),
+		transfers: verdict.transfers.map((t) => ({
+			skill: stripInvisible(t.skill),
+			relevance: stripInvisible(t.relevance)
+		}))
+	});
+
+	type BadgeConfig = { label: string; cssClass: string };
+
+	const verdictConfig: Record<FitVerdict['verdict'], BadgeConfig> = {
 		strong_fit: { label: 'Strong Fit', cssClass: 'verdict-strong' },
 		worth_conversation: { label: 'Worth a Conversation', cssClass: 'verdict-conversation' },
 		probably_not: { label: 'Probably Not a Fit', cssClass: 'verdict-not' },
 	};
 
-	const config = $derived(verdictConfig[verdict.verdict]);
+	// The verdict string comes off the wire from model output, so the type's
+	// union is a hope, not a guarantee: an unknown value renders neutral
+	// instead of throwing (and never reaches Object.prototype keys).
+	const fallbackConfig: BadgeConfig = { label: 'Unrated', cssClass: 'verdict-unknown' };
+
+	const config = $derived(
+		Object.hasOwn(verdictConfig, verdict.verdict)
+			? verdictConfig[verdict.verdict]
+			: fallbackConfig
+	);
 </script>
 
 <div class="fit-verdict">
@@ -17,15 +47,15 @@
 		<span class="verdict-badge {config.cssClass}">{config.label}</span>
 	</div>
 
-	<h2 class="headline">{verdict.headline}</h2>
+	<h2 class="headline">{clean.headline}</h2>
 
-	<p class="opening">{verdict.opening}</p>
+	<p class="opening">{clean.opening}</p>
 
-	{#if verdict.gaps.length > 0}
+	{#if clean.gaps.length > 0}
 		<section class="section">
 			<h3 class="section-heading">Gaps</h3>
 			<div class="gap-list">
-				{#each verdict.gaps as gap}
+				{#each clean.gaps as gap}
 					<div class="gap-card">
 						<div class="gap-header">
 							<span class="gap-requirement">{gap.requirement}</span>
@@ -39,11 +69,11 @@
 		</section>
 	{/if}
 
-	{#if verdict.transfers.length > 0}
+	{#if clean.transfers.length > 0}
 		<section class="section">
 			<h3 class="section-heading">Transferable Skills</h3>
 			<div class="transfer-list">
-				{#each verdict.transfers as transfer}
+				{#each clean.transfers as transfer}
 					<div class="transfer-row">
 						<span class="transfer-skill">{transfer.skill}</span>
 						<span class="transfer-arrow">→</span>
@@ -56,7 +86,7 @@
 
 	<section class="section recommendation-section">
 		<h3 class="section-heading">Recommendation</h3>
-		<p class="recommendation">{verdict.recommendation}</p>
+		<p class="recommendation">{clean.recommendation}</p>
 	</section>
 </div>
 

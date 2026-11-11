@@ -9,8 +9,12 @@
  *   event: context_exceeded\ndata: <canned message>\n\n
  *   event: truncated\ndata: <canned message>\n\n
  *
- * Returns an async generator that yields token strings. Stops when [DONE]
- * sentinel is received.
+ * Returns an async generator that yields one string per EVENT (events end at a
+ * blank line, per the SSE spec). The `data:` lines of one event are rejoined
+ * with "\n": the backend's axum `Event::data` splits a delta containing
+ * newlines into several `data:` lines, so a delta "a\nb" arrives as
+ * `data: a\ndata: b\n\n` and yields "a\nb". Line endings may be \n, \r\n or
+ * \r. Stops when an event whose whole data is [DONE] is received.
  *
  * --- Public contract (spec #572 T5, R19/R20) ---
  *
@@ -90,50 +94,93 @@ const TYPED_EVENT_ERRORS: Record<string, new (message: string) => SSEError> = {
 	truncated: TruncatedError,
 };
 
+const DONE = Symbol('sse-done');
+
+/** SSE field values drop exactly one leading space. */
+function stripFieldSpace(value: string): string {
+	return value.startsWith(' ') ? value.slice(1) : value;
+}
+
+/**
+ * Events are dispatched at the blank-line boundary (SSE spec). The data lines
+ * of one event are rejoined with "\n": the backend's axum `Event::data` splits
+ * a delta containing newlines into several `data:` lines (#4712). Line
+ * endings may be \n, \r\n or \r; a trailing \r is held back until the next
+ * chunk so a CRLF split across reads is not counted twice.
+ */
 export async function* parseSSEStream(
 	reader: ReadableStreamDefaultReader<Uint8Array>
 ): AsyncGenerator<string, void, unknown> {
 	const decoder = new TextDecoder();
 	let buffer = '';
+	let pendingCR = false;
 	let currentEvent = '';
+	let dataLines: string[] = [];
+
+	// Dispatches the accumulated event: the token to yield, null for nothing,
+	// or DONE for the sentinel.
+	const dispatch = (): string | null | typeof DONE => {
+		const event = currentEvent;
+		const lines = dataLines;
+		currentEvent = '';
+		dataLines = [];
+		if (lines.length === 0) return null;
+		const data = lines.join('\n');
+
+		// Typed terminal events (error / refusal / context_exceeded /
+		// truncated): throw the matching typed error. Any preceding content
+		// tokens have ALREADY been yielded, so a consumer that rendered partial
+		// content keeps it (truncated ordering, Scenario 15 / R11a).
+		if (Object.hasOwn(TYPED_EVENT_ERRORS, event)) throw new TYPED_EVENT_ERRORS[event](data);
+
+		return data === '[DONE]' ? DONE : data;
+	};
 
 	while (true) {
 		const { done, value } = await reader.read();
 		if (done) break;
 
-		buffer += decoder.decode(value, { stream: true });
+		let chunk = decoder.decode(value, { stream: true });
+		if (pendingCR) {
+			chunk = '\r' + chunk;
+			pendingCR = false;
+		}
+		if (chunk.endsWith('\r')) {
+			pendingCR = true;
+			chunk = chunk.slice(0, -1);
+		}
+		buffer += chunk.replace(/\r\n|\r/g, '\n');
 
 		// Split on newlines but keep the last (possibly incomplete) line
 		const lines = buffer.split('\n');
 		buffer = lines.pop() ?? '';
 
 		for (const line of lines) {
-			if (line.startsWith('event: ')) {
-				currentEvent = line.slice(7);
-				continue;
+			if (line === '') {
+				const out = dispatch();
+				if (out === DONE) return;
+				if (out !== null) yield out;
+			} else if (line.startsWith('event:')) {
+				currentEvent = stripFieldSpace(line.slice(6));
+			} else if (line.startsWith('data:')) {
+				dataLines.push(stripFieldSpace(line.slice(5)));
 			}
-			if (!line.startsWith('data: ')) continue;
-			const data = line.slice(6);
-
-			// Typed terminal events (error / refusal / context_exceeded /
-			// truncated): throw the matching typed error. Any preceding
-			// content tokens have ALREADY been yielded above, so a consumer
-			// that rendered partial content keeps it (truncated ordering,
-			// Scenario 15 / R11a).
-			const ErrCtor = TYPED_EVENT_ERRORS[currentEvent];
-			if (ErrCtor) {
-				throw new ErrCtor(data);
-			}
-
-			currentEvent = '';
-			if (data === '[DONE]') return;
-			yield data;
 		}
 	}
 
-	// Handle any remaining buffer content after stream ends
-	if (buffer.startsWith('data: ')) {
-		const data = buffer.slice(6);
-		if (data !== '[DONE]') yield data;
-	}
+	// Flush the decoder: a multi-byte character split across the last chunks
+	// would otherwise be dropped.
+	// A held-back trailing \r only ended a line already in `buffer`, so it adds
+	// nothing at EOF.
+	buffer += decoder.decode();
+
+	// A stream that ends without a terminating blank line (dropped connection,
+	// proxy cut) still carries content the consumer should keep: the pre-#4712
+	// parser yielded such a tail, and discarding it would lose the end of an
+	// answer. The last, unterminated line is flushed with the pending event.
+	if (buffer.startsWith('data:')) dataLines.push(stripFieldSpace(buffer.slice(5)));
+	else if (buffer.startsWith('event:')) currentEvent = stripFieldSpace(buffer.slice(6));
+	const out = dispatch();
+	if (out !== DONE && out !== null) yield out;
 }
+

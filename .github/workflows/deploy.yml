@@ -61,6 +61,18 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      # A stale invisible-Unicode table must not deploy. Pinned to the exact
+      # Node build the tables were generated with (.node-version, also read by test.yml's
+      # invisible-tables job); Node 22 below is a different ICU build. Runs
+      # before the Node 22 install, which then replaces it on PATH.
+      - name: Install Node from .node-version (table generator)
+        uses: actions/setup-node@v6.3.0
+        with:
+          node-version-file: .node-version
+
+      - name: Check invisible-Unicode tables are current
+        run: node scripts/gen-invisible.mjs --check
+
       - name: Install Node 22
         uses: actions/setup-node@v6.3.0
         with:
@@ -69,7 +81,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Build frontend
-        run: cd frontend && npm ci && npm run check && npm run test:unit && npm run build
+        run: cd frontend && npm ci && npm run check && npm run test:unit && npm run build && npm run check:csp && npm run test:csp
 
       - name: Run tests
         run: cargo test --workspace
@@ -97,7 +109,7 @@ jobs:
         run: flyctl deploy --remote-only
 
       - name: Post-deploy health check
-        run: curl --retry 5 --retry-delay 5 --fail https://peter.manahan.io/api/health
+        run: curl --retry 5 --retry-delay 5 --max-time 30 --fail https://peter.manahan.io/api/health
 
       # Task #3558: the public hostname (through Cloudflare) must keep
       # serving normally, while the raw Fly origin — page and static
@@ -110,7 +122,14 @@ jobs:
           check_status() {
             local description="$1" url="$2" expected="$3"
             local actual
-            actual=$(curl -s -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 5 "$url")
+            # `|| rc=$?` keeps a curl failure (e.g. exit 28, --max-time) from
+            # aborting under `set -e` before the FAILED line is printed.
+            local rc=0
+            actual=$(curl -s -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 5 --max-time 30 "$url") || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "FAILED: $description — curl exited $rc for $url"
+              exit 1
+            fi
             if [ "$actual" != "$expected" ]; then
               echo "FAILED: $description — expected $expected from $url, got $actual"
               exit 1
@@ -121,3 +140,83 @@ jobs:
           check_status "public site root via Cloudflare" "https://peter.manahan.io/" 200
           check_status "raw Fly origin root" "https://folio-prmanahan.fly.dev/" 404
           check_status "raw Fly origin static asset" "https://folio-prmanahan.fly.dev/favicon.png" 404
+
+      # #4710: the response header CSP is the build-validated policy the server
+      # reads from csp-header.txt: the page's meta policy plus
+      # `; frame-ancestors 'none'`. The expectation is derived from the fetched
+      # page's own meta tag, so a server that fell back to its minimal policy
+      # (file missing or unusable) or sends anything else fails here. The 304
+      # revalidation of `/` must carry the same value, since its headers update
+      # the cached page. `?v=$GITHUB_SHA` keeps the request off any cached copy
+      # of an old deploy.
+      - name: Post-deploy CSP check
+        run: |
+          set -euo pipefail
+
+          fail() { echo "FAILED: $1"; exit 1; }
+
+          # curl --retry with -D can append a retried attempt's headers to the
+          # same file, doubling the CSP count. Retry by hand and truncate the
+          # header file on every attempt. Prints curl's stdout (e.g. -w).
+          # On failure LAST_STATUS holds the final attempt's HTTP status
+          # (or "none" if curl produced none, e.g. a timeout) and LAST_RC its
+          # exit code, for the message.
+          LAST_STATUS=none
+          LAST_RC=0
+          get() {
+            local hfile="$1" n; shift
+            for n in 1 2 3 4 5; do
+              : > "$hfile"
+              LAST_RC=0
+              curl -s --max-time 30 -D "$hfile" "$@" || LAST_RC=$?
+              if [ "$LAST_RC" -eq 0 ]; then return 0; fi
+              LAST_STATUS=$(head -n1 "$hfile" | tr -d '\r' | awk '{print $2}')
+              LAST_STATUS=${LAST_STATUS:-none}
+              sleep 5
+            done
+            return 1
+          }
+
+          url="https://peter.manahan.io/?v=${GITHUB_SHA}"
+
+          # Exactly one CSP header, byte-equal to $EXPECTED_CSP.
+          assert_one_csp() {
+            local what="$1" file="$2" count value
+            count=$(grep -ci '^content-security-policy:' "$file" || true)
+            [ "$count" = "1" ] || fail "$what: expected exactly 1 Content-Security-Policy header, got $count"
+            value=$(grep -i '^content-security-policy:' "$file" | tr -d '\r' | sed -E 's/^[^:]*:[[:space:]]*//')
+            [ "$value" = "$EXPECTED_CSP" ] \
+              || fail "$what: CSP header is '$value', expected '$EXPECTED_CSP'"
+          }
+
+          headers=$(mktemp)
+          body=$(mktemp)
+          get "$headers" --fail -o "$body" "$url" || fail "GET / failed after 5 attempts (last HTTP status: $LAST_STATUS, curl exit code: $LAST_RC)"
+
+          grep -qi '^x-frame-options:' "$headers" \
+            || fail "GET / has no X-Frame-Options header"
+          grep -i '^content-type:' "$headers" | grep -qi 'charset=utf-8' \
+            || fail "GET / Content-Type has no charset=utf-8: '$(grep -i '^content-type:' "$headers" | tr -d '\r')'"
+
+          meta=$(tr '\n' ' ' < "$body" | grep -ioE -m1 '<meta[^>]*http-equiv="content-security-policy"[^>]*>' || true)
+          [ -n "$meta" ] || fail "GET / HTML has no content-security-policy meta tag"
+          meta_csp=$(printf '%s' "$meta" | sed -nE 's/.*[[:space:]]content="([^"]*)".*/\1/p')
+          [ -n "$meta_csp" ] || fail "could not read the content attribute of the CSP meta tag"
+          printf '%s' "$meta_csp" | grep -qE "script-src[^;]*'sha256-" \
+            || fail "meta CSP script-src has no sha256- hash"
+          EXPECTED_CSP="${meta_csp}; frame-ancestors 'none'"
+
+          assert_one_csp "GET /" "$headers"
+
+          headers304=$(mktemp)
+          # Not a $(...) capture: LAST_STATUS must survive in this shell.
+          statusfile=$(mktemp)
+          get "$headers304" --fail -o /dev/null -w '%{http_code}' \
+            -H 'If-Modified-Since: Fri, 01 Jan 2100 00:00:00 GMT' "$url" > "$statusfile" \
+            || fail "conditional GET / failed after 5 attempts (last HTTP status: $LAST_STATUS, curl exit code: $LAST_RC)"
+          status=$(tail -c 3 "$statusfile")
+          [ "$status" = "304" ] || fail "conditional GET / expected 304, got $status"
+          assert_one_csp "304 /" "$headers304"
+
+          echo "OK: header CSP is the meta policy plus frame-ancestors on 200 and 304, charset=utf-8 on HTML"
+

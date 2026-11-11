@@ -27,17 +27,35 @@ const GLOBAL_BODY_LIMIT_BYTES: usize = 64 * 1024;
 /// LLM-audit M1 / R1: outer-backstop request timeout.
 pub(crate) const REQUEST_TIMEOUT_SECS: u64 = 60;
 
+const FULL_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
+
+/// Adds the security headers to every response that passes through it.
+///
+/// `Content-Security-Policy` depends on where the response came from, never on
+/// its `Content-Type`:
+/// - responses carrying the crate-private `FromStaticService` marker (the
+///   static fallback, 304s included) get the policy that marker carries: the
+///   build-validated `csp-header.txt` (which repeats the page's meta policy),
+///   or [`static_files::STATIC_CSP`] when that file is unusable;
+/// - everything else (routes, origin_lock's own responses, avatars, any
+///   routed 304) gets the full policy.
+///
+/// This is the ONLY writer of the header and it always overwrites: a CSP a
+/// handler set itself is replaced, so a future handler cannot weaken it.
 async fn security_headers(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let mut response = next.run(request).await;
+    let policy = match response
+        .extensions()
+        .get::<static_files::FromStaticService>()
+    {
+        Some(static_files::FromStaticService(value)) => value.clone(),
+        None => axum::http::HeaderValue::from_static(FULL_CSP),
+    };
     let headers = response.headers_mut();
-    headers.insert(
-        "content-security-policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
-            .parse().unwrap(),
-    );
+    headers.insert(header::CONTENT_SECURITY_POLICY, policy);
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     headers.insert(
@@ -62,8 +80,13 @@ async fn security_headers(
 /// moment it's called, so `origin_lock` is added AFTER
 /// `.fallback_service(...)` rather than alongside the other layers
 /// above it — that ordering is what makes `origin_lock` wrap the
-/// fallback as well as every routed path, making it the true outermost
-/// layer: nothing else in this router is reachable around it.
+/// fallback as well as every routed path, making it the outermost
+/// access layer: nothing else in this router is reachable around it.
+/// `security_headers` (#4710) is added after `origin_lock`, outside it,
+/// for the same wrap-the-fallback reason plus one more: `origin_lock`
+/// answers `GET /api/health` and its 404 rejections itself, and those
+/// responses need the headers too. The layers above the fallback (page
+/// hits, rate limit, body limit, timeout, CORS) do not wrap it.
 ///
 /// `global_rate_limit` is a caller-supplied instance rather than
 /// constructed here: the caller (`main.rs::run_server`) also owns
@@ -116,14 +139,90 @@ pub fn build_app(
             std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS),
         ))
         .layer(cors)
-        .layer(axum::middleware::from_fn(security_headers))
         .fallback_service(static_files::static_file_service(static_dir))
         // task #3558 C1: added AFTER `.fallback_service(...)` so this
-        // layer — and only this layer — wraps the fallback as well as
-        // every routed path above.
+        // layer wraps the fallback as well as every routed path above.
+        // It is the outermost ACCESS layer: nothing is reachable around it.
         .layer(axum::middleware::from_fn_with_state(
             db_state,
             origin_lock_middleware,
         ))
         .layer(axum::Extension(origin_lock_state))
+        // #4710 F2: outermost of all, so even responses `origin_lock` writes
+        // itself (the exempt `GET /api/health` and its 404 rejections) carry
+        // the headers. It only decorates the response on the way out; it
+        // grants no route access, so `origin_lock` still gates everything
+        // inside it.
+        .layer(axum::middleware::from_fn(security_headers))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+
+    const MARKED_POLICY: &str = "frame-ancestors 'none'; marked-test-policy";
+
+    fn csp_values(response: &axum_test::TestResponse) -> Vec<String> {
+        response
+            .headers()
+            .get_all("content-security-policy")
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn server() -> axum_test::TestServer {
+        let app = Router::new()
+            // A handler that tries to set its own (weak) CSP, twice over.
+            .route(
+                "/weak",
+                get(|| async {
+                    (
+                        [
+                            ("content-security-policy", "default-src *"),
+                            ("content-security-policy", "script-src 'unsafe-inline'"),
+                        ],
+                        "x",
+                    )
+                        .into_response()
+                }),
+            )
+            // A bare routed 304: no static marker.
+            .route("/bare304", get(|| async { StatusCode::NOT_MODIFIED }))
+            // A routed response that carries the static marker.
+            .route(
+                "/marked",
+                get(|| async {
+                    let mut r = "x".into_response();
+                    r.extensions_mut().insert(static_files::FromStaticService(
+                        MARKED_POLICY.parse().unwrap(),
+                    ));
+                    r.headers_mut()
+                        .insert("content-security-policy", "default-src *".parse().unwrap());
+                    r
+                }),
+            )
+            .layer(axum::middleware::from_fn(security_headers));
+        axum_test::TestServer::new(app)
+    }
+
+    #[tokio::test]
+    async fn a_handler_set_csp_is_overwritten_with_exactly_one_full_policy() {
+        let response = server().get("/weak").await;
+        assert_eq!(csp_values(&response), [FULL_CSP]);
+    }
+
+    #[tokio::test]
+    async fn a_bare_routed_304_gets_the_full_policy() {
+        let response = server().get("/bare304").await;
+        response.assert_status(StatusCode::NOT_MODIFIED);
+        assert_eq!(csp_values(&response), [FULL_CSP]);
+    }
+
+    #[tokio::test]
+    async fn the_static_marker_selects_its_own_policy_and_replaces_any_handler_csp() {
+        let response = server().get("/marked").await;
+        assert_eq!(csp_values(&response), [MARKED_POLICY]);
+    }
 }

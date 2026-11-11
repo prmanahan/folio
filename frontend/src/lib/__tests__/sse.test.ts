@@ -38,23 +38,23 @@ describe('parseSSEStream', () => {
 	});
 
 	it('parses multiple tokens in one chunk', async () => {
-		const reader = makeReader(['data: foo\ndata: bar\ndata: baz\n']);
+		const reader = makeReader(['data: foo\n\ndata: bar\n\ndata: baz\n\n']);
 		expect(await collect(reader)).toEqual(['foo', 'bar', 'baz']);
 	});
 
 	it('stops at [DONE] sentinel', async () => {
-		const reader = makeReader(['data: hello\ndata: [DONE]\ndata: should-not-appear\n']);
+		const reader = makeReader(['data: hello\n\ndata: [DONE]\n\ndata: should-not-appear\n\n']);
 		expect(await collect(reader)).toEqual(['hello']);
 	});
 
 	it('handles [DONE] in its own chunk', async () => {
-		const reader = makeReader(['data: part1\n', 'data: [DONE]\n']);
+		const reader = makeReader(['data: part1\n\n', 'data: [DONE]\n\n']);
 		expect(await collect(reader)).toEqual(['part1']);
 	});
 
 	it('handles data split across multiple read() calls', async () => {
 		// "data: hel" then "lo\n" -- the parser must buffer the incomplete line
-		const reader = makeReader(['data: hel', 'lo\n', 'data: world\n']);
+		const reader = makeReader(['data: hel', 'lo\n\n', 'data: world\n\n']);
 		expect(await collect(reader)).toEqual(['hello', 'world']);
 	});
 
@@ -64,7 +64,7 @@ describe('parseSSEStream', () => {
 	});
 
 	it('ignores lines that do not start with "data: "', async () => {
-		const reader = makeReader(['event: ping\ndata: payload\nid: 42\n']);
+		const reader = makeReader(['event: ping\ndata: payload\nid: 42\n\n']);
 		expect(await collect(reader)).toEqual(['payload']);
 	});
 
@@ -74,7 +74,7 @@ describe('parseSSEStream', () => {
 	});
 
 	it('returns empty array when only [DONE] is sent', async () => {
-		const reader = makeReader(['data: [DONE]\n']);
+		const reader = makeReader(['data: [DONE]\n\n']);
 		expect(await collect(reader)).toEqual([]);
 	});
 
@@ -82,8 +82,8 @@ describe('parseSSEStream', () => {
 		// Simulates a token-by-token stream followed by [DONE]
 		const chunks = [
 			'data: Hello',
-			',\ndata:  world',
-			'!\ndata: [DONE]\n',
+			',\n\ndata:  world',
+			'!\n\ndata: [DONE]\n\n',
 		];
 		const reader = makeReader(chunks);
 		const tokens = await collect(reader);
@@ -91,20 +91,20 @@ describe('parseSSEStream', () => {
 	});
 
 	it('handles data with spaces preserved', async () => {
-		const reader = makeReader(['data:  leading space\n']);
-		// slice(6) on "data:  leading space" gives " leading space"
+		const reader = makeReader(['data:  leading space\n\n']);
+		// one leading space is dropped from "data:  leading space", leaving " leading space"
 		expect(await collect(reader)).toEqual([' leading space']);
 	});
 
 	it('throws SSEError when server sends an error event', async () => {
-		const reader = makeReader(['event: error\ndata: AI response failed. Please try again.\n']);
+		const reader = makeReader(['event: error\ndata: AI response failed. Please try again.\n\n']);
 		await expect(collect(reader)).rejects.toThrow(SSEError);
-		await expect(collect(makeReader(['event: error\ndata: AI response failed. Please try again.\n'])))
+		await expect(collect(makeReader(['event: error\ndata: AI response failed. Please try again.\n\n'])))
 			.rejects.toThrow('AI response failed. Please try again.');
 	});
 
 	it('throws SSEError mid-stream when error event arrives after content', async () => {
-		const reader = makeReader(['data: partial\nevent: error\ndata: stream interrupted\n']);
+		const reader = makeReader(['data: partial\n\nevent: error\ndata: stream interrupted\n\n']);
 		const tokens: string[] = [];
 		await expect(async () => {
 			for await (const token of parseSSEStream(reader)) {
@@ -115,7 +115,7 @@ describe('parseSSEStream', () => {
 	});
 
 	it('handles error event split across chunks', async () => {
-		const reader = makeReader(['event: err', 'or\ndata: broken\n']);
+		const reader = makeReader(['event: err', 'or\ndata: broken\n\n']);
 		await expect(collect(reader)).rejects.toThrow('broken');
 	});
 });
