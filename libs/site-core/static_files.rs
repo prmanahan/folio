@@ -29,18 +29,93 @@ const CSP_HEADER_FILE: &str = "csp-header.txt";
 #[derive(Clone)]
 pub(crate) struct FromStaticService(pub(crate) HeaderValue);
 
-/// Marks every response from the static service with the policy to send, and
-/// gives `text/html` its charset. Keyed on WHERE the response came from, not
-/// its `Content-Type`: a 304 carries no `Content-Type` and its headers update
-/// the cached response, so a 304 with a weaker CSP would downgrade the cached
-/// page; non-SvelteKit HTML would otherwise miss the policy too. Sets no CSP
-/// header itself.
+/// The one static file that must never be edge-cached (spec R-11): Cloudflare
+/// would otherwise apply its default `max-age=14400` to a list that is replaced
+/// on each deploy.
+const NO_CACHE_FILE: &str = "projects.json";
+
+/// Percent-decodes `s` the way `ServeDir` does (`percent_decode`): a `%` not
+/// followed by two hex digits is kept literally. `None` when the result is not
+/// UTF-8, where `ServeDir` serves nothing.
+fn percent_decode_utf8(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let decoded = (bytes[i] == b'%')
+            .then(|| bytes.get(i + 1..i + 3))
+            .flatten()
+            // Strict hex: `from_str_radix` alone accepts a leading `+`.
+            .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match decoded {
+            Some(b) => {
+                out.push(b);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// True when `ServeDir` would resolve `request_path` to the file
+/// [`NO_CACHE_FILE`] at the static root. Mirrors its `build_and_validate_path`
+/// (tower-http 0.6, `serve_dir/mod.rs`): trim leading `/`, percent-decode, walk
+/// `Path::components()` skipping `CurDir` (and so a trailing `/`). Any
+/// `RootDir`, `ParentDir` or `Prefix` is refused by `ServeDir`, so it never
+/// matches here; neither does a nested path. Keyed on the resolved path, not
+/// the raw one: `//projects.json`, `/%70rojects.json` and `/projects.json/`
+/// reach the same file. A path that does not decode to UTF-8 returns `true`:
+/// the header is harmless on a response that was never going to be the file,
+/// while a missed one on a path that could be would fail open. A
+/// case-insensitive dev filesystem (macOS) would also serve `/Projects.json`
+/// from the file without this matching; production is Linux.
+fn resolves_to_no_cache_file(request_path: &str) -> bool {
+    use std::path::Component;
+    let Some(decoded) = percent_decode_utf8(request_path.trim_start_matches('/')) else {
+        return true;
+    };
+    let mut names = Vec::new();
+    for component in std::path::Path::new(&decoded).components() {
+        match component {
+            Component::Normal(name) => names.push(name),
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => return false,
+        }
+    }
+    names == [std::ffi::OsStr::new(NO_CACHE_FILE)]
+}
+
+/// Two independent rules, both applied to every response of the static service.
+///
+/// 1. Caching, keyed on the REQUEST's resolved path: a response for the file
+///    `projects.json` (200, 304, HEAD, and the SPA fallback while the file is
+///    absent) gets `Cache-Control: no-cache`, however the request spelled the
+///    path (see [`resolves_to_no_cache_file`]). No other path's caching headers
+///    change.
+/// 2. CSP, keyed on WHERE the response came from, not its `Content-Type`: the
+///    response is marked with the policy to send, and `text/html` gets its
+///    charset. A 304 carries no `Content-Type` and its headers update the
+///    cached response, so a 304 with a weaker CSP would downgrade the cached
+///    page; non-SvelteKit HTML would otherwise miss the policy too. This sets
+///    no CSP header itself.
 async fn mark_static_response(
     State(policy): State<HeaderValue>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    let no_cache = resolves_to_no_cache_file(request.uri().path());
     let mut response = next.run(request).await;
+    if no_cache {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    }
     // Exact match only: other content types, and values that already name a
     // charset, are left alone.
     if response
@@ -253,6 +328,60 @@ mod tests {
             r#"<meta name="content-security-policy" content="x">"#,
         ] {
             assert!(!has_csp_meta(html), "{html}");
+        }
+    }
+
+    #[test]
+    fn no_cache_file_matches_every_spelling_servedir_resolves_to_it() {
+        for p in [
+            "/projects.json",
+            "//projects.json",
+            "/./projects.json",
+            "/projects.json/.",
+            "/projects.json/",
+            "/projects%2Ejson",
+            "/%70rojects.json",
+            "/projects.json%2F",
+        ] {
+            assert!(resolves_to_no_cache_file(p), "{p}");
+        }
+    }
+
+    /// An extra `no-cache` is harmless; a missed one fails open. So a path that
+    /// cannot be evaluated (not UTF-8 once decoded) gets the header, unlike the
+    /// RootDir/ParentDir refusals, which ServeDir never serves.
+    #[test]
+    fn undecodable_path_fails_toward_no_cache() {
+        assert!(resolves_to_no_cache_file("/projects.json%FF"));
+    }
+
+    #[test]
+    fn percent_decode_requires_two_ascii_hex_digits() {
+        // `u8::from_str_radix` would take `+5` as 0x05; ServeDir keeps it literal.
+        assert_eq!(percent_decode_utf8("%+5"), Some("%+5".to_string()));
+        assert_eq!(percent_decode_utf8("%-1"), Some("%-1".to_string()));
+        assert_eq!(percent_decode_utf8("%4"), Some("%4".to_string()));
+        assert_eq!(percent_decode_utf8("%70%2e"), Some("p.".to_string()));
+    }
+
+    #[test]
+    fn no_cache_file_rejects_other_paths_and_what_servedir_refuses() {
+        for p in [
+            "/",
+            "",
+            "/projects.json.bak",
+            "/x/projects.json",
+            "/projects.jsonx",
+            "/Projects.json",
+            "/../projects.json",
+            "/x/../projects.json",
+            "/projects.json/..",
+            // Decodes to a leading `/`: RootDir, which ServeDir refuses.
+            "/%2Fprojects.json",
+            "/projects%252Ejson",
+            "/%",
+        ] {
+            assert!(!resolves_to_no_cache_file(p), "{p}");
         }
     }
 
