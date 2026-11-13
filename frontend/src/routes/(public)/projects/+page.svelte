@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api';
-	import type { Project } from '$lib/types';
-	import ProjectCard from '$lib/components/ProjectCard.svelte';
+	import { api } from '#lib/api.ts';
+	import type { Project } from '#lib/types.ts';
+	import ProjectCard from '#lib/components/ProjectCard.svelte';
 
 	let projects: Project[] = $state([]);
 	let error: string | null = $state(null);

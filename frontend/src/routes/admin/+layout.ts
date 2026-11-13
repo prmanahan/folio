@@ -1,6 +1,6 @@
 import type { LayoutLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
-import { getToken, isTokenExpired } from '$lib/admin-api';
+import { getToken, isTokenExpired } from '#lib/admin-api.ts';
 
 export const ssr = false;
 

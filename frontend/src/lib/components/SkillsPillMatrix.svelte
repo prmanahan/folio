@@ -4,7 +4,7 @@
   No counts, no percentages — category labels are the only proficiency signal.
 -->
 <script lang="ts">
-	import type { Skill } from '$lib/types';
+	import type { Skill } from '#lib/types.ts';
 
 	interface Props {
 		skills: Skill[];

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api';
-	import type { Article } from '$lib/types';
-	import ArticleCard from '$lib/components/ArticleCard.svelte';
+	import { api } from '#lib/api.ts';
+	import type { Article } from '#lib/types.ts';
+	import ArticleCard from '#lib/components/ArticleCard.svelte';
 
 	let articles: Article[] = $state([]);
 	let error: string | null = $state(null);

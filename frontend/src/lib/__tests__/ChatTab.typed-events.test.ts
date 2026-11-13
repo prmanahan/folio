@@ -9,7 +9,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
  * renders the transcript (`ChatTab.svelte` → `ChatMessage.svelte`).
  *
  * Mock seam (documented for task 981 / Rune — implement against the SAME seam):
- *   We mock `$lib/api` so `api.chat()` returns a synthetic `Response` whose
+ *   We mock `#lib/api` so `api.chat()` returns a synthetic `Response` whose
  *   body is a `ReadableStream` of raw SSE bytes. The REAL `parseSSEStream`
  *   and the REAL components run end-to-end; the regression manifests at the
  *   rendering layer, so red here is behavioral, not a stub artifact.
@@ -58,14 +58,14 @@ const chatMock = vi.fn();
 // reads `.length`/iterates), so the component renders cleanly and the
 // behavioral assertions are actually reached. Only chat() is the
 // behavior-under-test seam; the rest are inert no-ops sized to the contract.
-vi.mock('$lib/api', () => ({
+vi.mock('#lib/api.ts', () => ({
 	api: {
 		chat: (...args: unknown[]) => chatMock(...args),
 		getFaqSuggestions: () => Promise.resolve([]),
 	},
 }));
 
-import ChatTab from '$lib/components/ai/ChatTab.svelte';
+import ChatTab from '#lib/components/ai/ChatTab.svelte';
 
 async function sendAndSettle(): Promise<void> {
 	const textarea = screen.getByPlaceholderText(/type your transmission/i) as HTMLTextAreaElement;

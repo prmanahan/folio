@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listEducation, createEducation, updateEducation, deleteEducation } from '$lib/admin-api';
-  import type { Education, EducationInput } from '$lib/admin-types';
-  import Toast from '$lib/components/admin/Toast.svelte';
+  import { listEducation, createEducation, updateEducation, deleteEducation } from '#lib/admin-api.ts';
+  import type { Education, EducationInput } from '#lib/admin-types.ts';
+  import Toast from '#lib/components/admin/Toast.svelte';
 
   let items = $state<Education[]>([]);
   let mode = $state<'list' | 'edit'>('list');

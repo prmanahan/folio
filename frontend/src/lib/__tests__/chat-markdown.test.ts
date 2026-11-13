@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import DOMPurify from 'dompurify';
-import { renderChatMarkdown, sanitizeChatHtml } from '$lib/chat-markdown';
-import { isInvisible } from '$lib/invisible';
+import { renderChatMarkdown, sanitizeChatHtml } from '#lib/chat-markdown.ts';
+import { isInvisible } from '#lib/invisible.ts';
 
 function parse(html: string): HTMLElement {
 	const el = document.createElement('div');

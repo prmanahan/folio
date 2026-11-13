@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { FitVerdict } from '$lib/types';
-	import { stripInvisible } from '$lib/invisible';
+	import type { FitVerdict } from '#lib/types.ts';
+	import { stripInvisible } from '#lib/invisible.ts';
 
 	let { verdict }: { verdict: FitVerdict } = $props();
 

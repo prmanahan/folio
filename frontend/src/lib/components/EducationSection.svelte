@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Education } from '$lib/types';
+	import type { Education } from '#lib/types.ts';
 
 	let { education }: { education: Education[] } = $props();
 </script>

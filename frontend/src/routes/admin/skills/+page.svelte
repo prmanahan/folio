@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listSkills, createSkill, updateSkill, deleteSkill } from '$lib/admin-api';
-  import type { SkillFull, SkillInput } from '$lib/admin-types';
-  import FormSection from '$lib/components/admin/FormSection.svelte';
-  import Toast from '$lib/components/admin/Toast.svelte';
+  import { listSkills, createSkill, updateSkill, deleteSkill } from '#lib/admin-api.ts';
+  import type { SkillFull, SkillInput } from '#lib/admin-types.ts';
+  import FormSection from '#lib/components/admin/FormSection.svelte';
+  import Toast from '#lib/components/admin/Toast.svelte';
 
   let items = $state<SkillFull[]>([]);
   let mode = $state<'list' | 'edit'>('list');

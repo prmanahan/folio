@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { stripInvisible } from '$lib/invisible';
-import { INVISIBLE_RANGES } from '$lib/invisible-table';
+import { stripInvisible } from '#lib/invisible.ts';
+import { INVISIBLE_RANGES } from '#lib/invisible-table.ts';
 
 // Characters are built from code points, never written as literals.
 const cp = (...n: number[]) => String.fromCodePoint(...n);

@@ -12,7 +12,7 @@
  */
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { stripInvisible } from '$lib/invisible';
+import { stripInvisible } from '#lib/invisible.ts';
 
 const ALLOWED_TAGS = [
 	'p', 'br', 'hr', 'ul', 'ol', 'li', 'strong', 'em', 'del', 'code', 'pre', 'blockquote', 'a',

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, within } from '@testing-library/svelte';
-import SkillsPillMatrix from '$lib/components/SkillsPillMatrix.svelte';
-import type { Skill } from '$lib/types';
+import SkillsPillMatrix from '#lib/components/SkillsPillMatrix.svelte';
+import type { Skill } from '#lib/types.ts';
 
 const mockSkills: Skill[] = [
 	{ id: 1, skill_name: 'Rust', category: 'strong', years_experience: 3, last_used: '2026' },

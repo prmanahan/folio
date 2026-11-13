@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listProjects, createProject, updateProject, deleteProject } from '$lib/admin-api';
-  import type { ProjectFull, ProjectInput } from '$lib/admin-types';
-  import MarkdownEditor from '$lib/components/admin/MarkdownEditor.svelte';
-  import TagInput from '$lib/components/admin/TagInput.svelte';
-  import Toast from '$lib/components/admin/Toast.svelte';
+  import { listProjects, createProject, updateProject, deleteProject } from '#lib/admin-api.ts';
+  import type { ProjectFull, ProjectInput } from '#lib/admin-types.ts';
+  import MarkdownEditor from '#lib/components/admin/MarkdownEditor.svelte';
+  import TagInput from '#lib/components/admin/TagInput.svelte';
+  import Toast from '#lib/components/admin/Toast.svelte';
 
   let items = $state<ProjectFull[]>([]);
   let mode = $state<'list' | 'edit'>('list');

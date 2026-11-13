@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listAgents, createAgent, updateAgent, deleteAgent } from '$lib/admin-api';
-  import type { AgentFull, AgentInput } from '$lib/admin-types';
-  import Toast from '$lib/components/admin/Toast.svelte';
-  import ListInput from '$lib/components/admin/ListInput.svelte';
+  import { listAgents, createAgent, updateAgent, deleteAgent } from '#lib/admin-api.ts';
+  import type { AgentFull, AgentInput } from '#lib/admin-types.ts';
+  import Toast from '#lib/components/admin/Toast.svelte';
+  import ListInput from '#lib/components/admin/ListInput.svelte';
 
   let items = $state<AgentFull[]>([]);
   let mode = $state<'list' | 'edit'>('list');

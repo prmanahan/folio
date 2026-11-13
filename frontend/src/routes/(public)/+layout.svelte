@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import Header from '$lib/components/Header.svelte';
-	import Footer from '$lib/components/Footer.svelte';
-	import AiPane from '$lib/components/ai/AiPane.svelte';
-	import { api } from '$lib/api';
-	import { getInitials } from '$lib/utils';
+	import Header from '#lib/components/Header.svelte';
+	import Footer from '#lib/components/Footer.svelte';
+	import AiPane from '#lib/components/ai/AiPane.svelte';
+	import { api } from '#lib/api.ts';
+	import { getInitials } from '#lib/utils.ts';
 
 	let { children } = $props();
 	let aiPaneOpen = $state(false);

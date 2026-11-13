@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
-import Hero from '$lib/components/Hero.svelte';
-import type { Profile, Link } from '$lib/types';
+import Hero from '#lib/components/Hero.svelte';
+import type { Profile, Link } from '#lib/types.ts';
 
 const mockProfile: Profile = {
 	name: 'Peter Manahan',

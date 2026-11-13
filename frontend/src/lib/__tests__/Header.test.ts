@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, within } from '@testing-library/svelte';
 import { setMockPathname } from '../../test/mocks/app/state';
-import Header from '$lib/components/Header.svelte';
+import Header from '#lib/components/Header.svelte';
 
 describe('Header', () => {
 	afterEach(() => {

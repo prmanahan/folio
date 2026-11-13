@@ -1,8 +1,8 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { logout, getDashboard } from '$lib/admin-api';
-  import type { DashboardCounts } from '$lib/admin-types';
+  import { logout, getDashboard } from '#lib/admin-api.ts';
+  import type { DashboardCounts } from '#lib/admin-types.ts';
   import { onMount } from 'svelte';
   import '../../admin.css';
 
