@@ -23,7 +23,8 @@ export default defineConfig(({ mode }) => {
 				adapter: adapter({ fallback: 'index.html' }),
 				// Page CSP: single source in ./csp-config.js (also read by the guard).
 				csp,
-				// Kit 3 defaults this to one hour; kit 2 never polled. 0 keeps kit 2 behaviour.
+				// Kit 3 defaults this to an hourly version.json poll; kit 2 never polled. 0 disables only that
+				// timer; kit 3 still checks /_app/version.json when the tab regains focus or becomes visible.
 				version: { pollInterval: 0 }
 			})
 		],
