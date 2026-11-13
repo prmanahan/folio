@@ -1,0 +1,179 @@
+{
+  "mnemra": {
+    "pages": [
+      {
+        "link": "<https://api.github.com/orgs/mnemra/repos?type=public&per_page=100&page=2>; rel=\"next\", <https://api.github.com/orgs/mnemra/repos?type=public&per_page=100&page=2>; rel=\"last\"",
+        "body": [
+          {
+            "id": 1,
+            "name": "fixture-zeta",
+            "full_name": "Mnemra/fixture-zeta",
+            "private": false,
+            "html_url": "https://github.com/Mnemra/fixture-zeta",
+            "fork": false,
+            "archived": false,
+            "description": "Zeta description",
+            "owner": {
+              "login": "Mnemra",
+              "type": "Organization"
+            }
+          },
+          {
+            "id": 1,
+            "name": "fixture-a_b",
+            "full_name": "mnemra/fixture-a_b",
+            "private": false,
+            "html_url": "https://github.com/mnemra/fixture-a_b",
+            "fork": false,
+            "archived": false,
+            "description": null,
+            "owner": {
+              "login": "mnemra",
+              "type": "Organization"
+            }
+          },
+          {
+            "id": 1,
+            "name": "fixture-forked",
+            "full_name": "mnemra/fixture-forked",
+            "private": false,
+            "html_url": "https://github.com/mnemra/fixture-forked",
+            "fork": true,
+            "archived": false,
+            "description": "A fork",
+            "owner": {
+              "login": "mnemra",
+              "type": "Organization"
+            }
+          },
+          {
+            "id": 1,
+            "name": "fixture-Mixed-B",
+            "full_name": "mnemra/fixture-Mixed-B",
+            "private": false,
+            "html_url": "https://github.com/mnemra/fixture-Mixed-B",
+            "fork": false,
+            "archived": false,
+            "description": "Mixed B",
+            "owner": {
+              "login": "mnemra",
+              "type": "Organization"
+            }
+          }
+        ]
+      },
+      {
+        "link": null,
+        "body": [
+          {
+            "id": 1,
+            "name": "fixture-a-b",
+            "full_name": "mnemra/fixture-a-b",
+            "private": false,
+            "html_url": "https://github.com/mnemra/fixture-a-b",
+            "fork": false,
+            "archived": false,
+            "description": "Dash pair",
+            "owner": {
+              "login": "mnemra",
+              "type": "Organization"
+            }
+          },
+          {
+            "id": 1,
+            "name": "fixture-archived",
+            "full_name": "mnemra/fixture-archived",
+            "private": false,
+            "html_url": "https://github.com/mnemra/fixture-archived",
+            "fork": false,
+            "archived": true,
+            "description": "Archived",
+            "owner": {
+              "login": "mnemra",
+              "type": "Organization"
+            }
+          },
+          {
+            "id": 1,
+            "name": "fixture-mixed-a",
+            "full_name": "mnemra/fixture-mixed-a",
+            "private": false,
+            "html_url": "https://github.com/mnemra/fixture-mixed-a",
+            "fork": false,
+            "archived": false,
+            "description": "",
+            "owner": {
+              "login": "mnemra",
+              "type": "Organization"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "prmanahan": {
+    "pages": [
+      {
+        "link": null,
+        "body": [
+          {
+            "id": 1,
+            "name": "fixture-sigil",
+            "full_name": "PRMANAHAN/fixture-sigil",
+            "private": false,
+            "html_url": "https://github.com/PRMANAHAN/fixture-sigil",
+            "fork": false,
+            "archived": false,
+            "description": "Sigil",
+            "owner": {
+              "login": "PRMANAHAN",
+              "type": "Organization"
+            }
+          },
+          {
+            "id": 1,
+            "name": "fixture-factor",
+            "full_name": "prmanahan/fixture-factor",
+            "private": false,
+            "html_url": "https://github.com/prmanahan/fixture-factor",
+            "fork": false,
+            "archived": false,
+            "description": null,
+            "owner": {
+              "login": "prmanahan",
+              "type": "Organization"
+            }
+          },
+          {
+            "id": 1,
+            "name": "fixture-prfork",
+            "full_name": "prmanahan/fixture-prfork",
+            "private": false,
+            "html_url": "https://github.com/prmanahan/fixture-prfork",
+            "fork": true,
+            "archived": false,
+            "description": "Another fork",
+            "owner": {
+              "login": "prmanahan",
+              "type": "Organization"
+            }
+          },
+          {
+            "id": 1,
+            "name": "fixture-unique-4726-listed",
+            "full_name": "prmanahan/fixture-unique-4726-listed",
+            "private": false,
+            "html_url": "https://github.com/prmanahan/fixture-unique-4726-listed",
+            "fork": false,
+            "archived": false,
+            "description": "Appears nowhere else in folio",
+            "owner": {
+              "login": "prmanahan",
+              "type": "Organization"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

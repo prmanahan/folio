@@ -1,0 +1,47 @@
+{
+  "fetched_at": "2026-11-13T12:00:00.000Z",
+  "groups": [
+    {
+      "owner": "mnemra",
+      "repos": [
+        {
+          "name": "fixture-a-b",
+          "description": "Dash pair"
+        },
+        {
+          "name": "fixture-a_b",
+          "description": ""
+        },
+        {
+          "name": "fixture-mixed-a",
+          "description": ""
+        },
+        {
+          "name": "fixture-Mixed-B",
+          "description": "Mixed B"
+        },
+        {
+          "name": "fixture-zeta",
+          "description": "Zeta description"
+        }
+      ]
+    },
+    {
+      "owner": "prmanahan",
+      "repos": [
+        {
+          "name": "fixture-factor",
+          "description": ""
+        },
+        {
+          "name": "fixture-sigil",
+          "description": "Sigil"
+        },
+        {
+          "name": "fixture-unique-4726-listed",
+          "description": "Appears nowhere else in folio"
+        }
+      ]
+    }
+  ]
+}
