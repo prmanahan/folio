@@ -17,7 +17,7 @@
 //    would skip (non-ASCII) or ignore (duplicate directive) FAILS the guard;
 //  - the raw meta content must match the SHAPE our build emits (shapeErrors):
 //    directives joined by exactly "; ", tokens by exactly one U+0020, names from
-//    the set configured in svelte.config.js kit.csp.directives, value tokens
+//    the set configured in csp-config.js csp.directives, value tokens
 //    printable ASCII without "," or ";". This is an allowlist, so input the
 //    spec parser reads one way and an engine another (VT, C0, comma) fails
 //    without this file predicting what any engine does;
@@ -40,12 +40,10 @@
 //    <title> are not seen. The boundary is the server's charset=utf-8
 //    Content-Type, accepted as docs/RISK-REGISTER.md RISK-1.
 import { JSDOM } from 'jsdom';
-
-// @migration-task svelte.config was removed; switch to `import { loadConfig } from '@sveltejs/load-config'` to read your config
-import config from '../svelte.config.js';
+import { csp } from '../csp-config.js';
 
 // Directive names the build emits, read from the same config that emits them.
-const ALLOWED_DIRECTIVES = new Set(Object.keys(config.kit.csp.directives));
+const ALLOWED_DIRECTIVES = new Set(Object.keys(csp.directives));
 // Value token: printable ASCII U+0021..U+007E, excluding "," and ";".
 const VALUE_TOKEN = /^[\x21-\x2b\x2d-\x3a\x3c-\x7e]+$/;
 
@@ -125,7 +123,7 @@ export function shapeErrors(policy) {
 			return [`CSP policy shape: empty directive or non-single-space separator in ${show}`];
 		}
 		if (!ALLOWED_DIRECTIVES.has(tokens[0])) {
-			return [`CSP policy shape: directive name not in svelte.config.js kit.csp.directives: ${JSON.stringify(tokens[0])}`];
+			return [`CSP policy shape: directive name not in csp-config.js csp.directives: ${JSON.stringify(tokens[0])}`];
 		}
 		for (const token of tokens.slice(1)) {
 			if (!VALUE_TOKEN.test(token)) {

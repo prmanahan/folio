@@ -4,13 +4,12 @@ import path from 'path';
 
 export default defineConfig({
 	plugins: [
-		svelte({ hot: !process.env.VITEST }),
+		svelte(),
 	],
 	resolve: {
 		conditions: ['browser'],
 		alias: {
-			$lib: path.resolve(__dirname, './src/lib'),
-			$app: path.resolve(__dirname, './src/test/mocks/app'),
+			$app: path.resolve(import.meta.dirname, './src/test/mocks/app'),
 		},
 	},
 	test: {
@@ -19,8 +18,7 @@ export default defineConfig({
 		environment: 'jsdom',
 		setupFiles: ['src/test/setup.ts'],
 		alias: {
-			$lib: path.resolve(__dirname, './src/lib'),
-			$app: path.resolve(__dirname, './src/test/mocks/app'),
+			$app: path.resolve(import.meta.dirname, './src/test/mocks/app'),
 		},
 		coverage: {
 			provider: 'v8',
