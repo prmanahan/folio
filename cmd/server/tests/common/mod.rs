@@ -89,6 +89,38 @@ impl Sandbox {
         self.run_with(args, false)
     }
 
+    /// Run `folio serve` the way production does, minus the real secrets:
+    /// a fake ADMIN_PASSWORD, a well-formed fake EDGE_AUTH_TOKEN, and a
+    /// STATIC_DIR holding an `index.html` with a CSP meta tag. Those three
+    /// keep an exit from coming from the ADMIN_PASSWORD panic, the
+    /// EDGE_AUTH_TOKEN panic or `validate_static_dir`. RUST_LOG is left
+    /// unset (the environment is cleared). The port is held by this
+    /// process on 0.0.0.0, so a server that gets as far as binding dies
+    /// there instead of serving: nothing here ever needs killing.
+    pub fn run_serve(&self) -> Outcome {
+        fs::write(
+            self.static_dir.join("index.html"),
+            format!(
+                "<!doctype html><html><head><meta http-equiv=\"{}\" content=\"default-src 'self'\"></head><body></body></html>",
+                "content-security-policy"
+            ),
+        )
+        .unwrap();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_folio"));
+        cmd.arg("serve")
+            .current_dir(&self.cwd)
+            .env_clear()
+            .env("ADMIN_PASSWORD", fake_admin_password())
+            .env("EDGE_AUTH_TOKEN", fake_edge_auth_token())
+            .env("STATIC_DIR", &self.static_dir)
+            .env("DATABASE_URL", &self.db_path)
+            .env("PORT", self.port().to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        collect(cmd)
+    }
+
     fn run_with(&self, args: &[&str], with_static_dir: bool) -> Outcome {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_folio"));
         cmd.args(args)
@@ -102,46 +134,7 @@ impl Sandbox {
         if with_static_dir {
             cmd.env("STATIC_DIR", &self.static_dir);
         }
-        let mut child = cmd.spawn().expect("spawn folio");
-        let mut out = child.stdout.take().unwrap();
-        let mut err = child.stderr.take().unwrap();
-        let t_out = std::thread::spawn(move || {
-            let mut s = String::new();
-            let _ = out.read_to_string(&mut s);
-            s
-        });
-        let t_err = std::thread::spawn(move || {
-            let mut s = String::new();
-            let _ = err.read_to_string(&mut s);
-            s
-        });
-        let start = Instant::now();
-        let status = loop {
-            if let Some(st) = child.try_wait().unwrap() {
-                break Some(st);
-            }
-            if start.elapsed() > CHILD_DEADLINE {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-        let stdout = t_out.join().unwrap();
-        let stderr = t_err.join().unwrap();
-        let output = strip_ansi(&format!("{stdout}{stderr}"));
-        match status {
-            Some(st) => Outcome {
-                code: st.code(),
-                timed_out: false,
-                output,
-            },
-            None => Outcome {
-                code: None,
-                timed_out: true,
-                output,
-            },
-        }
+        collect(cmd)
     }
 
     /// No file may exist at DATABASE_URL, and nothing (journal, WAL) may
@@ -223,6 +216,60 @@ impl Outcome {
         );
     }
 
+    /// R-10 refusal by `folio serve`: a non-zero exit, with output that
+    /// names the list file's path. The path is the discriminator from the
+    /// ADMIN_PASSWORD, EDGE_AUTH_TOKEN, `validate_static_dir` and bind
+    /// panics, none of which can name it. A panic that names the path is
+    /// still a refusal: the spec requires a non-zero exit naming the path
+    /// and no more.
+    pub fn assert_refused_naming(&self, path: &Path) {
+        assert!(!self.timed_out, "child did not exit within the deadline");
+        let p = path.to_string_lossy();
+        assert!(
+            !self.output.contains(BIND_FAILURE),
+            "the server started without refusing: it got as far as binding the port; output:\n{}",
+            self.output
+        );
+        match self.code {
+            Some(0) => panic!("expected non-zero exit, got 0; output:\n{}", self.output),
+            Some(_) => {}
+            None => panic!("child died on a signal; output:\n{}", self.output),
+        }
+        assert!(
+            self.output.contains(p.as_ref()),
+            "output does not name the path {p}; output:\n{}",
+            self.output
+        );
+    }
+
+    /// R-10 load by `folio serve`: the list was accepted and logged. The
+    /// output carries the `fetched_at` literal and each owner's count, and
+    /// holds no ERROR line naming the list file (so a refusal that merely
+    /// quotes the literal cannot satisfy it). Other ERROR lines are not
+    /// this assertion's business: a server with no `csp-header.txt` logs one.
+    pub fn assert_loaded_and_logged(&self, fetched_at: &str, counts: &[(&str, usize)]) {
+        assert!(
+            !self
+                .output
+                .lines()
+                .any(|l| l.contains(" ERROR ") && l.contains("projects.json")),
+            "an ERROR line names the list file in the output of a valid load; output:\n{}",
+            self.output
+        );
+        assert!(
+            self.output.lines().any(|l| l.contains(fetched_at)),
+            "no output line contains the fetched_at literal {fetched_at}; output:\n{}",
+            self.output
+        );
+        for (owner, count) in counts {
+            assert!(
+                self.output.lines().any(|l| has_count(l, owner, *count)),
+                "no output line shows owner {owner} with count {count}; output:\n{}",
+                self.output
+            );
+        }
+    }
+
     /// R-18 pass line: exit 0, and one line of the combined output that
     /// contains the path, the `fetched_at` literal, the age, the bound and
     /// each owner's count. The spec does not pin how age and bound are
@@ -267,6 +314,64 @@ impl Outcome {
             );
         }
     }
+}
+
+/// Spawn `cmd`, collect combined output, and kill it at the deadline.
+fn collect(mut cmd: Command) -> Outcome {
+    let mut child = cmd.spawn().expect("spawn folio");
+    let mut out = child.stdout.take().unwrap();
+    let mut err = child.stderr.take().unwrap();
+    let t_out = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = out.read_to_string(&mut s);
+        s
+    });
+    let t_err = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = err.read_to_string(&mut s);
+        s
+    });
+    let start = Instant::now();
+    let status = loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            break Some(st);
+        }
+        if start.elapsed() > CHILD_DEADLINE {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let stdout = t_out.join().unwrap();
+    let stderr = t_err.join().unwrap();
+    let output = strip_ansi(&format!("{stdout}{stderr}"));
+    match status {
+        Some(st) => Outcome {
+            code: st.code(),
+            timed_out: false,
+            output,
+        },
+        None => Outcome {
+            code: None,
+            timed_out: true,
+            output,
+        },
+    }
+}
+
+/// What a server that reached `TcpListener::bind` on the held port reports.
+const BIND_FAILURE: &str = "Failed to bind to port";
+
+/// Fake, never a real credential. Built at run time so no secret literal
+/// sits in the source.
+pub fn fake_admin_password() -> String {
+    format!("fake-admin-{}", "x".repeat(16))
+}
+
+/// `folio_edge_` plus 64 hex characters: the shape `Config` accepts.
+pub fn fake_edge_auth_token() -> String {
+    format!("folio_edge_{}", "ab".repeat(32))
 }
 
 /// How an age may be rendered: whole minutes, or seconds within a window
