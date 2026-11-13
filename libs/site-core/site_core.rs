@@ -7,6 +7,7 @@ pub mod error;
 pub mod middleware;
 pub mod models;
 pub mod net;
+pub mod projects_list;
 pub mod routes;
 pub mod state;
 pub mod static_files;

@@ -27,6 +27,7 @@ rand = { workspace = true }
 sha2 = { workspace = true }
 tracing = { workspace = true }
 mime_guess = { workspace = true }
+time = { workspace = true, features = ["parsing"] }
 
 [dev-dependencies]
 axum-test = { workspace = true }
