@@ -9,7 +9,6 @@ export interface DashboardCounts {
   experiences: number;
   skills: number;
   education: number;
-  projects: number;
   articles: number;
   links: number;
   faq_responses: number;
@@ -160,30 +159,6 @@ export interface EducationInput {
   location: string;
   start_year: string;
   end_year: string;
-}
-
-// Projects
-export interface ProjectFull {
-  id: number;
-  title: string;
-  slug: string;
-  summary: string;
-  description: string;
-  tech_stack: string[];
-  url: string;
-  sort_order: number;
-  published: boolean;
-}
-
-export interface ProjectInput {
-  title: string;
-  slug: string | null;
-  summary: string;
-  description: string;
-  tech_stack: string[];
-  url: string;
-  sort_order: number;
-  published: boolean;
 }
 
 // Articles

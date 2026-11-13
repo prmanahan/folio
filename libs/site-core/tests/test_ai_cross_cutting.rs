@@ -283,6 +283,7 @@ async fn anthropic_api_key_absent_preserves_existing_ai_disabled_behavior_no_hel
         rig_client: None,
         trusted_ip_header: None,
         page_hit_salt: "test-salt".to_string(),
+        projects: common::test_projects::projects(),
     });
     let app = axum::Router::new()
         .merge(site_core::routes::ai::routes())

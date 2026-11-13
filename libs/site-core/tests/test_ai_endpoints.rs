@@ -34,6 +34,7 @@ fn ai_test_app() -> axum_test::TestServer {
         rig_client: None,
         trusted_ip_header: None,
         page_hit_salt: "test-salt".to_string(),
+        projects: common::test_projects::projects(),
     });
 
     let app = axum::Router::new()

@@ -22,3 +22,4 @@ dotenvy = { workspace = true }
 [dev-dependencies]
 axum-test = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }

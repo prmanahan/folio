@@ -36,7 +36,7 @@ All commands via `justfile`. Run from project root.
 
 | Command | Purpose |
 |---------|---------|
-| `just run` | Build frontend + run backend (port 3000) |
+| `just run` | Build frontend + run backend (port 3000). Needs `frontend/build/projects.json` first: `GITHUB_TOKEN=<a token> just fetch-projects` |
 | `just frontend-dev` | Vite dev server with hot-reload (port 5173, proxies to backend) |
 | `just test` | Backend unit + integration tests |
 | `just e2e` | Root Playwright suite over `e2e/` (starts Vite on :5173 itself; see `<gates>`) |
@@ -46,7 +46,7 @@ All commands via `justfile`. Run from project root.
 
 Module layout: `cmd/server/` (Axum entry), `libs/site-core/` (core logic, DB, routes, AI, static file serving), `frontend/` (SvelteKit), `migrations/` (SQL), `e2e/` (Playwright), `data/` (SQLite + seed SQL).
 
-**Backend/frontend decoupling:** `cargo build` and `cargo test` (unit tests) run standalone without any frontend build step — no `include_str!`/`include_bytes!`/`build.rs` coupling to frontend assets. The only frontend dependency is at *runtime*: `validate_static_dir()` panics at startup if `STATIC_DIR` (default `frontend/build`) is missing, and `ServeDir` reads files live from that path. This is the intended design.
+**Backend/frontend decoupling:** `cargo build` and `cargo test` (unit tests) run standalone without any frontend build step — no `include_str!`/`include_bytes!`/`build.rs` coupling to frontend assets. The only frontend dependencies are at *runtime*: `validate_static_dir()` panics at startup if `STATIC_DIR` (default `frontend/build`) is missing, and the server refuses to start without a valid `frontend/build/projects.json` (a local run first needs `GITHUB_TOKEN=<a token> just fetch-projects`, then a frontend build). `ServeDir` reads files live from that path. This is the intended design.
 
 **AI architecture is asymmetric (spec #572) — do not "unify" it:** the two AI paths deliberately take different routes.
 - **chat** = `ai/anthropic_stream.rs` — a custom Anthropic SSE consumer (Path X). It bypasses rig-core's `CompletionModel` *on purpose: that path drops `stop_reason`*, which chat needs to map refusal/context-exceeded/truncated terminal conditions. Refactoring chat back through rig's `CompletionModel` silently loses `stop_reason` and reintroduces the bug this spec fixed.

@@ -31,3 +31,6 @@ primary_region = "yyz"
 [vm]
   size = "shared-cpu-1x"
   memory = "256mb"
+
+[deploy]
+  release_command = "./folio check-projects"

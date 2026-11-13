@@ -1,3 +1,4 @@
+use crate::projects_list::ProjectsList;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
@@ -10,6 +11,9 @@ pub struct AppState {
     pub trusted_ip_header: Option<String>,
     /// Salt used to hash IPs before storing page-hit records.
     pub page_hit_salt: String,
+    /// The list loaded and validated once at startup (R-10). Immutable for the
+    /// life of the process; the AI prompts read it and never the `projects` table.
+    pub projects: Arc<ProjectsList>,
 }
 
 pub type DbState = Arc<AppState>;

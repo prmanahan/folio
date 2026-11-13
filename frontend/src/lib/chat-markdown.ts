@@ -47,7 +47,7 @@ function restrictNode(node: Element): void {
 
 export function sanitizeChatHtml(html: string): string {
 	// The hook is scoped to this call: DOMPurify is a shared instance and the
-	// article/project/admin renderers must not inherit the chat restrictions.
+	// article and admin renderers must not inherit the chat restrictions.
 	DOMPurify.addHook('afterSanitizeAttributes', restrictNode);
 	try {
 		return DOMPurify.sanitize(html, {

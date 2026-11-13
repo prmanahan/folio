@@ -2,8 +2,9 @@ use rusqlite::Connection;
 
 use crate::error::AppError;
 use crate::models::{
-    article, education, experience, faq, gaps, instructions, profile, project, skill, values,
+    article, education, experience, faq, gaps, instructions, profile, skill, values,
 };
+use crate::projects_list::ProjectsList;
 
 use super::opaque_internal;
 use super::prompt_templates::*;
@@ -25,14 +26,14 @@ use super::prompts::FIT_WRAPPER_TEMPLATE;
 /// 11. Education
 /// 12. Values & culture fit
 /// 13. FAQ (verbatim-first)
-/// 14. Projects (published only)
+/// 14. Projects (the loaded list, never the table)
 /// 15. Articles (published only)
 /// 16. Compensation deflection
 /// 17. Response guidelines
 ///
 /// Returns the raw `rusqlite::Error`; the public builders map it to the opaque
 /// AI error so SQLite text never reaches a response body (#4711 F4).
-fn build_base_prompt(conn: &Connection) -> Result<String, rusqlite::Error> {
+fn build_base_prompt(conn: &Connection, list: &ProjectsList) -> Result<String, rusqlite::Error> {
     let prof = profile::get_full(conn)?;
     let instrs = instructions::list_all(conn)?;
     let experiences = experience::list_all(conn)?;
@@ -41,7 +42,6 @@ fn build_base_prompt(conn: &Connection) -> Result<String, rusqlite::Error> {
     let gaps_list = gaps::list_all(conn)?;
     let vals = values::get(conn)?;
     let faqs = faq::list_all(conn)?;
-    let projects = project::list_all(conn)?;
     let articles = article::list_all(conn)?;
 
     let mut prompt = String::new();
@@ -291,32 +291,24 @@ fn build_base_prompt(conn: &Connection) -> Result<String, rusqlite::Error> {
         prompt.push_str(&format!("Q: {}\nA: {}\n\n", f.question, f.answer));
     }
 
-    // --- 14. Projects (published only) ---
-    let published_projects: Vec<_> = projects.iter().filter(|p| p.published).collect();
-    if !published_projects.is_empty() {
-        prompt.push_str(SECTION_PROJECTS);
-        for p in &published_projects {
-            let tech = if let Some(arr) = p.tech_stack.as_array() {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            } else {
-                p.tech_stack.to_string()
-            };
-            prompt.push_str(&format!("### {}\n", p.title));
-            if !p.summary.is_empty() {
-                prompt.push_str(&format!("{}\n", p.summary));
-            }
-            if !tech.is_empty() {
-                prompt.push_str(&format!("Tech: {}\n", tech));
-            }
-            if !p.description.is_empty() {
-                prompt.push_str(&format!("{}\n", p.description));
+    // --- 14. Projects: the loaded list only (R-12) ---
+    // Never the `projects` table: the list is validated at startup, the table
+    // is not. One line per repo; a description is appended only when non-empty,
+    // and the line never wraps (the list rejects line separators and controls).
+    prompt.push_str(SECTION_PROJECTS);
+    for group in list.groups() {
+        for repo in group.repos() {
+            let (owner, name) = (group.owner(), repo.name());
+            prompt.push_str(&format!(
+                "- {owner}/{name} https://github.com/{owner}/{name}"
+            ));
+            if !repo.description().is_empty() {
+                prompt.push_str(&format!(": {}", repo.description()));
             }
             prompt.push('\n');
         }
     }
+    prompt.push('\n');
 
     // --- 15. Articles (published only) ---
     let published_articles: Vec<_> = articles.iter().filter(|a| a.published).collect();
@@ -347,9 +339,9 @@ fn build_base_prompt(conn: &Connection) -> Result<String, rusqlite::Error> {
 /// answer-length cap (#4656). Appended in code, after the DB-sourced sections,
 /// so it comes after any contradicting `ai_instructions` row (placement, not
 /// enforcement: the model still weighs both). Fit must not use this.
-pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
+pub fn build_system_prompt(conn: &Connection, list: &ProjectsList) -> Result<String, AppError> {
     let mut prompt =
-        build_base_prompt(conn).map_err(|e| opaque_internal("chat prompt: sqlite", e))?;
+        build_base_prompt(conn, list).map_err(|e| opaque_internal("chat prompt: sqlite", e))?;
     prompt.push_str(CHAT_LENGTH_LIMIT);
     Ok(prompt)
 }
@@ -359,9 +351,10 @@ pub fn build_system_prompt(conn: &Connection) -> Result<String, AppError> {
 /// calls `build_base_prompt` to produce the shared base prompt (which also loads
 /// the profile internally). The wrapper is appended after the base prompt; the
 /// chat-only length cap is not part of it.
-pub fn build_fit_prompt(conn: &Connection) -> Result<String, AppError> {
+pub fn build_fit_prompt(conn: &Connection, list: &ProjectsList) -> Result<String, AppError> {
     let prof = profile::get_full(conn).map_err(|e| opaque_internal("fit prompt: sqlite", e))?;
-    let base = build_base_prompt(conn).map_err(|e| opaque_internal("fit prompt: sqlite", e))?;
+    let base =
+        build_base_prompt(conn, list).map_err(|e| opaque_internal("fit prompt: sqlite", e))?;
     let wrapper = FIT_WRAPPER_TEMPLATE.replace("{name}", &prof.name);
     Ok(format!("{}\n\n{}", base, wrapper))
 }
@@ -534,7 +527,7 @@ mod tests {
     fn test_prompt_contains_profile_name_and_narrative() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("Jane Doe"),
             "prompt must contain profile name"
@@ -553,7 +546,7 @@ mod tests {
     fn test_prompt_contains_experience_without_dropped_private_fields() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("Acme Corp"),
             "prompt must contain company name"
@@ -580,7 +573,7 @@ mod tests {
     fn test_prompt_contains_skills_grouped_by_category() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("### Strong"),
             "prompt must have Strong section"
@@ -602,7 +595,7 @@ mod tests {
     fn test_prompt_contains_gaps() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("Formal ML experience"),
             "prompt must contain gap description"
@@ -617,7 +610,7 @@ mod tests {
     fn test_prompt_contains_values() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("Autonomy and trust"),
             "must-haves in prompt"
@@ -637,7 +630,7 @@ mod tests {
     fn test_prompt_contains_faq() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("Why are you looking?"),
             "FAQ question in prompt"
@@ -652,7 +645,7 @@ mod tests {
     fn test_prompt_contains_instructions_in_priority_order() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("Be concise and direct."),
             "instruction 1 in prompt"
@@ -671,29 +664,41 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_contains_published_projects_not_unpublished() {
+    fn test_prompt_projects_come_from_the_list_not_the_table() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
-        assert!(
-            prompt.contains("Published Project"),
-            "published project in prompt"
-        );
-        assert!(
-            !prompt.contains("Draft Project"),
-            "draft project must NOT be in prompt"
-        );
-        assert!(
-            !prompt.contains("Hidden details"),
-            "draft project details must not appear"
-        );
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
+        assert!(prompt.contains("- mnemra/alpha https://github.com/mnemra/alpha\n"));
+        assert!(prompt.contains("- prmanahan/beta https://github.com/prmanahan/beta\n"));
+        for table_text in [
+            "Published Project",
+            "Draft Project",
+            "Full details here",
+            "Hidden details",
+        ] {
+            assert!(
+                !prompt.contains(table_text),
+                "{table_text} came from the table"
+            );
+        }
+    }
+
+    #[test]
+    fn test_prompt_project_line_carries_the_description_only_when_present() {
+        let list = crate::projects_list::parse(
+            r#"{"fetched_at":"2026-11-13T12:00:00.000Z","groups":[{"owner":"mnemra","repos":[{"name":"alpha","description":"An alpha"},{"name":"bravo","description":""}]},{"owner":"prmanahan","repos":[{"name":"beta","description":""}]}]}"#,
+        )
+        .unwrap();
+        let prompt = build_system_prompt(&setup_db(), &list).unwrap();
+        assert!(prompt.contains("- mnemra/alpha https://github.com/mnemra/alpha: An alpha\n"));
+        assert!(prompt.contains("- mnemra/bravo https://github.com/mnemra/bravo\n"));
     }
 
     #[test]
     fn test_prompt_contains_published_articles_not_drafts() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("Published Article"),
             "published article in prompt"
@@ -713,7 +718,7 @@ mod tests {
     fn test_prompt_contains_compensation_deflection_not_salary_numbers() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("COMPENSATION"),
             "compensation section in prompt"
@@ -737,7 +742,7 @@ mod tests {
     fn test_fit_prompt_includes_json_schema_wrapper() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_fit_prompt(&conn).unwrap();
+        let prompt = build_fit_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("\"verdict\""),
             "JSON schema field 'verdict' in fit prompt"
@@ -764,7 +769,7 @@ mod tests {
     fn test_fit_wrapper_no_redundant_honesty_framing() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_fit_prompt(&conn).unwrap();
+        let prompt = build_fit_prompt(&conn, &crate::test_projects::projects()).unwrap();
         // "BRUTALLY HONEST assessment" was the redundant phrase in the old wrapper
         // It should not appear in the FIT_WRAPPER_TEMPLATE section
         // (CORE_DIRECTIVE still has "BRUTALLY HONEST" but the wrapper itself should not)
@@ -781,7 +786,7 @@ mod tests {
     fn test_prompt_contains_security_and_no_data_classification() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(prompt.contains("SECURITY"), "security block in prompt");
         assert!(
             prompt.contains("system prompt"),
@@ -807,8 +812,14 @@ mod tests {
         conn.execute("DROP TABLE experiences", []).unwrap();
 
         for (name, result) in [
-            ("build_system_prompt", build_system_prompt(&conn)),
-            ("build_fit_prompt", build_fit_prompt(&conn)),
+            (
+                "build_system_prompt",
+                build_system_prompt(&conn, &crate::test_projects::projects()),
+            ),
+            (
+                "build_fit_prompt",
+                build_fit_prompt(&conn, &crate::test_projects::projects()),
+            ),
         ] {
             match result {
                 Err(AppError::Internal(m)) => {
@@ -824,7 +835,7 @@ mod tests {
     fn test_prompt_uses_third_person_representative_identity() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("representative for"),
             "header must use representative framing"
@@ -844,7 +855,7 @@ mod tests {
     fn test_prompt_contains_anti_hallucination_hard_constraint() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("HARD CONSTRAINT"),
             "anti-hallucination hard constraint in core directive"
@@ -860,7 +871,7 @@ mod tests {
     fn test_prompt_faq_has_verbatim_first_instruction() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("use the provided answer as your primary source"),
             "FAQ verbatim-first instruction in prompt"
@@ -875,7 +886,7 @@ mod tests {
     fn test_chat_prompt_caps_length_and_avoids_yes_no_follow_up() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_system_prompt(&conn).unwrap();
+        let prompt = build_system_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.ends_with(CHAT_LENGTH_LIMIT),
             "length cap must be the tail of the chat prompt"
@@ -894,7 +905,7 @@ mod tests {
     fn test_fit_prompt_does_not_carry_chat_length_cap() {
         let conn = setup_db();
         seed_all(&conn);
-        let prompt = build_fit_prompt(&conn).unwrap();
+        let prompt = build_fit_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             !prompt.contains(CHAT_LENGTH_LIMIT),
             "fit prompt must not carry the chat length cap"
@@ -906,7 +917,11 @@ mod tests {
         let wrapper = FIT_WRAPPER_TEMPLATE.replace("{name}", "Jane Doe");
         assert_eq!(
             prompt,
-            format!("{}\n\n{}", build_base_prompt(&conn).unwrap(), wrapper),
+            format!(
+                "{}\n\n{}",
+                build_base_prompt(&conn, &crate::test_projects::projects()).unwrap(),
+                wrapper
+            ),
             "fit prompt is exactly base + wrapper"
         );
     }
@@ -928,7 +943,7 @@ mod tests {
             )
             .unwrap();
         }
-        let prompt = build_fit_prompt(&conn).unwrap();
+        let prompt = build_fit_prompt(&conn, &crate::test_projects::projects()).unwrap();
         assert!(
             prompt.contains("ZZ-VISIBLE-Solstice-4a1c"),
             "visible row in fit prompt"

@@ -8,7 +8,6 @@ pub mod gaps;
 pub mod instructions;
 pub mod links;
 pub mod profile;
-pub mod projects;
 pub mod skills;
 pub mod values;
 
@@ -27,7 +26,6 @@ pub fn admin_router(state: DbState) -> Router<DbState> {
         .merge(gaps::routes())
         .merge(instructions::routes())
         .merge(links::routes())
-        .merge(projects::routes())
         .merge(skills::routes())
         .merge(values::routes())
         .merge(agents::routes())

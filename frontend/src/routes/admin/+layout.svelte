@@ -29,7 +29,6 @@
     { href: '/admin/experience', label: 'Experience', icon: '◉' },
     { href: '/admin/skills',     label: 'Skills',     icon: '◆' },
     { href: '/admin/education',  label: 'Education',  icon: '◇' },
-    { href: '/admin/projects',   label: 'Projects',   icon: '▣' },
     { href: '/admin/articles',   label: 'Articles',   icon: '▤' },
     { href: '/admin/ai',         label: 'AI Config',  icon: '◎' },
     { href: '/admin/links',      label: 'Links',      icon: '◻' },
@@ -42,7 +41,6 @@
       '/admin/experience': counts.experiences,
       '/admin/skills':     counts.skills,
       '/admin/education':  counts.education,
-      '/admin/projects':   counts.projects,
       '/admin/articles':   counts.articles,
       '/admin/links':      counts.links,
     };

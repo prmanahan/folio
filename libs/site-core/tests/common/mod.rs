@@ -2,6 +2,7 @@
 
 pub mod ai_mock;
 pub mod test_password;
+pub mod test_projects;
 
 use rusqlite::Connection;
 
@@ -46,6 +47,7 @@ pub fn build_app_server(static_dir: &std::path::Path) -> axum_test::TestServer {
         rig_client: None,
         trusted_ip_header: None,
         page_hit_salt: "test-salt".to_string(),
+        projects: test_projects::projects(),
     });
     let app = site_core::app::build_app(
         state,
@@ -92,6 +94,7 @@ pub fn test_app() -> axum_test::TestServer {
         rig_client: None,
         trusted_ip_header: None,
         page_hit_salt: "test-salt".to_string(),
+        projects: test_projects::projects(),
     });
 
     let app = axum::Router::new()
@@ -136,6 +139,7 @@ pub fn test_app_with_state() -> (axum_test::TestServer, site_core::state::DbStat
         rig_client: None,
         trusted_ip_header: None,
         page_hit_salt: "test-salt".to_string(),
+        projects: test_projects::projects(),
     });
 
     let app = axum::Router::new()

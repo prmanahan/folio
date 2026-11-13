@@ -14,3 +14,5 @@ pub mod static_files;
 
 #[cfg(test)]
 mod test_password;
+#[cfg(test)]
+mod test_projects;

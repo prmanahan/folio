@@ -5,7 +5,6 @@ import type {
   ExperienceFull, ExperienceInput,
   SkillFull, SkillInput,
   Education, EducationInput,
-  ProjectFull, ProjectInput,
   ArticleFull, ArticleInput,
   Link, LinkInput,
   FaqFull, FaqInput,
@@ -121,13 +120,6 @@ export const getEducationById = (id: number) => adminFetch<Education>('GET', `/e
 export const createEducation = (input: EducationInput) => adminFetch<Education>('POST', '/education', input);
 export const updateEducation = (id: number, input: EducationInput) => adminFetch<Education>('PUT', `/education/${id}`, input);
 export const deleteEducation = (id: number) => adminFetch<void>('DELETE', `/education/${id}`);
-
-// --- Projects ---
-export const listProjects = () => adminFetch<ProjectFull[]>('GET', '/projects');
-export const getProject = (id: number) => adminFetch<ProjectFull>('GET', `/projects/${id}`);
-export const createProject = (input: ProjectInput) => adminFetch<ProjectFull>('POST', '/projects', input);
-export const updateProject = (id: number, input: ProjectInput) => adminFetch<ProjectFull>('PUT', `/projects/${id}`, input);
-export const deleteProject = (id: number) => adminFetch<void>('DELETE', `/projects/${id}`);
 
 // --- Articles ---
 export const listArticles = () => adminFetch<ArticleFull[]>('GET', '/articles');

@@ -7,7 +7,6 @@ pub mod experience;
 pub mod faq;
 pub mod links;
 pub mod profile;
-pub mod projects;
 pub mod skills;
 
 use crate::state::DbState;
@@ -50,7 +49,6 @@ pub fn public_router() -> Router<DbState> {
         .merge(experience::routes())
         .merge(skills::routes())
         .merge(education::routes())
-        .merge(projects::routes())
         .merge(articles::routes())
         .merge(links::routes())
         .merge(faq::routes())
@@ -71,6 +69,7 @@ mod tests {
             rig_client: None,
             trusted_ip_header: None,
             page_hit_salt: "test-salt".to_string(),
+            projects: crate::test_projects::projects(),
         })
     }
 

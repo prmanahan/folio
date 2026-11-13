@@ -8,6 +8,5 @@ pub mod instructions;
 pub mod link;
 pub mod page_hits;
 pub mod profile;
-pub mod project;
 pub mod skill;
 pub mod values;

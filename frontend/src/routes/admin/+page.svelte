@@ -10,7 +10,6 @@
     { key: 'experiences', label: 'Experience',       href: '/admin/experience' },
     { key: 'skills',      label: 'Skills',           href: '/admin/skills' },
     { key: 'education',   label: 'Education',        href: '/admin/education' },
-    { key: 'projects',    label: 'Projects',         href: '/admin/projects' },
     { key: 'articles',    label: 'Articles',         href: '/admin/articles' },
     { key: 'links',       label: 'Links',            href: '/admin/links' },
     { key: 'faq_responses',    label: 'FAQ Responses',    href: '/admin/ai' },
@@ -21,7 +20,6 @@
   const quickActions = [
     { label: '+ New Experience', href: '/admin/experience' },
     { label: '+ New Article',    href: '/admin/articles' },
-    { label: '+ New Project',    href: '/admin/projects' },
     { label: '+ New Skill',      href: '/admin/skills' },
   ];
 

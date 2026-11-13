@@ -8,7 +8,6 @@ pub struct DashboardCounts {
     pub experiences: i64,
     pub skills: i64,
     pub education: i64,
-    pub projects: i64,
     pub articles: i64,
     pub links: i64,
     pub faq_responses: i64,
@@ -29,7 +28,6 @@ async fn get_dashboard(State(state): State<DbState>) -> Result<Json<DashboardCou
         conn.query_row("SELECT COUNT(*) FROM experiences", [], |row| row.get(0))?;
     let skills: i64 = conn.query_row("SELECT COUNT(*) FROM skills", [], |row| row.get(0))?;
     let education: i64 = conn.query_row("SELECT COUNT(*) FROM education", [], |row| row.get(0))?;
-    let projects: i64 = conn.query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))?;
     let articles: i64 = conn.query_row("SELECT COUNT(*) FROM articles", [], |row| row.get(0))?;
     let links: i64 = conn.query_row("SELECT COUNT(*) FROM links", [], |row| row.get(0))?;
     let faq_responses: i64 =
@@ -43,7 +41,6 @@ async fn get_dashboard(State(state): State<DbState>) -> Result<Json<DashboardCou
         experiences,
         skills,
         education,
-        projects,
         articles,
         links,
         faq_responses,

@@ -66,6 +66,7 @@ pub fn ai_test_app_with_mock(base_url: &str) -> axum_test::TestServer {
         rig_client: Some(client),
         trusted_ip_header: None,
         page_hit_salt: "test-salt".to_string(),
+        projects: super::test_projects::projects(),
     });
 
     let app = axum::Router::new()
@@ -104,6 +105,7 @@ pub fn ai_test_app_with_mock_and_state(base_url: &str) -> (axum_test::TestServer
         rig_client: Some(client),
         trusted_ip_header: None,
         page_hit_salt: "test-salt".to_string(),
+        projects: super::test_projects::projects(),
     });
 
     let app = axum::Router::new()

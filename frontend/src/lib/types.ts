@@ -44,17 +44,6 @@ export interface Education {
 	end_year: string;
 }
 
-export interface Project {
-	id: number;
-	title: string;
-	slug: string;
-	summary: string;
-	description: string;
-	tech_stack: string[];
-	url: string;
-	sort_order: number;
-}
-
 export interface Article {
 	id: number;
 	title: string;

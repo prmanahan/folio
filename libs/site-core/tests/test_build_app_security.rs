@@ -44,6 +44,7 @@ fn server_in(static_dir: &str, trusted_ip_header: Option<&str>) -> axum_test::Te
         rig_client: None,
         trusted_ip_header: trusted_ip_header.map(str::to_string),
         page_hit_salt: "test-salt".to_string(),
+        projects: common::test_projects::projects(),
     });
     let app = build_app(
         state,

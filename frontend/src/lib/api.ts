@@ -1,4 +1,4 @@
-import type { Profile, Experience, Skill, Education, Project, Article, Link, FaqSuggestion, FitVerdict, Agent } from './types';
+import type { Profile, Experience, Skill, Education, Article, Link, FaqSuggestion, FitVerdict, Agent } from './types';
 
 const BASE = '/api';
 
@@ -15,8 +15,6 @@ export const api = {
 	getExperience: () => get<Experience[]>('/experience'),
 	getSkills: () => get<Skill[]>('/skills'),
 	getEducation: () => get<Education[]>('/education'),
-	getProjects: () => get<Project[]>('/projects'),
-	getProject: (slug: string) => get<Project>(`/projects/${encodeURIComponent(slug)}`),
 	getArticles: () => get<Article[]>('/articles'),
 	getArticle: (slug: string) => get<Article>(`/articles/${encodeURIComponent(slug)}`),
 	getLinks: () => get<Link[]>('/links'),
