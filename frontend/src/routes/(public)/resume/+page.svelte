@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api';
-	import type { Profile, Skill, Experience, Education } from '$lib/types';
-	import SkillsPillMatrix from '$lib/components/SkillsPillMatrix.svelte';
-	import ExperienceSection from '$lib/components/ExperienceSection.svelte';
-	import EducationSection from '$lib/components/EducationSection.svelte';
+	import { api } from '#lib/api.ts';
+	import type { Profile, Skill, Experience, Education } from '#lib/types.ts';
+	import SkillsPillMatrix from '#lib/components/SkillsPillMatrix.svelte';
+	import ExperienceSection from '#lib/components/ExperienceSection.svelte';
+	import EducationSection from '#lib/components/EducationSection.svelte';
 
 	let profile: Profile | null = $state(null);
 	let skills: Skill[] = $state([]);

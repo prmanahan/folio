@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api';
-	import type { Agent } from '$lib/types';
+	import { api } from '#lib/api.ts';
+	import type { Agent } from '#lib/types.ts';
 
 	let agents = $state<Agent[]>([]);
 	let loading = $state(true);

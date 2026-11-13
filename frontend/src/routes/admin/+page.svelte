@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getDashboard } from '$lib/admin-api';
-  import type { DashboardCounts } from '$lib/admin-types';
+  import { getDashboard } from '#lib/admin-api.ts';
+  import type { DashboardCounts } from '#lib/admin-types.ts';
 
   let counts = $state<DashboardCounts | null>(null);
   let error = $state('');

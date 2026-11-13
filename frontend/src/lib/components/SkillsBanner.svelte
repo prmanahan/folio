@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Skill } from '$lib/types';
+	import type { Skill } from '#lib/types.ts';
 	import { onMount } from 'svelte';
 
 	interface Props {

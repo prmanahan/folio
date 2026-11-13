@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getInitials } from '$lib/utils';
+import { getInitials } from '#lib/utils.ts';
 
 describe('getInitials', () => {
 	it('returns first + last initial for two-word name', () => {

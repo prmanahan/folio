@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listExperience, createExperience, updateExperience, deleteExperience } from '$lib/admin-api';
-  import type { ExperienceFull, ExperienceInput } from '$lib/admin-types';
-  import { emptyExperienceForm } from '$lib/admin-experience-form';
-  import FormSection from '$lib/components/admin/FormSection.svelte';
-  import ListInput from '$lib/components/admin/ListInput.svelte';
-  import Toast from '$lib/components/admin/Toast.svelte';
+  import { listExperience, createExperience, updateExperience, deleteExperience } from '#lib/admin-api.ts';
+  import type { ExperienceFull, ExperienceInput } from '#lib/admin-types.ts';
+  import { emptyExperienceForm } from '#lib/admin-experience-form.ts';
+  import FormSection from '#lib/components/admin/FormSection.svelte';
+  import ListInput from '#lib/components/admin/ListInput.svelte';
+  import Toast from '#lib/components/admin/Toast.svelte';
 
   let items = $state<ExperienceFull[]>([]);
   let editingId = $state<number | null>(null);

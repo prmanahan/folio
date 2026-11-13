@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { api } from '$lib/api';
-	import { parseSSEStream, SSEError } from '$lib/sse';
-	import type { ChatMessage } from '$lib/types';
+	import { api } from '#lib/api.ts';
+	import { parseSSEStream, SSEError } from '#lib/sse.ts';
+	import type { ChatMessage } from '#lib/types.ts';
 	import ChatMessageComponent from './ChatMessage.svelte';
 	import SuggestedQuestions from './SuggestedQuestions.svelte';
 

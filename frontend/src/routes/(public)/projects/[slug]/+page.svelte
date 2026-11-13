@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { api } from '$lib/api';
-	import type { Project } from '$lib/types';
+	import { api } from '#lib/api.ts';
+	import type { Project } from '#lib/types.ts';
 	import { marked } from 'marked';
 	import DOMPurify from 'dompurify';
 

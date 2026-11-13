@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api';
-	import type { Profile, Link, Skill } from '$lib/types';
-	import Hero from '$lib/components/Hero.svelte';
-	import HeroSkeleton from '$lib/components/HeroSkeleton.svelte';
-	import SkillsBanner from '$lib/components/SkillsBanner.svelte';
+	import { api } from '#lib/api.ts';
+	import type { Profile, Link, Skill } from '#lib/types.ts';
+	import Hero from '#lib/components/Hero.svelte';
+	import HeroSkeleton from '#lib/components/HeroSkeleton.svelte';
+	import SkillsBanner from '#lib/components/SkillsBanner.svelte';
 
 	let profile: Profile | null = $state(null);
 	let links: Link[] = $state([]);

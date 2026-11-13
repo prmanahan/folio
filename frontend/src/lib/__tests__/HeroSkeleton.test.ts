@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
-import HeroSkeleton from '$lib/components/HeroSkeleton.svelte';
+import HeroSkeleton from '#lib/components/HeroSkeleton.svelte';
 
 describe('HeroSkeleton', () => {
 	it('renders with aria-busy="true"', () => {

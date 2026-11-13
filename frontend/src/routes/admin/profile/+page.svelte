@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getProfile, updateProfile } from '$lib/admin-api';
-  import type { ProfileInput } from '$lib/admin-types';
-  import FormSection from '$lib/components/admin/FormSection.svelte';
-  import TagInput from '$lib/components/admin/TagInput.svelte';
-  import Toast from '$lib/components/admin/Toast.svelte';
+  import { getProfile, updateProfile } from '#lib/admin-api.ts';
+  import type { ProfileInput } from '#lib/admin-types.ts';
+  import FormSection from '#lib/components/admin/FormSection.svelte';
+  import TagInput from '#lib/components/admin/TagInput.svelte';
+  import Toast from '#lib/components/admin/Toast.svelte';
 
   // Length limits mirror libs/site-core/models/profile.rs.
   // Source of truth is the Rust validator; these are admin-UI hints.

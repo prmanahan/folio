@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { api } from '$lib/api';
-	import type { FaqSuggestion } from '$lib/types';
+	import { api } from '#lib/api.ts';
+	import type { FaqSuggestion } from '#lib/types.ts';
 
 	let { onSelect }: { onSelect: (question: string) => void } = $props();
 

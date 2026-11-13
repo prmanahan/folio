@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { renderChatMarkdown } from '$lib/chat-markdown';
-	import type { ChatMessage } from '$lib/types';
+	import { renderChatMarkdown } from '#lib/chat-markdown.ts';
+	import type { ChatMessage } from '#lib/types.ts';
 
 	let { message }: { message: ChatMessage } = $props();
 

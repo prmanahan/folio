@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
 
 // Mock the api module before imports that reference it
-vi.mock('$lib/api', () => ({
+vi.mock('#lib/api.ts', () => ({
 	api: {
 		getProfile: vi.fn(),
 		getSkills: vi.fn(),
@@ -12,8 +12,8 @@ vi.mock('$lib/api', () => ({
 }));
 
 import ResumePage from '../../routes/(public)/resume/+page.svelte';
-import { api } from '$lib/api';
-import type { Profile, Skill, Experience, Education } from '$lib/types';
+import { api } from '#lib/api.ts';
+import type { Profile, Skill, Experience, Education } from '#lib/types.ts';
 
 const mockProfile: Profile = {
 	name: 'Alex Rivera',

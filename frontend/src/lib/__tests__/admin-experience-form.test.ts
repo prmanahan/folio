@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { emptyExperienceForm } from '$lib/admin-experience-form';
+import { emptyExperienceForm } from '#lib/admin-experience-form.ts';
 
 describe('emptyExperienceForm', () => {
 	it('defaults visible to true (R-0006.2 / S6)', () => {

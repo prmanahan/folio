@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Profile, Link } from '$lib/types';
+	import type { Profile, Link } from '#lib/types.ts';
 	import GearsBackground from './GearsBackground.svelte';
 
 	interface Props {

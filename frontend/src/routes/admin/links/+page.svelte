@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listLinks, createLink, updateLink, deleteLink } from '$lib/admin-api';
-  import type { Link, LinkInput } from '$lib/admin-types';
-  import Toast from '$lib/components/admin/Toast.svelte';
+  import { listLinks, createLink, updateLink, deleteLink } from '#lib/admin-api.ts';
+  import type { Link, LinkInput } from '#lib/admin-types.ts';
+  import Toast from '#lib/components/admin/Toast.svelte';
 
   let items = $state<Link[]>([]);
   let mode = $state<'list' | 'edit'>('list');

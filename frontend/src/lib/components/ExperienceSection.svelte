@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Experience } from '$lib/types';
+	import type { Experience } from '#lib/types.ts';
 
 	let { experiences }: { experiences: Experience[] } = $props();
 </script>

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { api } from '$lib/api';
-	import type { FitVerdict } from '$lib/types';
+	import { api } from '#lib/api.ts';
+	import type { FitVerdict } from '#lib/types.ts';
 	import FitVerdictComponent from './FitVerdict.svelte';
 
 	let jobDescription = $state('');

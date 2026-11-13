@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Skill } from '$lib/types';
+	import type { Skill } from '#lib/types.ts';
 
 	let { skills }: { skills: Skill[] } = $props();
 

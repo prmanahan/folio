@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { login } from '$lib/admin-api';
+  import { login } from '#lib/admin-api.ts';
 
   let password = $state('');
   let error = $state('');

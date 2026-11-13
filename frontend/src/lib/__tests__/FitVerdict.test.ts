@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
-import FitVerdictView from '$lib/components/ai/FitVerdict.svelte';
-import type { FitVerdict } from '$lib/types';
+import FitVerdictView from '#lib/components/ai/FitVerdict.svelte';
+import type { FitVerdict } from '#lib/types.ts';
 
 function verdict(value: string): FitVerdict {
 	return {

@@ -5,15 +5,15 @@
     listGaps, createGap, updateGap, deleteGap,
     listFaq, createFaq, updateFaq, deleteFaq,
     listInstructions, createInstruction, updateInstruction, deleteInstruction,
-  } from '$lib/admin-api';
+  } from '#lib/admin-api.ts';
   import type {
     ValuesCultureInput,
     GapWeakness, GapWeaknessInput,
     FaqFull, FaqInput,
     AiInstruction, AiInstructionInput,
-  } from '$lib/admin-types';
-  import Toast from '$lib/components/admin/Toast.svelte';
-  import MarkdownEditor from '$lib/components/admin/MarkdownEditor.svelte';
+  } from '#lib/admin-types.ts';
+  import Toast from '#lib/components/admin/Toast.svelte';
+  import MarkdownEditor from '#lib/components/admin/MarkdownEditor.svelte';
 
   let activeTab = $state<'values' | 'gaps' | 'faq' | 'instructions'>('values');
 
