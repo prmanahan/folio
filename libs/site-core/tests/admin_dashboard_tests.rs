@@ -35,7 +35,6 @@ async fn test_dashboard_authenticated() {
         "experiences",
         "skills",
         "education",
-        "projects",
         "articles",
         "links",
         "faq_responses",
@@ -49,6 +48,12 @@ async fn test_dashboard_authenticated() {
             body[field]
         );
     }
+
+    // The projects table is gone (#4726): the dashboard carries no projects count
+    assert!(
+        body.get("projects").is_none(),
+        "dashboard still has a projects field: {body}"
+    );
 }
 
 #[tokio::test]

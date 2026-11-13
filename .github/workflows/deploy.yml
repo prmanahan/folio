@@ -103,6 +103,15 @@ jobs:
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@1.5
 
+      # #4726: writes frontend/static/projects.json, which the Docker build copies
+      # into the image. No `if`, `continue-on-error` or fallback: a failed fetch
+      # stops the job before Deploy (spec R-2, R-7). GITHUB_TOKEN is read-only
+      # (`contents: read`) and appears here and nowhere else outside Deploy.
+      - name: Fetch projects list
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node frontend/scripts/fetch-projects.mjs
+
       - name: Deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -139,7 +139,8 @@ fn db_with_sentinel_rows() -> Connection {
 #[test]
 fn constructed_prompt_contains_none_of_the_dropped_field_sentinels() {
     let conn = db_with_sentinel_rows();
-    let prompt = build_system_prompt(&conn).expect("prompt build must succeed");
+    let prompt = build_system_prompt(&conn, &common::test_projects::projects())
+        .expect("prompt build must succeed");
 
     assert!(
         !prompt.contains(SENTINEL_WOULD_DO_DIFFERENTLY),
@@ -176,7 +177,8 @@ fn constructed_prompt_contains_none_of_the_dropped_field_sentinels() {
 #[test]
 fn constructed_prompt_has_no_high_similarity_span_of_dropped_sentinels() {
     let conn = db_with_sentinel_rows();
-    let prompt = build_system_prompt(&conn).expect("prompt build must succeed");
+    let prompt = build_system_prompt(&conn, &common::test_projects::projects())
+        .expect("prompt build must succeed");
 
     for sentinel in [
         SENTINEL_WOULD_DO_DIFFERENTLY,
@@ -351,7 +353,8 @@ fn context_construction_path_does_not_emit_the_dropped_field_labels() {
 #[test]
 fn constructed_prompt_retains_non_dropped_private_field_sentinels() {
     let conn = db_with_sentinel_rows();
-    let prompt = build_system_prompt(&conn).expect("prompt build must succeed");
+    let prompt = build_system_prompt(&conn, &common::test_projects::projects())
+        .expect("prompt build must succeed");
 
     assert!(
         prompt.contains(SENTINEL_ACTUAL_CONTRIBUTIONS),
@@ -378,7 +381,8 @@ fn constructed_prompt_retains_non_dropped_private_field_sentinels() {
 #[test]
 fn constructed_prompt_has_no_data_classification_block() {
     let conn = db_with_sentinel_rows();
-    let prompt = build_system_prompt(&conn).expect("prompt build must succeed");
+    let prompt = build_system_prompt(&conn, &common::test_projects::projects())
+        .expect("prompt build must succeed");
     assert!(
         !prompt.to_lowercase().contains("data classification"),
         "#4713: nothing about data classification MUST be in the prompt (case-insensitive)"

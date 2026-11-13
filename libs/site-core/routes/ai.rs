@@ -129,7 +129,7 @@ async fn chat_inner(
             .rig_client
             .as_ref()
             .ok_or_else(|| AppError::Internal("AI features not configured".into()))?;
-        let prompt = build_system_prompt(&conn)?;
+        let prompt = build_system_prompt(&conn, &state.projects)?;
         let model = get_model_id(&conn);
         let max_tokens = u64::from(get_max_tokens(&conn));
         (client, prompt, model, max_tokens)
@@ -232,7 +232,7 @@ async fn fit_analysis_inner(
             .rig_client
             .as_ref()
             .ok_or_else(|| AppError::Internal("AI features not configured".into()))?;
-        let prompt = build_fit_prompt(&conn)?;
+        let prompt = build_fit_prompt(&conn, &state.projects)?;
         let model = get_model_id(&conn);
         let max_tokens = u64::from(get_max_tokens(&conn));
         (client, prompt, model, max_tokens)
@@ -496,6 +496,7 @@ mod m1_no_key_path_tests {
             rig_client: None,
             trusted_ip_header: None,
             page_hit_salt: "test-salt".to_string(),
+            projects: crate::test_projects::projects(),
         })
     }
 
