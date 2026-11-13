@@ -1,13 +1,13 @@
 ---
-status: draft            # draft | locked; Puck stamps at spec-exit
-lock_tag: ""             # brief/projects-from-github/spec-locked
+status: locked           # draft | locked; Puck stamps at spec-exit
+lock_tag: "brief/projects-from-github/spec-locked"             # brief/projects-from-github/spec-locked
 ---
 
 # Feature: projects page from GitHub
 
 > **Spec for:** folio task #4726 · **Date:** 2026-11-11, amended 2026-11-13
 > **Design ref:** Frame `docs/intent/projects-from-github-frame.md` (draft, untagged; written against blob `d60640f7667fbbd58c64f165518b43930406e64d`) · intake `docs/intent/projects-from-github.md`
-> **Base:** `main` at `aaf069e`. It carries the security PR (`8639d14`: `check:csp`, `test:csp`, the invisible tables, the post-deploy CSP check) and SvelteKit 3. Puck re-stamps the Base SHA here at lock.
+> **Base:** `main` at `aaf069e`. It carries the security PR (`8639d14`: `check:csp`, `test:csp`, the invisible tables, the post-deploy CSP check) and SvelteKit 3. Base confirmed at lock by Puck, 2026-11-13 (`main` = `origin/main` = `aaf069e`).
 
 ## Purpose
 /projects and the site's AI list exactly the public repos of the GitHub owners `mnemra` and `prmanahan`, grouped by owner, with GitHub's descriptions. The deploy job fetches the list once per deploy into one file, `/projects.json`, and both readers use it, so they cannot disagree. A Fly release command refuses a deploy through the release path whose list is invalid, more than 30 minutes old, or dated more than 5 minutes ahead. The database projects, Puck Playbook among them, leave every public and AI path. The anchors are in Frame D-1 to D-9.
