@@ -4,6 +4,7 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig, loadEnv } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
+import { csp } from './csp-config.js';
 
 export default defineConfig(({ mode }) => {
 	// Task #3558: the backend rejects any request without the origin
@@ -20,27 +21,10 @@ export default defineConfig(({ mode }) => {
 			sveltekit({
 				preprocess: vitePreprocess(),
 				adapter: adapter({ fallback: 'index.html' }),
-				// HTML pages get their script-hash CSP here, as a <meta http-equiv> tag.
-				// The guard (`npm run check:csp`) validates the built page's meta policy
-				// and writes it to build/csp-header.txt. The server sends that file as the
-				// Content-Security-Policy header with `; frame-ancestors 'none'` appended.
-				// STATIC_CSP is only the fallback when the file is unusable (see
-				// docs/RISK-REGISTER.md RISK-2).
-				// frame-ancestors / report-uri / sandbox are ignored in a meta tag.
-				csp: {
-					mode: 'hash',
-					directives: {
-						'default-src': ['self'],
-						'script-src': ['self'],
-						'style-src': ['self', 'unsafe-inline', 'https://fonts.googleapis.com'],
-						'font-src': ['self', 'https://fonts.gstatic.com'],
-						'img-src': ['self', 'data:'],
-						'connect-src': ['self'],
-						'object-src': ['none'],
-						'base-uri': ['none'],
-						'form-action': ['self']
-					}
-				}
+				// Page CSP: single source in ./csp-config.js (also read by the guard).
+				csp,
+				// Kit 3 defaults this to one hour; kit 2 never polled. 0 keeps kit 2 behaviour.
+				version: { pollInterval: 0 }
 			})
 		],
 		server: {

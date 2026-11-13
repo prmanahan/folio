@@ -49,15 +49,15 @@ const REASON = {
 	'bad-report-only-mixed-case.html': 'no enforce-mode',
 	'bad-report-only.html': 'no enforce-mode',
 	'bad-noscript-before-meta.html': 'a <noscript> precedes the CSP meta tag',
-	'bad-shape-c0-control.html': 'CSP policy shape: directive name not in svelte.config.js',
+	'bad-shape-c0-control.html': 'CSP policy shape: directive name not in csp-config.js',
 	'bad-shape-comma.html': 'CSP policy shape: value token',
 	'bad-shape-double-space.html': 'CSP policy shape: empty directive or non-single-space',
-	'bad-shape-script-src-attr-none.html': 'CSP policy shape: directive name not in svelte.config.js',
+	'bad-shape-script-src-attr-none.html': 'CSP policy shape: directive name not in csp-config.js',
 	'bad-shape-semicolon-no-space.html': 'CSP policy shape: value token',
-	'bad-shape-tab-separator.html': 'CSP policy shape: directive name not in svelte.config.js',
-	'bad-shape-unknown-directive.html': 'CSP policy shape: directive name not in svelte.config.js',
-	'bad-shape-vt-before-name.html': 'CSP policy shape: directive name not in svelte.config.js',
-	'bad-shape-vt-name-value.html': 'CSP policy shape: directive name not in svelte.config.js',
+	'bad-shape-tab-separator.html': 'CSP policy shape: directive name not in csp-config.js',
+	'bad-shape-unknown-directive.html': 'CSP policy shape: directive name not in csp-config.js',
+	'bad-shape-vt-before-name.html': 'CSP policy shape: directive name not in csp-config.js',
+	'bad-shape-vt-name-value.html': 'CSP policy shape: directive name not in csp-config.js',
 	'bad-scheme-data.html': 'script-src contains disallowed source data:',
 	'bad-script-before-meta.html': 'a <script> precedes the CSP meta tag',
 	'bad-script-src-attr-self.html': "script-src-attr must be absent or exactly 'none'",
@@ -251,13 +251,13 @@ test('shape: non-single-space separators, trailing separators, comma and bare se
 		assert.notDeepEqual(shapeErrors(policy), [], JSON.stringify(policy));
 	}
 });
-// The allowed directive names are derived from svelte.config.js, the config that
+// The allowed directive names are derived from csp-config.js, the config that
 // emits the policy. Prove the derivation tracks it: every name the config sets
 // is accepted. The count is pinned at nine as a deliberate tripwire: adding or
 // removing a directive in the config fails here until this number is updated.
-test('shape: directive names come from svelte.config.js kit.csp.directives', async () => {
-	const { default: config } = await import(pathToFileURL(join(here, '..', 'svelte.config.js')).href);
-	const names = Object.keys(config.kit.csp.directives);
+test('shape: directive names come from csp-config.js csp.directives', async () => {
+	const { csp } = await import(pathToFileURL(join(here, '..', 'csp-config.js')).href);
+	const names = Object.keys(csp.directives);
 	assert.equal(names.length, 9, names.join());
 	for (const name of names) assert.deepEqual(shapeErrors(`${name} 'self'`), [], name);
 });
