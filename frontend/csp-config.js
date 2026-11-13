@@ -11,7 +11,7 @@
 // docs/RISK-REGISTER.md RISK-2).
 // frame-ancestors / report-uri / sandbox are ignored in a meta tag.
 
-/** @type {{ mode: 'hash'; directives: Record<string, string[]> }} */
+/** @satisfies {NonNullable<import('@sveltejs/kit/vite').Config['csp']>} */
 export const csp = {
 	mode: 'hash',
 	directives: {

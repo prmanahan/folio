@@ -49,7 +49,7 @@ function sseResponse(raw: string): Response {
 
 const chatMock = vi.fn();
 
-// Mock the FULL $lib/api seam touched by ChatTab's render subtree, not just
+// Mock the FULL #lib/api.ts seam touched by ChatTab's render subtree, not just
 // chat(). ChatTab renders SuggestedQuestions.svelte, which calls
 // api.getFaqSuggestions() in a mount $effect — an incomplete mock makes that
 // `undefined`, throwing `TypeError: api.getFaqSuggestions is not a function`

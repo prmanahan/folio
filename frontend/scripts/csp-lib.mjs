@@ -155,9 +155,10 @@ function charsetErrors(doc) {
 			errors.push(`document declares charset ${JSON.stringify(m.getAttribute('charset'))}, not utf-8`);
 		}
 		if (asciiLower(m.getAttribute('http-equiv') ?? '') === 'content-type') {
-			const found = (/charset[\t\n\f\r ]*=[\t\n\f\r ]*(?:"([^"]*)"|'([^']*)'|([^\t\n\f\r ;"']*))/i).exec(m.getAttribute('content') ?? '');
-			const label = found ? found[1] ?? found[2] ?? found[3] ?? '' : null;
-
+			const found = /charset[\t\n\f\r ]*=[\t\n\f\r ]*(?:"([^"]*)"|'([^']*)'|([^\t\n\f\r ;"']*))/i.exec(
+				m.getAttribute('content') ?? ''
+			);
+			const label = found ? (found[1] ?? found[2] ?? found[3] ?? '') : null;
 			if (label !== null && !isUtf8Label(label)) {
 				errors.push(`document declares charset ${JSON.stringify(label)} in http-equiv content-type, not utf-8`);
 			}
@@ -173,13 +174,8 @@ function charsetErrors(doc) {
  */
 export function checkCspBytes(bytes) {
 	const b = Buffer.from(bytes);
-	const bom16 = b.length >= 2 && (b[0] === 0xff && b[1] === 0xfe || b[0] === 0xfe && b[1] === 0xff);
-
-	if (bom16) return {
-		errors: ['non-UTF-8 byte order mark (UTF-16); only UTF-8 is allowed'],
-		header: null
-	};
-
+	const bom16 = b.length >= 2 && ((b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff));
+	if (bom16) return { errors: ['non-UTF-8 byte order mark (UTF-16); only UTF-8 is allowed'], header: null };
 	let html;
 	try {
 		html = new TextDecoder('utf-8', { fatal: true }).decode(b); // strips an EF BB BF BOM
