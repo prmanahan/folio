@@ -15,7 +15,7 @@ pub fn strip_invisible_unicode(s: &str) -> String {
     s.chars().filter(|c| !is_invisible(*c)).collect()
 }
 
-fn is_invisible(c: char) -> bool {
+pub(crate) fn is_invisible(c: char) -> bool {
     let cp = c as u32;
     INVISIBLE_RANGES
         .binary_search_by(|&(lo, hi)| {

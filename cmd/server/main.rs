@@ -1,10 +1,11 @@
 use clap::{Parser, Subcommand};
 use site_core::app::build_app;
 use site_core::auth;
-use site_core::config::Config;
+use site_core::config::{Config, DEFAULT_STATIC_DIR};
 use site_core::db;
 use site_core::middleware::global_rate_limit::GlobalRateLimitState;
 use site_core::middleware::origin_lock::OriginLockState;
+use site_core::projects_list;
 use site_core::state::{AppState, DbState};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -27,6 +28,52 @@ struct Cli {
 enum Commands {
     /// Start the web server (default)
     Serve,
+    /// Validate `$STATIC_DIR/projects.json` and its freshness, then exit
+    /// (Fly release command). Reads no secrets and opens no database.
+    CheckProjects,
+}
+
+/// R-18. Deliberately independent of `Config`: it must run on Fly's release
+/// machine, which has no volume, and must not require or read the app's
+/// secrets. Returns whether the list passed.
+fn check_projects() -> bool {
+    let static_dir = std::env::var_os("STATIC_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(DEFAULT_STATIC_DIR));
+    let path = static_dir.join("projects.json");
+
+    // `%e` is safe for untrusted text: every `Display` arm that interpolates
+    // text from the file does so through `{:?}`, which escapes control
+    // characters, independent of the order the checks ran in. Pinned per arm
+    // in `libs/site-core/tests/test_projects_list_validator.rs`.
+    let list = match projects_list::load(&path) {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::error!(path = %path.display(), error = %e, "check-projects failed");
+            return false;
+        }
+    };
+    let age = match projects_list::check_fetched_at_age_now(list.fetched_at()) {
+        Ok(age) => age,
+        Err(e) => {
+            tracing::error!(path = %path.display(), error = %e, "check-projects failed");
+            return false;
+        }
+    };
+    let counts: Vec<String> = list.counts().map(|(o, n)| format!("{o}={n}")).collect();
+    tracing::info!(
+        path = %path.display(),
+        fetched_at = list.fetched_at(),
+        age_secs = age.0.whole_seconds(),
+        bound = format!(
+            "{} minutes behind, {} minutes ahead",
+            projects_list::MAX_AGE_BEHIND.whole_minutes(),
+            projects_list::MAX_AGE_AHEAD.whole_minutes()
+        ),
+        counts = counts.join(" "),
+        "check-projects passed"
+    );
+    true
 }
 
 async fn run_server() {
@@ -123,6 +170,11 @@ async fn main() {
     match cli.command.unwrap_or(Commands::Serve) {
         Commands::Serve => {
             run_server().await;
+        }
+        Commands::CheckProjects => {
+            if !check_projects() {
+                std::process::exit(1);
+            }
         }
     }
 }

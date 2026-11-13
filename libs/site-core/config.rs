@@ -6,6 +6,9 @@ use std::env;
 /// environment or in logs.
 pub const EDGE_AUTH_TOKEN_PREFIX: &str = "folio_edge_";
 
+/// Where the built frontend, and `projects.json` with it, lives when `STATIC_DIR` is unset.
+pub const DEFAULT_STATIC_DIR: &str = "frontend/build";
+
 /// Number of hex characters required after [`EDGE_AUTH_TOKEN_PREFIX`].
 const EDGE_AUTH_TOKEN_HEX_LEN: usize = 64;
 
@@ -82,7 +85,7 @@ impl Config {
             admin_password: env::var("ADMIN_PASSWORD").expect("ADMIN_PASSWORD env var is required"),
             anthropic_api_key: env::var("ANTHROPIC_API_KEY").ok(),
             trusted_ip_header,
-            static_dir: env::var("STATIC_DIR").unwrap_or_else(|_| "frontend/build".to_string()),
+            static_dir: env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string()),
             page_hit_salt,
             edge_auth_token,
         }
