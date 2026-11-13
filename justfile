@@ -16,6 +16,16 @@ run: frontend-build
 frontend-dev:
     cd frontend && npm run dev
 
+# Fetch the GitHub projects list into frontend/static/projects.json.
+#
+# The token comes from the environment and only there: the recipe takes no
+# parameter and puts nothing on a command line, so it cannot reach argv or the
+# echoed recipe line. Run `GITHUB_TOKEN=<token> just fetch-projects`. With it
+# unset or empty the script deletes any old file and exits non-zero (D12).
+# This calls live GitHub; the first real run is attended (#4726).
+fetch-projects:
+    node frontend/scripts/fetch-projects.mjs
+
 # Run all backend tests
 test:
     cargo test

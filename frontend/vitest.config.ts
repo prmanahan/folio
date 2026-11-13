@@ -13,7 +13,10 @@ export default defineConfig({
 		},
 	},
 	test: {
-		include: ['src/**/*.{test,spec}.{js,ts}'],
+		// `scripts/*.spec.mjs` collects the fetch script's tests (R-16). It must
+		// not collect `scripts/check-csp.test.mjs`, a node:test file run by
+		// `npm run test:csp`.
+		include: ['src/**/*.{test,spec}.{js,ts}', 'scripts/*.spec.mjs'],
 		globals: true,
 		environment: 'jsdom',
 		setupFiles: ['src/test/setup.ts'],
