@@ -1,6 +1,16 @@
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = [
+    # chrono is unmaintained; no fixed version exists. Test-only: reached via
+    # axum-test (dev-dependency) -> expect-json -> chrono, never in the shipped
+    # binary. Recorded 2026-11-18 (#4851), Peter ruled "record and watch".
+    # Revisit when expect-json or axum-test drop chrono. The daily cargo-audit
+    # run (.github/workflows/audit.yml) keeps warning on this advisory and is
+    # the watch signal: the warning disappears once they drop it. Do not add an
+    # ignore to cargo-audit's own config.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; test-only via axum-test -> expect-json; revisit when audit.yml's daily cargo-audit warning disappears" },
+]
 
 [licenses]
 allow = [
