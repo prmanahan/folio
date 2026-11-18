@@ -58,9 +58,9 @@ pub fn verify_password(hash: &str, password: &str) -> Result<bool, AppError> {
 }
 
 pub fn create_session(conn: &Connection, token: &str) -> Result<String, AppError> {
-    let now_secs = unix_now();
-    let now = format_unix_secs(now_secs);
-    let expires_at = chrono_add_hours(now_secs, 24);
+    let now_ts = jiff::Timestamp::now();
+    let now = format_utc(now_ts);
+    let expires_at = utc_after_hours(now_ts, 24)?;
 
     conn.execute(
         "INSERT INTO admin_sessions (token, created_at, expires_at) VALUES (?1, ?2, ?3)",
@@ -71,7 +71,7 @@ pub fn create_session(conn: &Connection, token: &str) -> Result<String, AppError
 }
 
 pub fn validate_session(conn: &Connection, token: &str) -> Result<bool, AppError> {
-    let now = chrono_now();
+    let now = utc_now_string();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM admin_sessions WHERE token = ?1 AND expires_at > ?2",
         rusqlite::params![token, now],
@@ -90,7 +90,7 @@ pub fn delete_session(conn: &Connection, token: &str) -> Result<(), AppError> {
 }
 
 pub fn cleanup_expired(conn: &Connection) -> Result<(), AppError> {
-    let now = chrono_now();
+    let now = utc_now_string();
     conn.execute(
         "DELETE FROM admin_sessions WHERE expires_at <= ?1",
         rusqlite::params![now],
@@ -222,78 +222,50 @@ pub async fn logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// Simple UTC datetime helpers using std (no chrono dependency needed)
-fn unix_now() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+/// Storage format for `admin_sessions` timestamps. The columns are TEXT and compared
+/// lexicographically in SQL, so it must stay fixed-width UTC at second precision.
+const SESSION_TS_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
+
+fn format_utc(ts: jiff::Timestamp) -> String {
+    ts.strftime(SESSION_TS_FORMAT).to_string()
 }
 
-fn chrono_now() -> String {
-    format_unix_secs(unix_now())
+fn utc_now_string() -> String {
+    format_utc(jiff::Timestamp::now())
 }
 
-fn chrono_add_hours(base_secs: u64, hours: u64) -> String {
-    format_unix_secs(base_secs + hours * 3600)
+fn utc_after_hours(base: jiff::Timestamp, hours: i64) -> Result<String, AppError> {
+    let ts = base
+        .checked_add(jiff::SignedDuration::from_hours(hours))
+        .map_err(|e| AppError::Internal(format!("session expiry out of range: {e}")))?;
+    Ok(format_utc(ts))
 }
 
-fn format_unix_secs(secs: u64) -> String {
-    // Manual ISO 8601 UTC formatting without external deps
-    let days_since_epoch = secs / 86400;
-    let time_of_day = secs % 86400;
+#[cfg(test)]
+mod timestamp_format_tests {
+    use super::*;
 
-    let h = time_of_day / 3600;
-    let m = (time_of_day % 3600) / 60;
-    let s = time_of_day % 60;
-
-    // Convert days since epoch (1970-01-01) to year/month/day
-    let (year, month, day) = days_to_ymd(days_since_epoch);
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, h, m, s
-    )
-}
-
-fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
-    // Algorithm to convert days since 1970-01-01 to (year, month, day)
-    let mut year = 1970u64;
-    loop {
-        let days_in_year = if is_leap(year) { 366 } else { 365 };
-        if days < days_in_year {
-            break;
-        }
-        days -= days_in_year;
-        year += 1;
+    // admin_sessions.created_at/expires_at are TEXT compared lexicographically in SQL
+    // (`expires_at > ?`), so the format is a storage contract: fixed-width, UTC,
+    // second precision, literal `Z`. Sub-second input must truncate, never round.
+    fn fmt(secs: i64, nanos: i32) -> String {
+        format_utc(jiff::Timestamp::new(secs, nanos).expect("in range"))
     }
-    let leap = is_leap(year);
-    let month_days: [u64; 12] = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut month = 1u64;
-    for &md in &month_days {
-        if days < md {
-            break;
-        }
-        days -= md;
-        month += 1;
-    }
-    (year, month, days + 1)
-}
 
-fn is_leap(year: u64) -> bool {
-    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+    #[test]
+    fn pins_format_for_fixed_instants() {
+        let cases: [(i64, i32, &str); 8] = [
+            (0, 0, "1970-01-01T00:00:00Z"),
+            (1_709_251_199, 0, "2024-02-29T23:59:59Z"),
+            (1_709_251_199, 999_999_999, "2024-02-29T23:59:59Z"),
+            (1_704_067_199, 0, "2023-12-31T23:59:59Z"),
+            (1_704_067_200, 0, "2024-01-01T00:00:00Z"),
+            (4_107_542_399, 0, "2100-02-28T23:59:59Z"),
+            (4_107_542_400, 0, "2100-03-01T00:00:00Z"),
+            (1_704_067_200, 500_000_000, "2024-01-01T00:00:00Z"),
+        ];
+        for (secs, nanos, want) in cases {
+            assert_eq!(fmt(secs, nanos), want, "secs={secs} nanos={nanos}");
+        }
+    }
 }
