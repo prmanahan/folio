@@ -1,11 +1,15 @@
 /**
  * R-7 (docs/specs/2026-11-11-projects-from-github.md): structural test of
- * .github/workflows/deploy.yml (#4726 T7; hardened to allowlist polarity in the T8 review fix).
+ * .github/workflows/deploy.yml and .github/workflows/test.yml (#4726 T7; hardened to allowlist
+ * polarity in the T8 review fix; action pins and checkout pin added for the amended R-7).
  *
  * Reads, and why:
- *  - .github/workflows/deploy.yml, the artifact under test. Read as data and parsed with `yaml`
- *    (devDependency approved by Peter, 2026-11-13); comments are not part of the structure.
+ *  - .github/workflows/deploy.yml and .github/workflows/test.yml, the artifacts under test. Read as
+ *    data and parsed with `yaml` (devDependency approved by Peter, 2026-11-13); comments are not
+ *    part of the structure.
  *  - spec R-7 and plan D14 (step name `Fetch projects list`).
+ *  - The five action SHAs below are the commits the Base refs resolve to, checked on 2026-11-18
+ *    against the upstream repositories (not copied from the workflow files).
  * No implementation code is read or called.
  *
  * Shape: `r7Violations(doc)` is test-side checker logic derived from R-7's clauses, each returning a
@@ -16,6 +20,9 @@
  *     zero violations, so a seeded failure below cannot be a false positive of the checker;
  *  3. seeded copies of the baseline, one per violation, each must raise the named rule. These guard
  *     the checker itself.
+ * The action pins (`pinViolations`) and the checkout pin (`checkoutViolations`) run over both files.
+ * Their seeds are applied one seeded copy per seed and `uses:` (or checkout step), and each must
+ * raise the rule at that very locator, so a seed cannot be caught by an unrelated clause.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -24,6 +31,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { parse } from 'yaml';
 
 const WORKFLOW = resolve(import.meta.dirname, '../../../../.github/workflows/deploy.yml');
+const TEST_WORKFLOW = resolve(import.meta.dirname, '../../../../.github/workflows/test.yml');
 
 const FETCH_STEP_NAME = 'Fetch projects list';
 const DEPLOY_STEP_NAME = 'Deploy';
@@ -31,15 +39,51 @@ const DEPLOY_RUN = 'flyctl deploy --remote-only';
 const DEPLOY_JOB = 'deploy';
 const DEPLOY_ENV = { FLY_API_TOKEN: '${{ secrets.FLY_API_TOKEN }}' };
 const DEPLOY_KEYS = ['name', 'env', 'run'];
-const USES_ALLOWLIST =['actions/checkout@v6.0.2', 'superfly/flyctl-actions/setup-flyctl@1.5'];
+
+/** One entry per action used at the Base: its path, the commit its Base ref resolves to, the Base ref. */
+const ACTIONS = {
+	checkout: {
+		path: 'actions/checkout',
+		sha: 'de0fac2e4500dabe0009e67214ff5f5447ce83dd',
+		baseRef: 'v6.0.2'
+	},
+	setupNode: {
+		path: 'actions/setup-node',
+		sha: '53b83947a5a98c8d113130e565377fae1a50d02f',
+		baseRef: 'v6.3.0'
+	},
+	rustToolchain: {
+		path: 'dtolnay/rust-toolchain',
+		sha: '516c5a67e611cdaf2ef0bb5d78620e3c7d245fe6',
+		baseRef: '1.98.0'
+	},
+	rustCache: {
+		path: 'Swatinem/rust-cache',
+		sha: 'c19371144df3bb44fab255c43d04cbc2ab54d1c4',
+		baseRef: 'v2.9.1'
+	},
+	setupFlyctl: {
+		path: 'superfly/flyctl-actions/setup-flyctl',
+		sha: 'fc53c09e1bc3be6f54706524e3b82c4f462f77be',
+		baseRef: '1.5'
+	}
+} as const;
+const pair = (a: { path: string; sha: string }) => `${a.path}@${a.sha}`;
+/** The exact-pair allowlist for every `uses:` in both files. */
+const PIN_ALLOWLIST: string[] = Object.values(ACTIONS).map(pair);
+/** The deploy job's narrower set: the checkout pair and the setup-flyctl pair, nothing else. */
+const USES_ALLOWLIST: string[] = [pair(ACTIONS.checkout), pair(ACTIONS.setupFlyctl)];
+const USES_PIN_RE = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*@[0-9a-f]{40}$/;
+const FLYCTL_VERSION_RE = /^[0-9]+\.[0-9]+\.[0-9]+$/;
+const UNLISTED_SHA = 'f'.repeat(40);
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 type Obj = { [k: string]: Json };
 type Step = Obj;
 type Workflow = Obj;
 
-function load(): Workflow {
-	return parse(readFileSync(WORKFLOW, 'utf8')) as Workflow;
+function load(file: string = WORKFLOW): Workflow {
+	return parse(readFileSync(file, 'utf8')) as Workflow;
 }
 
 function clone<T>(v: T): T {
@@ -209,9 +253,67 @@ function r7Violations(doc: Workflow): string[] {
 	const uses: string[] = [];
 	if (typeof deploy?.uses === 'string') uses.push(deploy.uses);
 	for (const s of dsteps) if (typeof s.uses === 'string') uses.push(s.uses);
-	for (const u of uses) if (!USES_ALLOWLIST.includes(u)) v.push('uses-not-on-allowlist');
+	for (const u of uses) if (!USES_ALLOWLIST.includes(u)) v.push('uses-not-on-deploy-allowlist');
 
 	return [...new Set(v)];
+}
+
+type UseSite = { loc: string; file: string; job: string; step: number | null; value: string };
+
+/** Every `uses:` at step or job level, with a locator `<file>:<job>:<step index | job>`. */
+function useSites(file: string, doc: Workflow): UseSite[] {
+	const out: UseSite[] = [];
+	for (const [job, j] of Object.entries(jobs(doc))) {
+		if (typeof j.uses === 'string') {
+			out.push({ loc: `${file}:${job}:job`, file, job, step: null, value: j.uses });
+		}
+		stepsOf(j).forEach((s, i) => {
+			if (typeof s.uses === 'string') {
+				out.push({ loc: `${file}:${job}:${i}`, file, job, step: i, value: s.uses });
+			}
+		});
+	}
+	return out;
+}
+
+/** The action pins, over one file: shape, then exact-pair allowlist, then the setup-flyctl version. */
+function pinViolations(file: string, doc: Workflow): string[] {
+	const v: string[] = [];
+	for (const u of useSites(file, doc)) {
+		if (!USES_PIN_RE.test(u.value)) v.push(`uses-not-sha-pinned@${u.loc}`);
+		if (!PIN_ALLOWLIST.includes(u.value)) v.push(`uses-not-on-pin-allowlist@${u.loc}`);
+		if (u.value.startsWith('superfly/flyctl-actions/setup-flyctl@') && u.step !== null) {
+			const w = stepsOf(jobs(doc)[u.job])[u.step].with as Obj | undefined;
+			const ver = w?.version;
+			if (typeof ver !== 'string' || !FLYCTL_VERSION_RE.test(ver)) v.push(`flyctl-version@${u.loc}`);
+		}
+	}
+	return v;
+}
+
+/** The checkout pin, over one file: `with` deep-equals {persist-credentials: false} (boolean). */
+function checkoutViolations(file: string, doc: Workflow): string[] {
+	const v: string[] = [];
+	for (const u of useSites(file, doc)) {
+		if (u.step === null || !u.value.startsWith('actions/checkout@')) continue;
+		const w = stepsOf(jobs(doc)[u.job])[u.step].with;
+		if (!isDeepStrictEqual(w, { 'persist-credentials': false })) v.push(`checkout-pin@${u.loc}`);
+	}
+	return v;
+}
+
+const FILES: Record<string, string> = { 'deploy.yml': WORKFLOW, 'test.yml': TEST_WORKFLOW };
+function loadBoth(): Record<string, Workflow> {
+	return Object.fromEntries(Object.entries(FILES).map(([n, f]) => [n, load(f)]));
+}
+function allPinViolations(docs: Record<string, Workflow>): string[] {
+	return Object.entries(docs).flatMap(([n, d]) => [...pinViolations(n, d), ...checkoutViolations(n, d)]);
+}
+/** The step (or, for a job-level `uses:`, the job) at a locator. */
+function nodeAt(docs: Record<string, Workflow>, loc: string): Obj {
+	const [file, job, idx] = loc.split(':');
+	const j = jobs(docs[file])[job];
+	return idx === 'job' ? j : stepsOf(j)[Number(idx)];
 }
 
 /** A compliant fetch step, as the plan describes it (D14); inserted in front of Deploy. */
@@ -294,12 +396,13 @@ describe('R-7: the real deploy.yml', () => {
 		expect(String(deploy.run).trim()).toBe(DEPLOY_RUN);
 	});
 
-	it('R-7 every uses: in the deploy job is on the allowlist', () => {
+	it('R-7 every uses: in the deploy job is the checkout pair or the setup-flyctl pair', () => {
 		const uses = deploySteps(real())
 			.map((s) => s.uses)
 			.filter((u): u is string => typeof u === 'string');
 		expect(uses.length).toBeGreaterThan(0);
 		for (const u of uses) expect(USES_ALLOWLIST).toContain(u);
+		expect(r7Violations(real())).not.toContain('uses-not-on-deploy-allowlist');
 	});
 
 	it('R-7 the fetch step is exactly the pinned form and Deploy env is exactly FLY_API_TOKEN', () => {
@@ -363,14 +466,22 @@ describe('R-7: the checker, on seeded copies of a compliant baseline', () => {
 	});
 
 	it.each([
-		['an unlisted action', 'actions/cache@v4'],
-		['checkout at another version', 'actions/checkout@v6.0.3'],
+		['an unlisted action', `actions/cache@${UNLISTED_SHA}`],
+		['an allowlisted action outside the narrow set (setup-node)', pair(ACTIONS.setupNode)],
+		['an allowlisted action outside the narrow set (rust-cache)', pair(ACTIONS.rustCache)],
+		['checkout at its Base tag', 'actions/checkout@v6.0.2'],
 		['checkout on a floating ref', 'actions/checkout@v6'],
 		['setup-flyctl on master', 'superfly/flyctl-actions/setup-flyctl@master'],
 	])('seed: deploy job uses %s', (_k, uses) => {
 		const d = baseline();
 		deploySteps(d).splice(1, 0, { name: 'Extra', uses });
-		expect(r7Violations(d)).toContain('uses-not-on-allowlist');
+		expect(r7Violations(d)).toContain('uses-not-on-deploy-allowlist');
+	});
+
+	it('seed: the deploy job gains a job-level uses', () => {
+		const d = baseline();
+		jobs(d)[DEPLOY_JOB].uses = pair(ACTIONS.setupNode);
+		expect(r7Violations(d)).toContain('uses-not-on-deploy-allowlist');
 	});
 
 	it.each([
@@ -500,5 +611,181 @@ describe('R-7: the checker, on seeded copies of a compliant baseline', () => {
 		const d = baseline();
 		mutate(d);
 		expect(r7Violations(d)).toContain('github-token-not-fetch-step-env');
+	});
+});
+
+describe('R-7: action pins and checkout pin, over deploy.yml and test.yml', () => {
+	const docs = () => loadBoth();
+	const allSites = (d: Record<string, Workflow>) => Object.entries(d).flatMap(([n, w]) => useSites(n, w));
+	const baseRefOf = (value: string): string => {
+		const a = Object.values(ACTIONS).find((x) => x.path === value.split('@')[0]);
+		return (a as { baseRef: string }).baseRef;
+	};
+
+	// The four jobs R-7 names as holding a checkout step, each as the first step.
+	const CHECKOUT_LOCS = [
+		'deploy.yml:test:0',
+		'deploy.yml:deploy:0',
+		'test.yml:invisible-tables:0',
+		'test.yml:test:0',
+	];
+	const FLYCTL_LOC = 'deploy.yml:deploy:1';
+
+	describe('controls: the real files', () => {
+		it('control: the real deploy.yml and test.yml raise no pin or checkout violation', () => {
+			expect(allPinViolations(docs())).toEqual([]);
+		});
+
+		it('control: 13 uses:, 7 in deploy.yml and 6 in test.yml', () => {
+			const d = docs();
+			expect(useSites('deploy.yml', d['deploy.yml'])).toHaveLength(7);
+			expect(useSites('test.yml', d['test.yml'])).toHaveLength(6);
+			expect(allSites(d)).toHaveLength(13);
+		});
+
+		it('control: every uses: value matches the shape regex and an exact allowlist pair', () => {
+			for (const u of allSites(docs())) {
+				expect(u.value, u.loc).toMatch(USES_PIN_RE);
+				expect(PIN_ALLOWLIST, u.loc).toContain(u.value);
+			}
+		});
+
+		it('control: the allowlist holds the five Base actions and each is used at least once', () => {
+			expect(PIN_ALLOWLIST).toHaveLength(5);
+			const used = new Set(allSites(docs()).map((u) => u.value));
+			for (const p of PIN_ALLOWLIST) expect(used, p).toContain(p);
+		});
+
+		it('control: exactly one setup-flyctl step, in the deploy job of deploy.yml', () => {
+			const flyctl = allSites(docs()).filter((u) =>
+				u.value.startsWith('superfly/flyctl-actions/setup-flyctl@'),
+			);
+			expect(flyctl.map((u) => u.loc)).toEqual([FLYCTL_LOC]);
+		});
+
+		it('control: the setup-flyctl step has with.version as an exact x.y.z string', () => {
+			const w = nodeAt(docs(), FLYCTL_LOC).with as Obj;
+			expect(typeof w.version).toBe('string');
+			expect(w.version).toMatch(FLYCTL_VERSION_RE);
+		});
+
+		it('control: a checkout step in each of four jobs, and in no other', () => {
+			const checkouts = allSites(docs()).filter((u) => u.value.startsWith('actions/checkout@'));
+			expect(checkouts.map((u) => u.loc)).toEqual(CHECKOUT_LOCS);
+			expect(new Set(checkouts.map((u) => `${u.file}:${u.job}`)).size).toBe(4);
+		});
+
+		it('control: every checkout step has with deep-equal to {persist-credentials: false}, a boolean', () => {
+			const d = docs();
+			for (const loc of CHECKOUT_LOCS) {
+				const w = nodeAt(d, loc).with;
+				expect(w, loc).toStrictEqual({ 'persist-credentials': false });
+				expect(typeof (w as Obj)['persist-credentials'], loc).toBe('boolean');
+			}
+		});
+	});
+
+	describe('seeds: one seeded copy per seed and uses:, over all 13', () => {
+		const sites = allSites(docs());
+		const seeds: [string, string, (u: UseSite) => string][] = [
+			['the Base ref in place of the SHA', 'uses-not-sha-pinned', (u) => `${u.value.split('@')[0]}@${baseRefOf(u.value)}`],
+			['the SHA cut to 7 characters', 'uses-not-sha-pinned', (u) => u.value.slice(0, u.value.indexOf('@') + 8)],
+			['a 40-hex SHA on no allowlist pair', 'uses-not-on-pin-allowlist', (u) => `${u.value.split('@')[0]}@${UNLISTED_SHA}`],
+		];
+
+		it('there are 13 sites to seed', () => {
+			expect(sites).toHaveLength(13);
+		});
+
+		for (const u of sites) {
+			for (const [name, rule, mutate] of seeds) {
+				it(`seed: ${u.loc} (${u.value.split('@')[0]}) with ${name}`, () => {
+					const d = docs();
+					nodeAt(d, u.loc).uses = mutate(u);
+					expect(allPinViolations(d)).toContain(`${rule}@${u.loc}`);
+				});
+			}
+		}
+
+		it('seed: the unlisted 40-hex SHA still matches the shape, so only the allowlist catches it', () => {
+			const d = docs();
+			nodeAt(d, sites[0].loc).uses = `${sites[0].value.split('@')[0]}@${UNLISTED_SHA}`;
+			const v = allPinViolations(d);
+			expect(v).toContain(`uses-not-on-pin-allowlist@${sites[0].loc}`);
+			expect(v).not.toContain(`uses-not-sha-pinned@${sites[0].loc}`);
+		});
+
+		it('seed: an uppercase-hex SHA is not a lowercase pin', () => {
+			const d = docs();
+			nodeAt(d, 'deploy.yml:test:0').uses = `actions/checkout@${ACTIONS.checkout.sha.toUpperCase()}`;
+			expect(allPinViolations(d)).toContain('uses-not-sha-pinned@deploy.yml:test:0');
+		});
+
+		it('seed: a job-level uses: with a tag is caught', () => {
+			const d = docs();
+			jobs(d['test.yml']).test.uses = 'octo/reusable/.github/workflows/x.yml@v1';
+			expect(allPinViolations(d)).toContain('uses-not-sha-pinned@test.yml:test:job');
+		});
+	});
+
+	describe('seeds: the setup-flyctl version rule, once on the setup-flyctl step', () => {
+		it('control: the seed locator is the setup-flyctl step', () => {
+			expect(nodeAt(docs(), FLYCTL_LOC).uses).toBe(pair(ACTIONS.setupFlyctl));
+		});
+
+		it('seed: with.version removed', () => {
+			const d = docs();
+			delete (nodeAt(d, FLYCTL_LOC).with as Obj).version;
+			expect(allPinViolations(d)).toContain(`flyctl-version@${FLYCTL_LOC}`);
+		});
+
+		it('seed: with removed', () => {
+			const d = docs();
+			delete nodeAt(d, FLYCTL_LOC).with;
+			expect(allPinViolations(d)).toContain(`flyctl-version@${FLYCTL_LOC}`);
+		});
+
+		it.each(['latest', '0.5', '^0.5.10', '>=0.5.10', 'v0.5.10', '0.5.10-rc1', '0.5.10 '])(
+			'seed: version %j is not an exact x.y.z',
+			(version) => {
+				const d = docs();
+				(nodeAt(d, FLYCTL_LOC).with as Obj).version = version;
+				expect(allPinViolations(d)).toContain(`flyctl-version@${FLYCTL_LOC}`);
+			},
+		);
+
+		it('seed: a numeric version is not a string', () => {
+			const d = docs();
+			(nodeAt(d, FLYCTL_LOC).with as Obj).version = 0.5;
+			expect(allPinViolations(d)).toContain(`flyctl-version@${FLYCTL_LOC}`);
+		});
+	});
+
+	describe('seeds: the checkout pin, one seeded copy per seed and checkout step, over all four', () => {
+		const withSeeds: [string, (s: Obj) => void][] = [
+			['with: removed', (s) => void delete s.with],
+			['persist-credentials: true', (s) => void ((s.with as Obj)['persist-credentials'] = true)],
+			["persist-credentials: 'false' (a string)", (s) => void ((s.with as Obj)['persist-credentials'] = 'false')],
+			['an added token: key', (s) => void ((s.with as Obj).token = 'x')],
+			['an added fetch-depth: key', (s) => void ((s.with as Obj)['fetch-depth'] = 0)],
+		];
+
+		for (const loc of CHECKOUT_LOCS) {
+			for (const [name, mutate] of withSeeds) {
+				it(`seed: ${loc} with ${name}`, () => {
+					const d = docs();
+					mutate(nodeAt(d, loc));
+					expect(allPinViolations(d)).toEqual([`checkout-pin@${loc}`]);
+				});
+			}
+		}
+
+		it('seed: the pin keys on the action, not its version (a bumped checkout without with: is caught)', () => {
+			const d = docs();
+			const s = nodeAt(d, CHECKOUT_LOCS[0]);
+			s.uses = 'actions/checkout@v7.0.0';
+			delete s.with;
+			expect(allPinViolations(d)).toContain(`checkout-pin@${CHECKOUT_LOCS[0]}`);
+		});
 	});
 });
