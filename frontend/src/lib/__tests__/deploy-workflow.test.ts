@@ -1,10 +1,10 @@
 /**
  * R-7 (docs/specs/2026-11-11-projects-from-github.md): structural test of
- * .github/workflows/deploy.yml and .github/workflows/test.yml (#4726 T7; hardened to allowlist
+ * .github/workflows/deploy.yml (the pin and checkout rules run over every file in .github/workflows; #4726 T7; hardened to allowlist
  * polarity in the T8 review fix; action pins and checkout pin added for the amended R-7).
  *
  * Reads, and why:
- *  - .github/workflows/deploy.yml and .github/workflows/test.yml, the artifacts under test. Read as
+ *  - every file in the workflows directory (deploy, test, audit), the artifacts under test. Read as
  *    data and parsed with `yaml` (devDependency approved by Peter, 2026-11-13); comments are not
  *    part of the structure.
  *  - spec R-7 and plan D14 (step name `Fetch projects list`).
@@ -20,18 +20,18 @@
  *     zero violations, so a seeded failure below cannot be a false positive of the checker;
  *  3. seeded copies of the baseline, one per violation, each must raise the named rule. These guard
  *     the checker itself.
- * The action pins (`pinViolations`) and the checkout pin (`checkoutViolations`) run over both files.
+ * The action pins (`pinViolations`) and the checkout pin (`checkoutViolations`) run over every workflow file in the directory.
  * Their seeds are applied one seeded copy per seed and `uses:` (or checkout step), and each must
  * raise the rule at that very locator, so a seed cannot be caught by an unrelated clause.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parse } from 'yaml';
 
 const WORKFLOW = resolve(import.meta.dirname, '../../../../.github/workflows/deploy.yml');
-const TEST_WORKFLOW = resolve(import.meta.dirname, '../../../../.github/workflows/test.yml');
+const WORKFLOW_DIR = resolve(import.meta.dirname, '../../../../.github/workflows');
 
 const FETCH_STEP_NAME = 'Fetch projects list';
 const DEPLOY_STEP_NAME = 'Deploy';
@@ -69,7 +69,7 @@ const ACTIONS = {
 	}
 } as const;
 const pair = (a: { path: string; sha: string }) => `${a.path}@${a.sha}`;
-/** The exact-pair allowlist for every `uses:` in both files. */
+/** The exact-pair allowlist for every `uses:` in every workflow file. */
 const PIN_ALLOWLIST: string[] = Object.values(ACTIONS).map(pair);
 /** The deploy job's narrower set: the checkout pair and the setup-flyctl pair, nothing else. */
 const USES_ALLOWLIST: string[] = [pair(ACTIONS.checkout), pair(ACTIONS.setupFlyctl)];
@@ -302,9 +302,14 @@ function checkoutViolations(file: string, doc: Workflow): string[] {
 	return v;
 }
 
-const FILES: Record<string, string> = { 'deploy.yml': WORKFLOW, 'test.yml': TEST_WORKFLOW };
-function loadBoth(): Record<string, Workflow> {
-	return Object.fromEntries(Object.entries(FILES).map(([n, f]) => [n, load(f)]));
+/** Opt-out polarity: every `*.yml` and `*.yaml` in the workflows directory is checked, so a new workflow is covered without an edit here. */
+function workflowFiles(): string[] {
+	return readdirSync(WORKFLOW_DIR)
+		.filter((n) => n.endsWith('.yml') || n.endsWith('.yaml'))
+		.sort();
+}
+function loadAll(): Record<string, Workflow> {
+	return Object.fromEntries(workflowFiles().map((n) => [n, load(resolve(WORKFLOW_DIR, n))]));
 }
 function allPinViolations(docs: Record<string, Workflow>): string[] {
 	return Object.entries(docs).flatMap(([n, d]) => [...pinViolations(n, d), ...checkoutViolations(n, d)]);
@@ -614,16 +619,17 @@ describe('R-7: the checker, on seeded copies of a compliant baseline', () => {
 	});
 });
 
-describe('R-7: action pins and checkout pin, over deploy.yml and test.yml', () => {
-	const docs = () => loadBoth();
+describe('R-7: action pins and checkout pin, over every workflow file', () => {
+	const docs = () => loadAll();
 	const allSites = (d: Record<string, Workflow>) => Object.entries(d).flatMap(([n, w]) => useSites(n, w));
 	const baseRefOf = (value: string): string => {
 		const a = Object.values(ACTIONS).find((x) => x.path === value.split('@')[0]);
 		return (a as { baseRef: string }).baseRef;
 	};
 
-	// The four jobs R-7 names as holding a checkout step, each as the first step.
+	// The five jobs holding a checkout step (R-7 names four; audit.yml adds its own), each as the first step.
 	const CHECKOUT_LOCS = [
+		'audit.yml:audit:0',
 		'deploy.yml:test:0',
 		'deploy.yml:deploy:0',
 		'test.yml:invisible-tables:0',
@@ -632,15 +638,23 @@ describe('R-7: action pins and checkout pin, over deploy.yml and test.yml', () =
 	const FLYCTL_LOC = 'deploy.yml:deploy:1';
 
 	describe('controls: the real files', () => {
-		it('control: the real deploy.yml and test.yml raise no pin or checkout violation', () => {
+		it('control: the real workflow files raise no pin or checkout violation', () => {
 			expect(allPinViolations(docs())).toEqual([]);
 		});
 
-		it('control: 13 uses:, 7 in deploy.yml and 6 in test.yml', () => {
+		it('control: the files checked are exactly the directory listing of .github/workflows', () => {
+			const listed = readdirSync(WORKFLOW_DIR).filter((n) => /\.ya?ml$/.test(n));
+			expect(Object.keys(docs()).sort()).toEqual([...listed].sort());
+			// positive control: the listing is not empty and holds the three known files
+			expect(listed).toEqual(expect.arrayContaining(['audit.yml', 'deploy.yml', 'test.yml']));
+		});
+
+		it('control: 14 uses:, 1 in audit.yml, 7 in deploy.yml and 6 in test.yml', () => {
 			const d = docs();
+			expect(useSites('audit.yml', d['audit.yml'])).toHaveLength(1);
 			expect(useSites('deploy.yml', d['deploy.yml'])).toHaveLength(7);
 			expect(useSites('test.yml', d['test.yml'])).toHaveLength(6);
-			expect(allSites(d)).toHaveLength(13);
+			expect(allSites(d)).toHaveLength(14);
 		});
 
 		it('control: every uses: value matches the shape regex and an exact allowlist pair', () => {
@@ -669,10 +683,10 @@ describe('R-7: action pins and checkout pin, over deploy.yml and test.yml', () =
 			expect(w.version).toMatch(FLYCTL_VERSION_RE);
 		});
 
-		it('control: a checkout step in each of four jobs, and in no other', () => {
+		it('control: a checkout step in each of five jobs, and in no other', () => {
 			const checkouts = allSites(docs()).filter((u) => u.value.startsWith('actions/checkout@'));
 			expect(checkouts.map((u) => u.loc)).toEqual(CHECKOUT_LOCS);
-			expect(new Set(checkouts.map((u) => `${u.file}:${u.job}`)).size).toBe(4);
+			expect(new Set(checkouts.map((u) => `${u.file}:${u.job}`)).size).toBe(5);
 		});
 
 		it('control: every checkout step has with deep-equal to {persist-credentials: false}, a boolean', () => {
@@ -685,7 +699,7 @@ describe('R-7: action pins and checkout pin, over deploy.yml and test.yml', () =
 		});
 	});
 
-	describe('seeds: one seeded copy per seed and uses:, over all 13', () => {
+	describe('seeds: one seeded copy per seed and uses:, over all 14', () => {
 		const sites = allSites(docs());
 		const seeds: [string, string, (u: UseSite) => string][] = [
 			['the Base ref in place of the SHA', 'uses-not-sha-pinned', (u) => `${u.value.split('@')[0]}@${baseRefOf(u.value)}`],
@@ -693,8 +707,8 @@ describe('R-7: action pins and checkout pin, over deploy.yml and test.yml', () =
 			['a 40-hex SHA on no allowlist pair', 'uses-not-on-pin-allowlist', (u) => `${u.value.split('@')[0]}@${UNLISTED_SHA}`],
 		];
 
-		it('there are 13 sites to seed', () => {
-			expect(sites).toHaveLength(13);
+		it('there are 14 sites to seed', () => {
+			expect(sites).toHaveLength(14);
 		});
 
 		for (const u of sites) {
@@ -719,6 +733,19 @@ describe('R-7: action pins and checkout pin, over deploy.yml and test.yml', () =
 			const d = docs();
 			nodeAt(d, 'deploy.yml:test:0').uses = `actions/checkout@${ACTIONS.checkout.sha.toUpperCase()}`;
 			expect(allPinViolations(d)).toContain('uses-not-sha-pinned@deploy.yml:test:0');
+		});
+
+		it('seed: a new workflow file with a tag-pinned uses: and a checkout without persist-credentials fails', () => {
+			const d = docs();
+			d['new.yml'] = {
+				on: 'push',
+				jobs: {
+					j: { 'runs-on': 'ubuntu-latest', steps: [{ uses: 'actions/checkout@v6' }] }
+				}
+			};
+			const v = allPinViolations(d);
+			expect(v).toContain('uses-not-sha-pinned@new.yml:j:0');
+			expect(v).toContain('checkout-pin@new.yml:j:0');
 		});
 
 		it('seed: a job-level uses: with a tag is caught', () => {

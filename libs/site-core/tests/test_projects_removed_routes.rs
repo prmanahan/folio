@@ -46,6 +46,27 @@ const SEEDED_ROW_FIELDS: [&str; 5] = [
     "Kafka",
 ];
 
+/// The 404 scenarios hard-code the seeded row's slug and id; this control fails
+/// if the seeded database no longer holds that published row, so they cannot
+/// pass vacuously.
+#[test]
+fn r15_control_the_seeded_db_holds_the_published_row_the_scenarios_name() {
+    // Given the seeded database
+    let conn = common::seeded_db();
+
+    // When the published project with the hard-coded id is read back
+    let slug: String = conn
+        .query_row(
+            "SELECT slug FROM projects WHERE id = ?1 AND published = 1",
+            [SEEDED_ID],
+            |r| r.get(0),
+        )
+        .expect("seeded db must hold a published project with the hard-coded id");
+
+    // Then its slug is the hard-coded one
+    assert_eq!(slug, SEEDED_SLUG);
+}
+
 fn bearer(token: &str) -> HeaderValue {
     format!("Bearer {token}")
         .parse()
