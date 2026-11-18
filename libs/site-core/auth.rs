@@ -59,7 +59,7 @@ pub fn verify_password(hash: &str, password: &str) -> Result<bool, AppError> {
 
 pub fn create_session(conn: &Connection, token: &str) -> Result<String, AppError> {
     let now_ts = jiff::Timestamp::now();
-    let now = format_utc(now_ts);
+    let now = format_utc(now_ts)?;
     let expires_at = utc_after_hours(now_ts, 24)?;
 
     conn.execute(
@@ -71,7 +71,7 @@ pub fn create_session(conn: &Connection, token: &str) -> Result<String, AppError
 }
 
 pub fn validate_session(conn: &Connection, token: &str) -> Result<bool, AppError> {
-    let now = utc_now_string();
+    let now = utc_now_string()?;
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM admin_sessions WHERE token = ?1 AND expires_at > ?2",
         rusqlite::params![token, now],
@@ -90,7 +90,7 @@ pub fn delete_session(conn: &Connection, token: &str) -> Result<(), AppError> {
 }
 
 pub fn cleanup_expired(conn: &Connection) -> Result<(), AppError> {
-    let now = utc_now_string();
+    let now = utc_now_string()?;
     conn.execute(
         "DELETE FROM admin_sessions WHERE expires_at <= ?1",
         rusqlite::params![now],
@@ -226,19 +226,26 @@ pub async fn logout(
 /// lexicographically in SQL, so it must stay fixed-width UTC at second precision.
 const SESSION_TS_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
 
-fn format_utc(ts: jiff::Timestamp) -> String {
-    ts.strftime(SESSION_TS_FORMAT).to_string()
+// Fallible path on purpose: `Timestamp::strftime`'s Display prints a failing directive
+// literally, which would yield a malformed string that sorts low and makes
+// `expires_at > now` accept expired sessions. An error must surface instead.
+fn format_utc(ts: jiff::Timestamp) -> Result<String, AppError> {
+    jiff::fmt::strtime::format(SESSION_TS_FORMAT, ts)
+        .map_err(|e| AppError::Internal(format!("session timestamp format failed: {e}")))
 }
 
-fn utc_now_string() -> String {
+fn utc_now_string() -> Result<String, AppError> {
     format_utc(jiff::Timestamp::now())
 }
 
+// `SignedDuration::from_hours` panics on overflow, so the fallible constructor is used.
 fn utc_after_hours(base: jiff::Timestamp, hours: i64) -> Result<String, AppError> {
+    let delta = jiff::SignedDuration::try_from_hours(hours)
+        .ok_or_else(|| AppError::Internal("session expiry hours out of range".to_string()))?;
     let ts = base
-        .checked_add(jiff::SignedDuration::from_hours(hours))
+        .checked_add(delta)
         .map_err(|e| AppError::Internal(format!("session expiry out of range: {e}")))?;
-    Ok(format_utc(ts))
+    format_utc(ts)
 }
 
 #[cfg(test)]
@@ -249,7 +256,24 @@ mod timestamp_format_tests {
     // (`expires_at > ?`), so the format is a storage contract: fixed-width, UTC,
     // second precision, literal `Z`. Sub-second input must truncate, never round.
     fn fmt(secs: i64, nanos: i32) -> String {
-        format_utc(jiff::Timestamp::new(secs, nanos).expect("in range"))
+        format_utc(jiff::Timestamp::new(secs, nanos).expect("in range")).expect("formats")
+    }
+
+    #[test]
+    fn utc_after_hours_adds_24h_across_the_leap_day() {
+        let base = jiff::Timestamp::from_second(1_709_251_199).expect("in range");
+        let got = utc_after_hours(base, 24).expect("in range");
+        assert_eq!(got, "2024-03-01T23:59:59Z");
+    }
+
+    #[test]
+    fn utc_after_hours_overflow_is_an_internal_error_not_a_panic() {
+        // checked_add overflow
+        let at_max = utc_after_hours(jiff::Timestamp::MAX, 24);
+        assert!(matches!(at_max, Err(AppError::Internal(_))), "{at_max:?}");
+        // hours too large for a SignedDuration: from_hours would panic here
+        let huge = utc_after_hours(jiff::Timestamp::UNIX_EPOCH, i64::MAX);
+        assert!(matches!(huge, Err(AppError::Internal(_))), "{huge:?}");
     }
 
     #[test]
