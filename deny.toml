@@ -5,11 +5,13 @@ ignore = [
     # chrono is unmaintained; no fixed version exists. Test-only: reached via
     # axum-test (dev-dependency) -> expect-json -> chrono, never in the shipped
     # binary. Recorded 2026-11-18 (#4851), Peter ruled "record and watch".
-    # Revisit when expect-json or axum-test drop chrono. The daily cargo-audit
-    # run (.github/workflows/audit.yml) keeps warning on this advisory and is
-    # the watch signal: the warning disappears once they drop it. Do not add an
-    # ignore to cargo-audit's own config.
-    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; test-only via axum-test -> expect-json; revisit when audit.yml's daily cargo-audit warning disappears" },
+    # The ignore is by ID across the whole graph, so it holds only while chrono
+    # stays out of the shipped graph. scripts/check-chrono-dev-only.sh, a step
+    # in the required "Test & Lint" job (.github/workflows/test.yml), enforces
+    # that: it fails if chrono enters the normal/build graph, and fails when
+    # chrono leaves Cargo.lock, which is the signal to delete this ignore and
+    # that script. Do not add an ignore to cargo-audit's own config.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; test-only via axum-test -> expect-json; held by scripts/check-chrono-dev-only.sh, which fails when chrono leaves Cargo.lock (then remove this ignore)" },
 ]
 
 [licenses]
