@@ -29,9 +29,11 @@ const CSP_HEADER_FILE: &str = "csp-header.txt";
 #[derive(Clone)]
 pub(crate) struct FromStaticService(pub(crate) HeaderValue);
 
-/// The one static file that must never be edge-cached (spec R-11): Cloudflare
-/// would otherwise apply its default `max-age=14400` to a list that is replaced
-/// on each deploy.
+/// The one static file that must never be edge-cached (spec R-11). Cloudflare
+/// caches by extension and `.json` is not on its default list (measured
+/// 2026-11-18: `/_app/version.json` came back `DYNAMIC`), so today it would not
+/// cache this file. The header guards against a later zone rule or a change to
+/// the extension list, which would serve a stale list with no signal.
 const NO_CACHE_FILE: &str = "projects.json";
 
 /// Percent-decodes `s` the way `ServeDir` does (`percent_decode`): a `%` not
