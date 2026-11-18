@@ -23,6 +23,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Install Node from .node-version
         uses: actions/setup-node@v6.3.0
@@ -38,6 +40,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
 
       # Pinned to the same version as rust-toolchain.toml. The @rev selects the
       # toolchain for this action, so the ref IS the version. Bumping means
