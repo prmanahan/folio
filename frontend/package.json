@@ -46,6 +46,11 @@
 	"dependencies": {
 		"dompurify": "^3.4.17"
 	},
+	"overrides": {
+		"@tailwindcss/typography": {
+			"postcss-selector-parser": "^6.1.5"
+		}
+	},
 	"imports": {
 		"#lib": "./src/lib/index.js",
 		"#lib/*": "./src/lib/*"
