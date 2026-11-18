@@ -12,7 +12,7 @@ lock_tag: "brief/projects-from-github/spec-locked"             # brief/projects-
 ## Purpose
 /projects and the site's AI list exactly the public repos of the GitHub owners `mnemra` and `prmanahan`, grouped by owner, with GitHub's descriptions. The deploy job fetches the list once per deploy into one file, `/projects.json`, and both readers use it, so they cannot disagree. A Fly release command refuses a deploy through the release path whose list is invalid, more than 30 minutes old, or dated more than 5 minutes ahead. The database projects, Puck Playbook among them, leave every public and AI path. The anchors are in Frame D-1 to D-9.
 
-**Departure from /brief, by Peter's ruling (2026-11-11):** "Trim, then light review". The Frame threat-modeling pass, Wyrd's dry decompose and Charon's canon check do not run.
+**Departure from /brief, by Peter's ruling (2026-11-11):** "Trim, then light review". Wyrd's dry decompose and Charon's canon check do not run. The Frame threat-modeling pass, first skipped, ran on 2026-11-18 at Peter's request ("so lets add the attacker list"); its result is the Frame's `## Threat-model scope`. The Frame's re-lock is pending as task #4837 (Peter, 2026-11-18: "Go live first").
 
 ## Requirements
 **Fetch** (D-1, D-4, D-8, D-9)
