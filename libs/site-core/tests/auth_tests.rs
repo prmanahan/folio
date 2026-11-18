@@ -372,3 +372,216 @@ async fn login_limiter_keys_on_trusted_header_value_not_peer() {
         assert_eq!(rows[1].1, 1);
     }
 }
+
+// --- Admin session expiry (task #4851, finding M1) -------------------------
+//
+// Spec (task #4851 brief): login writes an `admin_sessions` row whose
+// `created_at` / `expires_at` are `YYYY-MM-DDTHH:MM:SSZ` strings 24 hours apart;
+// a token is accepted only while `expires_at > now` (TEXT comparison);
+// `cleanup_expired` deletes rows with `expires_at <= now`.
+//
+// Sanctioned reads: `libs/site-core/auth.rs` for the route/handler names, the
+// `admin_sessions` column names and the `Bearer` header shape only. Every
+// verdict is observed as an HTTP status or operator SQL on the table; "now"
+// and the offsets come from SQLite's own `strftime`, not from the code under
+// test. The one exception, `auth::cleanup_expired`, has no caller (#4859) and
+// is driven as a function; its effect is still read back with SQL.
+
+const SESSION_TS_SQL: &str = "'%Y-%m-%dT%H:%M:%SZ'";
+
+/// Same app as `auth_test_app`, with the DB handle so a test can seed and read
+/// `admin_sessions` rows with operator SQL.
+fn auth_test_app_with_db() -> (axum_test::TestServer, SharedDb) {
+    let db: SharedDb = std::sync::Arc::new(std::sync::Mutex::new(common::test_db()));
+    let state: DbState = std::sync::Arc::new(site_core::state::AppState {
+        db: std::sync::Arc::clone(&db),
+        admin_password_hash: common::test_password::password_hash(),
+        rig_client: None,
+        trusted_ip_header: None,
+        page_hit_salt: "test-salt".to_string(),
+        projects: common::test_projects::projects(),
+    });
+    let protected = Router::new()
+        .route("/api/admin/test", get(|| async { "ok" }))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+    let app = Router::new()
+        .route("/api/admin/login", post(auth::login))
+        .merge(protected)
+        .with_state(state);
+    (axum_test::TestServer::new(app), db)
+}
+
+/// Insert a session whose `expires_at` is SQLite's `now` shifted by `modifier`
+/// (e.g. `"-1 hour"`, `"+1 hour"`, or `""` for the current second).
+fn seed_session(db: &SharedDb, token: &str, modifier: &str) {
+    let modifier_sql = if modifier.is_empty() {
+        String::new()
+    } else {
+        format!(", '{modifier}'")
+    };
+    db.lock()
+        .unwrap()
+        .execute(
+            &format!(
+                "INSERT INTO admin_sessions (token, created_at, expires_at)
+                 VALUES (?1, strftime({SESSION_TS_SQL}, 'now', '-1 day'),
+                         strftime({SESSION_TS_SQL}, 'now'{modifier_sql}))"
+            ),
+            [token],
+        )
+        .unwrap();
+}
+
+async fn admin_status(server: &axum_test::TestServer, token: &str) -> axum::http::StatusCode {
+    server
+        .get("/api/admin/test")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}")
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+        )
+        .await
+        .status_code()
+}
+
+fn session_count(db: &SharedDb, token: &str) -> i64 {
+    db.lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM admin_sessions WHERE token = ?1",
+            [token],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+/// Given a session expired an hour ago, when its token is used on an admin
+/// route, then the request is rejected with 401.
+#[tokio::test]
+async fn session_expired_in_the_past_is_rejected() {
+    let (server, db) = auth_test_app_with_db();
+    seed_session(&db, "expired-token", "-1 hour");
+
+    assert_eq!(
+        admin_status(&server, "expired-token").await,
+        axum::http::StatusCode::UNAUTHORIZED
+    );
+}
+
+/// Given a session whose `expires_at` is the current second, when its token is
+/// used, then it is rejected: the comparison is strict (`expires_at > now`).
+///
+/// "Now" cannot be pinned, so the test starts near the top of a wall-clock
+/// second (polling the clock, not sleeping a fixed time) and seeds the current
+/// second, so the request lands in that same second and `now == expires_at`.
+/// If the second ticks anyway the row is already in the past and the assertion
+/// still holds: the test can miss a `>=` mutation on a rare
+/// boundary-straddling run, but never fails on correct code.
+#[tokio::test]
+async fn session_expiring_this_second_is_rejected() {
+    let (server, db) = auth_test_app_with_db();
+
+    let sub_second_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_millis()
+    };
+    while sub_second_ms() > 150 {
+        tokio::task::yield_now().await;
+    }
+    seed_session(&db, "boundary-token", "");
+
+    assert_eq!(
+        admin_status(&server, "boundary-token").await,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "expires_at == now must be rejected (strict >)"
+    );
+}
+
+/// Positive control: given a session expiring in an hour, when its token is
+/// used, then the admin route answers 200. Without this the two rejections
+/// above could pass on a route that rejects everything.
+#[tokio::test]
+async fn session_expiring_in_the_future_is_accepted() {
+    let (server, db) = auth_test_app_with_db();
+    seed_session(&db, "live-token", "+1 hour");
+
+    assert_eq!(
+        admin_status(&server, "live-token").await,
+        axum::http::StatusCode::OK
+    );
+}
+
+/// Given a real login, then the stored `expires_at` minus `created_at` is
+/// exactly 86400 seconds, both are `YYYY-MM-DDTHH:MM:SSZ`, and the login
+/// response reports the stored `expires_at`.
+#[tokio::test]
+async fn login_session_lasts_exactly_24_hours() {
+    let (server, db) = auth_test_app_with_db();
+
+    let response = server
+        .post("/api/admin/login")
+        .json(&serde_json::json!({ "password": common::test_password::password() }))
+        .await;
+    response.assert_status_ok();
+    let body: serde_json::Value = response.json();
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let (created_at, expires_at, seconds): (String, String, Option<i64>) = db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT created_at, expires_at,
+                    CAST(strftime('%s', expires_at) AS INTEGER)
+                      - CAST(strftime('%s', created_at) AS INTEGER)
+             FROM admin_sessions WHERE token = ?1",
+            [&token],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+
+    for ts in [&created_at, &expires_at] {
+        let b = ts.as_bytes();
+        assert_eq!(b.len(), 20, "fixed-width timestamp: {ts}");
+        assert!(
+            b[4] == b'-'
+                && b[7] == b'-'
+                && b[10] == b'T'
+                && b[13] == b':'
+                && b[16] == b':'
+                && b[19] == b'Z',
+            "format YYYY-MM-DDTHH:MM:SSZ: {ts}"
+        );
+    }
+    assert_eq!(
+        seconds,
+        Some(86_400),
+        "{created_at} -> {expires_at} must be exactly 24h"
+    );
+    assert_eq!(body["expires_at"].as_str().unwrap(), expires_at);
+}
+
+/// Given one expired and one live session, when `cleanup_expired` runs, then
+/// the expired row is gone and the live row stays (and still authenticates).
+/// `cleanup_expired` has no caller (#4859), so it is invoked directly; the
+/// outcome is read with SQL and over HTTP.
+#[tokio::test]
+async fn cleanup_expired_removes_only_expired_sessions() {
+    let (server, db) = auth_test_app_with_db();
+    seed_session(&db, "expired-token", "-1 hour");
+    seed_session(&db, "live-token", "+1 hour");
+
+    auth::cleanup_expired(&db.lock().unwrap()).unwrap();
+
+    assert_eq!(session_count(&db, "expired-token"), 0, "expired row kept");
+    assert_eq!(session_count(&db, "live-token"), 1, "live row removed");
+    assert_eq!(
+        admin_status(&server, "live-token").await,
+        axum::http::StatusCode::OK
+    );
+}
