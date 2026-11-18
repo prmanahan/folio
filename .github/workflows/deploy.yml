@@ -107,7 +107,7 @@ jobs:
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be # 1.5
         with:
-          version: 0.5.12
+          version: 0.5.10
 
       # #4726: writes frontend/static/projects.json, which the Docker build copies
       # into the image. No `if`, `continue-on-error` or fallback: a failed fetch
