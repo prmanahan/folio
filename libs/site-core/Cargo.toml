@@ -28,7 +28,7 @@ sha2 = { workspace = true }
 tracing = { workspace = true }
 mime_guess = { workspace = true }
 time = { workspace = true, features = ["parsing"] }
-jiff = { version = "1.0.1", default-features = false, features = ["std"] }
+jiff = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 axum-test = { workspace = true }
