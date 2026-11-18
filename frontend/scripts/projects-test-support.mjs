@@ -141,7 +141,15 @@ export function runFetch(scenario, opts = {}) {
 	if (opts.breakTable) writeFileSync(join(scriptsDir, 'invisible-table.mjs'), 'export const INVISIBLE_RANGES = ;\n');
 	writeFileSync(scenarioPath, JSON.stringify(scenario));
 	writeFileSync(logPath, '');
-	const seeded = JSON.stringify({ fetched_at: '2000-01-01T00:00:00.000Z', groups: [] });
+	// A file the Data Model accepts (R-2, R-8: a failing run starts from a valid file and must end
+	// with none). Two groups in order, one `fixture-` repo each, `name` and `description` only.
+	const seeded = JSON.stringify({
+		fetched_at: '2000-01-01T00:00:00.000Z',
+		groups: [
+			{ owner: 'mnemra', repos: [{ name: 'fixture-seed-m', description: 'seeded' }] },
+			{ owner: 'prmanahan', repos: [{ name: 'fixture-seed-p', description: '' }] },
+		],
+	});
 	if (opts.seed !== false) writeFileSync(join(staticDir, 'projects.json'), seeded);
 
 	if (opts.readOnlyStatic) chmodSync(staticDir, 0o555);

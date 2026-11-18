@@ -232,6 +232,17 @@ macro_rules! r12_cases {
                     heading_at + "## PROJECTS\n".len(),
                     "preamble sits directly under the heading"
                 );
+                // R-12: followed immediately by a newline, and exactly once in the whole prompt
+                assert_eq!(
+                    prompt[preamble_at + preamble.len()..].chars().next(),
+                    Some('\n'),
+                    "the preamble must be followed immediately by `\\n`"
+                );
+                assert_eq!(
+                    prompt.matches(preamble).count(),
+                    1,
+                    "the preamble must appear exactly once in the whole prompt"
+                );
                 for e in expected_repos() {
                     let line = lines_with_url(&prompt, &e.url())[0];
                     assert!(

@@ -624,22 +624,44 @@ describe('R-4 parity with the Rust reader (lead decisions, #4726)', () => {
 		expect(d).toBe('a\u{1F600}b');
 	});
 
+	/**
+	 * R-8: a duplicate or case-twin case starts with a VALID list file at the output path (the
+	 * Data Model's shape, proven here, not assumed) that the script saw on disk at boot, and ends
+	 * with no file there, a non-zero exit and the owner named.
+	 */
+	function expectDuplicateFailsFromValidFile(r, owner) {
+		const seeded = JSON.parse(r.seeded);
+		expect(seeded.groups.map((g) => g.owner), 'precondition: the seed is a valid two-group file').toEqual([
+			'mnemra',
+			'prmanahan',
+		]);
+		for (const g of seeded.groups) expect(g.repos.length, 'seed owner has a repo').toBeGreaterThan(0);
+		expect(r.bootLine.outExists, 'precondition: a file existed at the output path before the run').toBe(true);
+		expectFailClosed(r, owner);
+		expect(r.fileExists, 'no file at the output path afterwards').toBe(false);
+	}
+
 	it('the same repo name on two pages of one owner fails the run', () => {
 		const s = simple([], [okP()]);
 		s.routes[MNEMRA] = {
 			responses: [page([okM()], `${MNEMRA}?page=2`), page([repo('mnemra', 'fixture-ok-m', { description: 'dup' })])],
 		};
-		expectFailClosed(runFetch(s), 'mnemra');
+		expectDuplicateFailsFromValidFile(runFetch(s), 'mnemra');
+	});
+
+	it('the same repo name twice on one page of one owner fails the run', () => {
+		const r = runFetch(simple([okM(), repo('mnemra', 'fixture-ok-m', { description: 'dup' })], [okP()]));
+		expectDuplicateFailsFromValidFile(r, 'mnemra');
 	});
 
 	it('a case-only duplicate (fixture-A and fixture-a) in one owner fails the run', () => {
 		const r = runFetch(simple([repo('mnemra', 'fixture-A'), repo('mnemra', 'fixture-a')], [okP()]));
-		expectFailClosed(r, 'mnemra');
+		expectDuplicateFailsFromValidFile(r, 'mnemra');
 	});
 
 	it('a case-only duplicate on the second owner fails the run, naming it', () => {
 		const r = runFetch(simple([okM()], [repo('prmanahan', 'fixture-A'), repo('prmanahan', 'fixture-a')]));
-		expectFailClosed(r, 'prmanahan');
+		expectDuplicateFailsFromValidFile(r, 'prmanahan');
 	});
 
 	it('the same name under the two different owners is fine (control)', () => {
