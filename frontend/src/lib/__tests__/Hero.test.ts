@@ -65,10 +65,10 @@ describe('Hero hub layout', () => {
 		expect(projectsCard).toHaveAttribute('href', '/projects');
 	});
 
-	it('renders Articles nav card linking to /articles', () => {
+	it('renders Articles nav card linking off-site to the blog (R-26; full attributes in ArticlesLinks.test.ts)', () => {
 		render(Hero, { props: { profile: mockProfile, links: mockLinks } });
 		const articlesCard = screen.getByRole('link', { name: /articles/i });
-		expect(articlesCard).toHaveAttribute('href', '/articles');
+		expect(articlesCard).toHaveAttribute('href', 'https://mnemra.dev/blog/');
 	});
 
 	it('renders Resume nav card linking to /resume', () => {

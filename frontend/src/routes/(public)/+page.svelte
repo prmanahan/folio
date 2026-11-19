@@ -46,7 +46,7 @@
 			<a href="/projects" class="card card-nav">
 				<span class="card-label">Projects</span>
 			</a>
-			<a href="/articles" class="card card-nav">
+			<a href="https://mnemra.dev/blog/" target="_blank" rel="noopener noreferrer" class="card card-nav">
 				<span class="card-label">Articles</span>
 			</a>
 			<a href="/resume" class="card card-nav">

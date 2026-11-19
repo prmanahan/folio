@@ -80,13 +80,13 @@ describe('Header', () => {
 			expect(within(desktopList).getByText('Redline')).toBeInTheDocument();
 		});
 
-		it('renders correct segments for /articles/my-post', () => {
-			setMockPathname('/articles/my-post');
+		it('renders correct segments for /agents/my-post', () => {
+			setMockPathname('/agents/my-post');
 			render(Header, { props: { initials: 'PM' } });
 			const nav = screen.getByRole('navigation', { name: 'Breadcrumb' });
 			const desktopList = nav.querySelector('.breadcrumb-desktop') as HTMLElement;
-			const articlesLink = within(desktopList).getByRole('link', { name: 'Articles' });
-			expect(articlesLink).toHaveAttribute('href', '/articles');
+			const agentsLink = within(desktopList).getByRole('link', { name: 'Agents' });
+			expect(agentsLink).toHaveAttribute('href', '/agents');
 			expect(within(desktopList).getByText('My Post')).toBeInTheDocument();
 		});
 
