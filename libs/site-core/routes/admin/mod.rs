@@ -1,5 +1,4 @@
 pub mod agents;
-pub mod articles;
 pub mod dashboard;
 pub mod education;
 pub mod experience;
@@ -19,7 +18,6 @@ pub fn admin_router(state: DbState) -> Router<DbState> {
     let protected = Router::new()
         .merge(dashboard::routes())
         .merge(profile::routes())
-        .merge(articles::routes())
         .merge(education::routes())
         .merge(experience::routes())
         .merge(faq::routes())

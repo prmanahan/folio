@@ -35,7 +35,6 @@ async fn test_dashboard_authenticated() {
         "experiences",
         "skills",
         "education",
-        "articles",
         "links",
         "faq_responses",
         "gaps_weaknesses",
@@ -48,6 +47,12 @@ async fn test_dashboard_authenticated() {
             body[field]
         );
     }
+
+    // R-27 (#4853): the article surface is gone, so is the dashboard count
+    assert!(
+        body.get("articles").is_none(),
+        "dashboard still has an articles field: {body}"
+    );
 
     // The projects table is gone (#4726): the dashboard carries no projects count
     assert!(
