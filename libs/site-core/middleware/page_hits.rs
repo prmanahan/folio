@@ -10,7 +10,7 @@ use crate::state::DbState;
 
 /// Routes worth tracking for unique visitor counts.
 fn should_track(path: &str) -> bool {
-    matches!(path, "/" | "/projects" | "/articles" | "/agents") || path.starts_with("/articles/")
+    matches!(path, "/" | "/projects" | "/agents")
 }
 
 /// Hash an IP with a salt for privacy. The hash is one-way so raw IPs
@@ -70,9 +70,16 @@ mod tests {
     fn tracked_routes() {
         assert!(should_track("/"));
         assert!(should_track("/projects"));
-        assert!(should_track("/articles"));
         assert!(should_track("/agents"));
-        assert!(should_track("/articles/some-article"));
+    }
+
+    // R-28: Given the retired /articles paths, When should_track runs, Then false.
+    #[test]
+    fn articles_paths_are_not_tracked() {
+        assert!(!should_track("/articles"));
+        assert!(!should_track("/articles/"));
+        assert!(!should_track("/articles/x"));
+        assert!(!should_track("/articles/some-article"));
     }
 
     #[test]

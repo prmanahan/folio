@@ -14,6 +14,7 @@ use axum::{Router, routing::get};
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 
+use crate::middleware::articles_redirect::articles_redirect_middleware;
 use crate::middleware::global_rate_limit::{GlobalRateLimitState, global_rate_limit_middleware};
 use crate::middleware::origin_lock::{OriginLockState, origin_lock_middleware};
 use crate::middleware::page_hits::page_hits_middleware;
@@ -87,6 +88,9 @@ async fn security_headers(
 /// answers `GET /api/health` and its 404 rejections itself, and those
 /// responses need the headers too. The layers above the fallback (page
 /// hits, rate limit, body limit, timeout, CORS) do not wrap it.
+/// The `/articles` redirect (R-25) sits between the fallback and
+/// `origin_lock`: it wraps the fallback, is itself wrapped by the lock, and
+/// runs before page hits, the rate limit and CORS.
 ///
 /// `global_rate_limit` is a caller-supplied instance rather than
 /// constructed here: the caller (`main.rs::run_server`) also owns
@@ -140,6 +144,10 @@ pub fn build_app(
         ))
         .layer(cors)
         .fallback_service(static_files::static_file_service(static_dir))
+        // R-25: added after the fallback so it wraps the fallback too, and
+        // before `origin_lock` so the lock is still outside it (R-23): an
+        // unauthenticated `/articles` request gets the lock's 404, not the 301.
+        .layer(axum::middleware::from_fn(articles_redirect_middleware))
         // task #3558 C1: added AFTER `.fallback_service(...)` so this
         // layer wraps the fallback as well as every routed path above.
         // It is the outermost ACCESS layer: nothing is reachable around it.
@@ -224,5 +232,82 @@ mod tests {
     async fn the_static_marker_selects_its_own_policy_and_replaces_any_handler_csp() {
         let response = server().get("/marked").await;
         assert_eq!(csp_values(&response), [MARKED_POLICY]);
+    }
+
+    const EDGE_SECRET: &str = "folio_edge_test_secret_for_ci_only";
+
+    /// The production router over the fixture static site.
+    fn built_app() -> axum_test::TestServer {
+        use std::sync::{Arc, Mutex};
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&conn).unwrap();
+        let state: DbState = Arc::new(crate::state::AppState {
+            db: Arc::new(Mutex::new(conn)),
+            admin_password_hash: crate::test_password::password_hash(),
+            rig_client: None,
+            trusted_ip_header: None,
+            page_hit_salt: "test-salt".to_string(),
+            projects: crate::test_projects::projects(),
+        });
+        let app = build_app(
+            state,
+            OriginLockState::new(EDGE_SECRET),
+            GlobalRateLimitState::new(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/static_site"),
+            "http://localhost:3000",
+        );
+        axum_test::TestServer::new(app)
+    }
+
+    // R-23 (merge 1), D6: Given no valid X-Folio-Edge-Auth, When /articles is
+    // requested through build_app, Then the origin lock's 404, not the 301.
+    #[tokio::test]
+    async fn articles_without_the_edge_secret_gets_the_lock_404_not_the_301() {
+        let server = built_app();
+        for path in ["/articles", "/articles/x", "/articles%2Fx"] {
+            let bare = server.get(path).await;
+            assert_eq!(bare.status_code(), StatusCode::NOT_FOUND, "{path}");
+            assert!(bare.maybe_header("location").is_none(), "{path}");
+            let wrong = server
+                .get(path)
+                .add_header("x-folio-edge-auth", "folio_edge_a_different_secret_value")
+                .await;
+            assert_eq!(wrong.status_code(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    // R-25 + R-23: with the secret, the same paths get the fixed 301.
+    #[tokio::test]
+    async fn articles_with_the_edge_secret_gets_the_fixed_301() {
+        let server = built_app();
+        for path in ["/articles", "/articles/", "/articles/x", "/articles%2Fx"] {
+            let response = server
+                .get(path)
+                .add_header("x-folio-edge-auth", EDGE_SECRET)
+                .await;
+            assert_eq!(
+                response.status_code(),
+                StatusCode::MOVED_PERMANENTLY,
+                "{path}"
+            );
+            assert_eq!(response.header("location"), "https://mnemra.dev/blog/");
+            assert_eq!(response.header("cache-control"), "public, max-age=3600");
+        }
+    }
+
+    // R-25: an undecodable path under /articles/ is neither 301 nor 5xx
+    // through the production router.
+    #[tokio::test]
+    async fn undecodable_articles_paths_are_neither_301_nor_5xx_through_build_app() {
+        let server = built_app();
+        for path in ["/articles/%zz", "/articles/%FF"] {
+            let response = server
+                .get(path)
+                .add_header("x-folio-edge-auth", EDGE_SECRET)
+                .await;
+            let status = response.status_code();
+            assert_ne!(status, StatusCode::MOVED_PERMANENTLY, "{path}");
+            assert!(!status.is_server_error(), "{path}: {status}");
+        }
     }
 }
