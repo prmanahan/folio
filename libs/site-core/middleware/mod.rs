@@ -1,3 +1,4 @@
+pub mod articles_redirect;
 pub mod global_rate_limit;
 pub mod origin_lock;
 pub mod page_hits;
