@@ -4,11 +4,15 @@
 	let { onToggleAi }: { onToggleAi: () => void } = $props();
 
 	const links = [
-		{ href: '/', label: 'Home' },
-		{ href: '/projects', label: 'Projects' },
-		{ href: '/agents', label: 'Agents' },
-		{ href: '/articles', label: 'Articles' },
+		{ href: '/', label: 'Home', external: false },
+		{ href: '/projects', label: 'Projects', external: false },
+		{ href: '/agents', label: 'Agents', external: false },
+		{ href: 'https://mnemra.dev/blog/', label: 'Articles', external: true },
 	];
+
+	function isActive(link: (typeof links)[number]): boolean {
+		return link.href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(link.href);
+	}
 </script>
 
 <nav>
@@ -18,8 +22,10 @@
 			{#each links as link}
 				<a
 					href={link.href}
-					class:active={link.href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(link.href)}
-					aria-current={link.href === '/' ? (page.url.pathname === '/' ? 'page' : undefined) : (page.url.pathname.startsWith(link.href) ? 'page' : undefined)}
+					target={link.external ? '_blank' : undefined}
+					rel={link.external ? 'noopener noreferrer' : undefined}
+					class:active={isActive(link)}
+					aria-current={isActive(link) ? 'page' : undefined}
 				>
 					{link.label}
 				</a>

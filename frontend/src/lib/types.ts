@@ -44,16 +44,6 @@ export interface Education {
 	end_year: string;
 }
 
-export interface Article {
-	id: number;
-	title: string;
-	slug: string;
-	summary: string;
-	content: string;
-	tags: string[];
-	published_at: string | null;
-}
-
 export interface Link {
 	id: number;
 	label: string;

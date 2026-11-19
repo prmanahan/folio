@@ -37,7 +37,7 @@
 					<span class="card-desc">Things I've built</span>
 				</a>
 
-				<a href="/articles" class="card card-nav" data-testid="skeleton-card-articles">
+				<a href="https://mnemra.dev/blog/" target="_blank" rel="noopener noreferrer" class="card card-nav" data-testid="skeleton-card-articles">
 					<span class="card-label">Articles</span>
 					<span class="card-desc">Thoughts and write-ups</span>
 				</a>
