@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockPublicApi, PROFILE_NAME, PROFILE_INITIALS } from './fixtures';
+import { mockPublicApi, PROFILE_NAME, PROFILE_INITIALS, SEEDED_PROFILE, SEEDED_LINKS, SEEDED_SKILLS } from './fixtures';
 
 test.describe('Public pages — home (hub layout)', () => {
   test.beforeEach(async ({ page }) => {
@@ -62,13 +62,52 @@ test.describe('Public pages — home (hub layout)', () => {
     await expect(page).toHaveURL('/projects');
   });
 
-  test('Articles card links to /articles', async ({ page }) => {
+  // R-26 (BM-PW-2): the hero's Articles card leaves the site for the blog.
+  test('Articles card links to the blog in a new tab', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: PROFILE_NAME })).toBeVisible({ timeout: 10000 });
     const articlesCard = page.locator('[data-testid="card-articles"]');
     await expect(articlesCard).toBeVisible();
-    await articlesCard.click();
-    await expect(page).toHaveURL('/articles');
+    await expect(articlesCard).toHaveAttribute('href', 'https://mnemra.dev/blog/');
+    await expect(articlesCard).toHaveAttribute('target', '_blank');
+    await expect(articlesCard).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  // R-26 (BM-PW-3): the loading state shows the same link. The profile response is
+  // held until the assertions have run, so the skeleton is on screen while they do.
+  test('Articles card in the loading skeleton links to the blog in a new tab', async ({ page }) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route('**/api/profile', async (route) => {
+      await held;
+      await route.fulfill({ json: SEEDED_PROFILE });
+    });
+    await page.route('**/api/links', (route) => route.fulfill({ json: SEEDED_LINKS }));
+    await page.route('**/api/skills', (route) => route.fulfill({ json: SEEDED_SKILLS }));
+    await page.goto('/');
+    const skeletonCard = page.locator('[data-testid="skeleton-card-articles"]');
+    try {
+      await expect(skeletonCard).toBeVisible({ timeout: 10000 });
+      await expect(skeletonCard).toHaveAttribute('href', 'https://mnemra.dev/blog/');
+      await expect(skeletonCard).toHaveAttribute('target', '_blank');
+      await expect(skeletonCard).toHaveAttribute('rel', 'noopener noreferrer');
+    } finally {
+      release();
+    }
+  });
+
+  // R-26 (BM-PW-4): the hub-error fallback shows the same link (no testid; found by role).
+  test('Articles link in the hub-error fallback links to the blog in a new tab', async ({ page }) => {
+    await page.route('**/api/profile', (route) => route.fulfill({ status: 500, json: { error: 'down' } }));
+    await page.route('**/api/links', (route) => route.fulfill({ json: SEEDED_LINKS }));
+    await page.route('**/api/skills', (route) => route.fulfill({ json: SEEDED_SKILLS }));
+    await page.goto('/');
+    const fallback = page.locator('.hub-error');
+    await expect(fallback).toBeVisible({ timeout: 10000 });
+    const articlesLink = fallback.getByRole('link', { name: 'Articles' });
+    await expect(articlesLink).toHaveAttribute('href', 'https://mnemra.dev/blog/');
+    await expect(articlesLink).toHaveAttribute('target', '_blank');
+    await expect(articlesLink).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
   // Phase 1.5: Resume card is now the third nav card (Projects · Articles · Resume)
@@ -160,14 +199,6 @@ test.describe('Public pages — inner pages breadcrumb', () => {
     // Use aria-current="page" segment — present in both desktop and mobile breadcrumb
     const currentSegment = breadcrumbNav.locator('[aria-current="page"]').first();
     await expect(currentSegment).toContainText('Projects');
-  });
-
-  test('articles page shows breadcrumb with "Articles"', async ({ page }) => {
-    await page.goto('/articles');
-    const breadcrumbNav = page.getByRole('navigation', { name: 'Breadcrumb' });
-    await expect(breadcrumbNav).toBeVisible();
-    const currentSegment = breadcrumbNav.locator('[aria-current="page"]').first();
-    await expect(currentSegment).toContainText('Articles');
   });
 
   // Phase 1.5: Resume page shows breadcrumb with "Resume"

@@ -39,14 +39,6 @@ for (const viewport of viewports) {
       expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
     });
 
-    test('articles page renders without horizontal overflow', async ({ page }) => {
-      await page.goto('/articles');
-      await page.waitForLoadState('networkidle');
-      const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-      const clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
-      expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
-    });
-
     test('resume page renders without horizontal overflow', async ({ page }) => {
       await page.goto('/resume');
       await page.waitForLoadState('networkidle');
