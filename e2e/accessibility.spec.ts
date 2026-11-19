@@ -75,7 +75,9 @@ test.describe('Accessibility — home page', () => {
     const projectsCard = page.locator('[data-testid="card-projects"]');
     await expect(projectsCard).toHaveAttribute('href', '/projects');
     const articlesCard = page.locator('[data-testid="card-articles"]');
-    await expect(articlesCard).toHaveAttribute('href', '/articles');
+    await expect(articlesCard).toHaveAttribute('href', 'https://mnemra.dev/blog/');
+    await expect(articlesCard).toHaveAttribute('target', '_blank');
+    await expect(articlesCard).toHaveAttribute('rel', 'noopener noreferrer');
     // Phase 1.5: Resume card
     const resumeCard = page.locator('[data-testid="card-resume"]');
     await expect(resumeCard).toHaveAttribute('href', '/resume');
