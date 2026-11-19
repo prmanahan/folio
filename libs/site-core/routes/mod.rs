@@ -1,7 +1,6 @@
 pub mod admin;
 pub mod agents;
 pub mod ai;
-pub mod articles;
 pub mod education;
 pub mod experience;
 pub mod faq;
@@ -49,7 +48,6 @@ pub fn public_router() -> Router<DbState> {
         .merge(experience::routes())
         .merge(skills::routes())
         .merge(education::routes())
-        .merge(articles::routes())
         .merge(links::routes())
         .merge(faq::routes())
         .merge(agents::routes())
