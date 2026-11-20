@@ -12,10 +12,10 @@ Source: `docs/specs/2026-11-18-live-lists-and-blog-move.md`, blob `4e8af5ed0aa02
 
 **Output hygiene (both routes).** Record command output only. Do not run `env` or `printenv`, and do not paste terminal scrollback, the admin session cookie or a HAR.
 
-**Blast radius.** One `articles` row, one column. The data lives on the `site_data` volume (`/app/data/site.db`), so the change outlives any deploy or rollback. Nothing else in the DB is touched. Route B adds a root session and a package install on the one production machine; Route A adds neither.
+**Blast radius.** One `articles` row. Route A rewrites the whole row: the editor's Save is `PUT /api/admin/articles/{id}` → `article::update` (main `d180810`, `libs/site-core/models/article.rs:136`), which writes title, slug, summary, content, tags, published_at and published from the form, and re-serialises tags, so stored tags that are not valid JSON come back as `[]`. Route B writes one column (`published`). The data lives on the `site_data` volume (`/app/data/site.db`), so the change outlives any deploy or rollback. Nothing else in the DB is touched. Route B adds a root session and a package install on the one production machine; Route A adds neither.
 
 **When.**
-- Route A: before the merge-1 deploy. The release serving production today (main `d180810`, deploy run green 2026-11-19) still has `/admin/articles` with a Published checkbox (`frontend/src/routes/admin/articles/+page.svelte`), backed by `PUT /api/admin/articles/{id}` and `article::update` (`libs/site-core/routes/admin/articles.rs`). Merge 1 (`61b095f`) deletes both. The data change therefore precedes the deploy, and a deploy failure is tangled with it: if the deploy is rolled back, the article stays unpublished (it is data on the volume) until it is re-published through the editor.
+- Route A: before the merge-1 deploy. The release serving production today (main `d180810`, deploy run green 2026-11-19) still has `/admin/articles` with a Published checkbox (`frontend/src/routes/admin/articles/+page.svelte`), backed by `PUT /api/admin/articles/{id}` and `article::update` (`libs/site-core/routes/admin/articles.rs`). Merge 1 (PR #80) deletes both. The data change therefore precedes the deploy, and a deploy failure is tangled with it: if the deploy is rolled back, the article stays unpublished (it is data on the volume) until it is re-published through the editor.
 - Route B: after the merge-1 deploy has finished and its post-deploy checks (T6's list) are seen, so a deploy failure is not tangled with a data change. This is the only route once the editor is gone.
 - Either way, before declaring the first run closed.
 
@@ -23,10 +23,10 @@ Source: `docs/specs/2026-11-18-live-lists-and-blog-move.md`, blob `4e8af5ed0aa02
 
 Pre-condition: the production release is still the pre-merge-1 one. If `/admin/articles` is gone, use Route B.
 
-- **A1. Record before.** Log in at `https://peter.manahan.io/admin`, open Articles, and record for every article its badge, and for "The Workflow Didn't Change" its slug and published date. The list's badges are the backup of the `published` column. Note the newest volume snapshot ID (`fly volumes snapshots list <volume id> -a folio-prmanahan`), as merge 2's pre-checks do. **Stop** unless exactly one article matches the title and its badge reads "published".
+- **A1. Record before.** Log in at `https://peter.manahan.io/admin`, open Articles, and record for every article its badge, and for "The Workflow Didn't Change" its title, slug, published date, its tags value as the editor shows it, and the character counts of its summary and content. The list's badges are the backup of the `published` column. Note the newest volume snapshot ID (`fly volumes snapshots list <volume id> -a folio-prmanahan`), as merge 2's pre-checks do. **Stop** unless exactly one article matches the title and its badge reads "published".
 - **A2. Positive control (optional).** Ask the chat on https://peter.manahan.io to quote the opening of the article, and record whether it can. A miss weakens A5 to corroboration, since the model can decline.
 - **A3. Unpublish.** Open the article, untick Published, Save.
-- **A4. Verify the row.** Reload the article and the list. Expect the badge to read "draft", with slug and published date unchanged from A1. Any other change: re-tick Published, Save, and report.
+- **A4. Verify the row.** Reload the article and the list. Expect the badge to read "draft", with title, slug, published date, tags value, and the summary and content character counts all matching A1. On any difference, stop and report: the reversal re-ticks Published but does not restore lost tags or text.
 - **A5. Deploy, then check from outside.** Deploy merge 1, run the post-deploy checks. Then ask the chat the A2 question again, and run a job-fit analysis with a pasted description that mentions the article's topic. Expect no quotation of the article's text or title. An absence proves little alone; it counts alongside A4, or alongside an A2 hit that no longer reproduces. Prompts are built per request from `articles` filtered on `published` (`build_system_prompt` and `build_fit_prompt` take the DB connection; no cache sits in `ai/context.rs`), so A4 is the decisive check.
 
 **Route A reversal.** Before the deploy, or after a merge-1 rollback (the old release has the editor again): open the article, re-tick Published, Save, reload and expect the badge "published". After the merge-1 deploy the editor is gone, so reversal needs Route B.
@@ -76,9 +76,13 @@ Expect `1` (a "database is locked" error is safe to retry), then re-run B4's SEL
 ## Rollback, merge 1
 
 **Rollback, merge 1.** `fly.toml` still runs `./folio check-projects` after merge 1.
-- **Primary:** revert through `main`, which deploys and fetches a fresh list in CI. It needs GitHub up.
-- **Fast path:** `fly deploy --image <recorded image> --skip-release-command -a folio-prmanahan`. The recorded image's baked `projects.json` is past its 30-minute bound, so without that flag the release command refuses the deploy.
+- **Primary:** revert through `main`, which deploys and fetches a fresh list in CI. It needs GitHub up. The revert must cover all of merge 1's commits, which are the commits PR #80 landed. Merge 1 lands by rebase-merge, so their SHAs on main differ from the branch's: take the range from the PR's merge record, not from branch history.
+- **Fast path.** Recorded image, verbatim: `registry.fly.io/folio-prmanahan:deployment-01M7TFD33NVDSNFFY340FW1KA9` (release v81, re-recorded 2026-11-20, confirmed running by `fly status`). Re-run `fly releases --image -a folio-prmanahan` immediately before the merge; the T6 report carries the final value.
+  - **Trigger:** the CI Deploy job fails, or any post-deploy check is red.
+  - **Run**, from a checkout root that holds `fly.toml`: `fly deploy --image <recorded image> --skip-release-command -a folio-prmanahan`. The recorded image's baked `projects.json` is past its 30-minute bound, so without that flag the release command refuses the deploy.
+  - **Post-check:** `fly releases --image -a folio-prmanahan` shows a new top release with the recorded image. Then `curl --fail https://peter.manahan.io/api/health` (this wakes the auto-stopped machine; `fly status` may show it stopped) and `curl --fail https://peter.manahan.io/articles`, served by the old release. Expect 200 for both.
 - **After either,** the old release serves its own `/articles` pages again.
+- **Rolled-back state (fast path).** `main` still contains merge 1 and CI deploys every push to main. Merge nothing else until the revert PR is open and merged. A later `fly deploy --image <recorded image>` without `--skip-release-command` fails the release command on the stale baked list. This is expected and safe. The CI deploy is unaffected, since it fetches a fresh list first.
 
 ## Rollback, merge 2
 
