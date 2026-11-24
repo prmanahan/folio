@@ -44,7 +44,12 @@ pub enum ReasonCode {
     /// Any other transport failure: a refused or reset connection, a TLS
     /// failure that is not a certificate error, a malformed response.
     TransportFailed,
-    /// R-6: a page body was not a JSON array.
+    /// R-1: a GitHub `Link` header could not be read unambiguously, so whether
+    /// another page exists is unknown.
+    LinkMalformed,
+    /// R-6: a page body was not a JSON array, or was not valid JSON. That
+    /// includes a body holding a lone-surrogate `\u` escape, which the JSON
+    /// parser refuses whole.
     ProjectsBodyNotArray,
     /// R-6, R-4 of the adopted projects spec: an element failed its checks.
     ProjectsElementRejected,
@@ -163,6 +168,7 @@ impl ReasonCode {
             ReasonCode::PageCapReached => "page_cap_reached",
             ReasonCode::NonSuccessStatus => "non_success_status",
             ReasonCode::TransportFailed => "transport_failed",
+            ReasonCode::LinkMalformed => "link_malformed",
             ReasonCode::ProjectsBodyNotArray => "projects_body_not_array",
             ReasonCode::ProjectsElementRejected => "projects_element_rejected",
             ReasonCode::ProjectsOwnerEmpty => "projects_owner_empty",
