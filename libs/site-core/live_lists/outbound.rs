@@ -680,23 +680,46 @@ mod tests {
 
     // ---- R-4 ----
 
-    #[tokio::test(start_paused = true)]
-    #[ignore = "R-4 timing case: not deterministic on paused tokio time against the TLS server (measured); held for a level 3 ruling, see the report"]
-    async fn r4_a_connect_just_before_5s_succeeds() {
+    // R-4's two-sided timing cases run on the real clock (Peter, 2026-11-24:
+    // "(c) Real clock (Recommended)"). Paused tokio time against a real socket
+    // is not deterministic: the clock jumps while I/O is in flight (measured,
+    // 50 runs each, 12 to 26 early timeouts). Each case asserts the outcome and
+    // an elapsed window, so a wrong constant (2 s or 10 s for the 5 s connect
+    // limit, say) fails one side. Margins are generous on the late side for a
+    // loaded CI runner, and tight enough to exclude the neighbouring constants.
+
+    /// Connect, success side. The server completes the handshake after 3 s,
+    /// which is inside the 5 s limit. Must succeed, and have taken at least
+    /// 3 s (the delay was real) and under 5 s (a 5 s timer never fired). A
+    /// connect limit of 2 s fails the outcome; one of 10 s passes this side
+    /// and fails the next test.
+    #[tokio::test]
+    async fn r4_a_connect_that_completes_at_3s_succeeds() {
         let pki = Pki::new();
         let server = TlsServer::start_slow_handshake(
             pki.issue(&[GITHUB]),
-            CONNECT_TIMEOUT - Duration::from_millis(1),
+            Duration::from_secs(3),
             |_, _| Reply::ok(JSON),
         )
         .await;
         let client = OutboundClient::for_test(TestNet::new(&pki, &[(GITHUB, server.addr())]));
-        assert_eq!(reason(client.fetch(org()).await), None);
+        let began = Instant::now();
+        let result = client.fetch(org()).await;
+        let took = began.elapsed();
+        assert_eq!(reason(result), None);
+        assert!(
+            took >= Duration::from_secs(3),
+            "finished early, at {took:?}"
+        );
+        assert!(took < CONNECT_TIMEOUT, "finished late, at {took:?}");
     }
 
-    #[tokio::test(start_paused = true)]
-    #[ignore = "R-4 timing case: not deterministic on paused tokio time against the TLS server (measured); held for a level 3 ruling, see the report"]
-    async fn r4_a_connect_that_never_completes_fails_at_5s_and_not_before() {
+    /// Connect, failure side. The server never completes the handshake. Must
+    /// fail with `ConnectTimeout`, no earlier than 5 s (a 2 s limit fails) and
+    /// before 7 s (a 10 s limit fails; 2 s of slack for a loaded runner). The
+    /// server saw no request.
+    #[tokio::test]
+    async fn r4_a_connect_that_never_completes_fails_between_5s_and_7s() {
         let pki = Pki::new();
         let server = TlsServer::start_slow_handshake(
             pki.issue(&[GITHUB]),
@@ -711,24 +734,37 @@ mod tests {
         assert_eq!(reason(result), Some(ReasonCode::ConnectTimeout));
         assert!(took >= CONNECT_TIMEOUT, "failed early, at {took:?}");
         assert!(
-            took <= CONNECT_TIMEOUT + Duration::from_millis(1),
+            took < CONNECT_TIMEOUT + Duration::from_secs(2),
             "failed late, at {took:?}"
         );
         assert_eq!(server.requests().len(), 0);
     }
 
-    #[tokio::test(start_paused = true)]
-    #[ignore = "R-4 timing case: not deterministic on paused tokio time against the TLS server (measured); held for a level 3 ruling, see the report"]
-    async fn r4_a_response_that_completes_just_before_20s_succeeds() {
+    /// Total, success side. The response head arrives after 15 s, inside the
+    /// 20 s limit. Must succeed, taking at least 15 s and under 20 s (a total
+    /// limit of 10 s fails the outcome).
+    #[tokio::test]
+    async fn r4_a_response_that_completes_at_15s_succeeds() {
         let mut reply = Reply::ok(JSON);
-        reply.head_delay = TOTAL_TIMEOUT - Duration::from_millis(1);
+        reply.head_delay = Duration::from_secs(15);
         let rig = rig(reply).await;
-        assert_eq!(reason(rig.client.fetch(org()).await), None);
+        let began = Instant::now();
+        let result = rig.client.fetch(org()).await;
+        let took = began.elapsed();
+        assert_eq!(reason(result), None);
+        assert!(
+            took >= Duration::from_secs(15),
+            "finished early, at {took:?}"
+        );
+        assert!(took < TOTAL_TIMEOUT, "finished late, at {took:?}");
     }
 
-    #[tokio::test(start_paused = true)]
-    #[ignore = "R-4 timing case: not deterministic on paused tokio time against the TLS server (measured); held for a level 3 ruling, see the report"]
-    async fn r4_a_body_that_stalls_fails_at_20s_and_not_before() {
+    /// Total, failure side. The body stalls after 3 bytes. Must fail with
+    /// `TotalTimeout`, no earlier than 20 s (a 10 s limit fails) and before
+    /// 23 s (a 30 s limit fails; 3 s of slack for a loaded runner). One
+    /// request reached the server.
+    #[tokio::test]
+    async fn r4_a_body_that_stalls_fails_between_20s_and_23s() {
         let mut reply = Reply::ok(JSON);
         reply.stall_after = Some(3);
         let rig = rig(reply).await;
@@ -738,7 +774,7 @@ mod tests {
         assert_eq!(reason(result), Some(ReasonCode::TotalTimeout));
         assert!(took >= TOTAL_TIMEOUT, "failed early, at {took:?}");
         assert!(
-            took <= TOTAL_TIMEOUT + Duration::from_millis(1),
+            took < TOTAL_TIMEOUT + Duration::from_secs(3),
             "failed late, at {took:?}"
         );
         assert_eq!(rig.server.requests().len(), 1);
