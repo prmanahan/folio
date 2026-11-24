@@ -101,7 +101,13 @@ jobs:
       # shipped graph, and fails when it leaves the lockfile so the ignore gets
       # removed. See the script for the three outcomes.
       - name: Check chrono stays dev-only
-        run: scripts/check-chrono-dev-only.sh
+        run: scripts/check-dev-only.sh chrono
+
+      # rcgen generates the TLS test harness's certificates and is dev-only by
+      # ruling. Fails if it enters the shipped graph, and when it leaves the
+      # lockfile so this step gets removed.
+      - name: Check rcgen stays dev-only
+        run: scripts/check-dev-only.sh rcgen
 
       - name: Run tests
         run: cargo test --workspace
