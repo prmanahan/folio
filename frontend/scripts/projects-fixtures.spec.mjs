@@ -14,7 +14,8 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fixtureRoot } from './projects-test-support.mjs';
+
+const fixtureRoot = join(import.meta.dirname, 'projects-fixtures');
 
 const PREFIX = /^fixture-/;
 
