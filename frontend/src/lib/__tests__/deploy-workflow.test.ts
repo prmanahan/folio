@@ -947,7 +947,7 @@ const CHECKS: CheckSpec[] = [DAILY, POST_DEPLOY];
 
 const CHECK_JOB_KEYS = ['name', 'runs-on', 'needs', 'permissions', 'timeout-minutes', 'steps'];
 const CHECK_STEP_KEYS = ['name', 'uses', 'with', 'run'];
-const DAILY_CRON_RE = /^\d{1,2} \d{1,2} \* \* \*$/;
+const DAILY_CRON_RE = /^[0-5]?\d ([01]?\d|2[0-3]) \* \* \*$/;
 const IMPORT_ALLOWLIST = ['node:timers/promises'];
 const FORBIDDEN_TOKENS = [
 	'process.env',
@@ -980,6 +980,8 @@ function checkJobViolations(docs: Record<string, Workflow>): string[] {
 		const loc = `${c.file}:${c.job}`;
 		const doc = docs[c.file];
 		const job = doc ? jobs(doc)[c.job] : undefined;
+		// The daily workflow holds the check job and nothing else; a second job would run beside it.
+		if (c === DAILY && doc && !isDeepStrictEqual(Object.keys(jobs(doc)), [c.job])) v.push(`daily-job-set@${c.file}`);
 		if (!doc || !job) {
 			v.push(`job-missing@${loc}`);
 			continue;
@@ -1143,6 +1145,12 @@ describe('R-35: the freshness check jobs, the real files', () => {
 		expect(checkJobViolations(baselineDocs())).toEqual([]);
 	});
 
+	it.each(['0 0 * * *', '59 23 * * *', '7 9 * * *', '17 6 * * *'])('control: the daily cron %s is accepted', (cron) => {
+		const d = baselineDocs();
+		(d[DAILY_FILE].on as Obj).schedule = [{ cron }];
+		expect(checkJobViolations(d)).toEqual([]);
+	});
+
 	it('control: the checker reports a violation on a known-bad input (no workflows)', () => {
 		expect(checkJobViolations({})).toEqual([
 			`job-missing@${DAILY.file}:${DAILY.job}`,
@@ -1178,6 +1186,11 @@ describe('R-35: the freshness check jobs, seeded violations', () => {
 		['daily: a cron every five minutes', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: '*/5 * * * *' }])],
 		['daily: an hourly cron', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: '17 * * * *' }])],
 		['daily: a weekly cron', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: '17 6 * * 1' }])],
+		['daily: a cron with minute 60', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: '60 6 * * *' }])],
+		['daily: a cron with hour 24', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: '17 24 * * *' }])],
+		['daily: a cron with minute 99 and hour 99', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: '99 99 * * *' }])],
+		['daily: a second job in the daily workflow', `daily-job-set@${DAILY_FILE}`, (d) => void (jobs(d[DAILY_FILE]).extra = clone(dailyJob(d)))],
+		['daily: the check job renamed (the job set is not exactly the check job)', `daily-job-set@${DAILY_FILE}`, (d) => void ((jobs(d[DAILY_FILE]).other = dailyJob(d)), delete jobs(d[DAILY_FILE])[DAILY.job])],
 		['daily: a non-string cron', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: 5 }])],
 		['daily: no workflow_dispatch', `daily-no-dispatch@${DAILY_FILE}`, (d) => void delete dailyOn(d).workflow_dispatch],
 		['daily: a push trigger', `daily-extra-trigger@${DAILY_FILE}`, (d) => void (dailyOn(d).push = null)],
@@ -1347,4 +1360,66 @@ describe('R-35: the check scripts, imports and forbidden tokens', () => {
 			expect(tokenViolations(`${SEED_SOURCE}${tokenSeeds[token]}\n`)).toContain(`token:${token}`);
 		});
 	}
+});
+
+// ---- The post-deploy health step must not echo a response body into the job log ----
+//
+// A body from the public site can carry a `::` workflow command. The health step discards the
+// body (`-o /dev/null`) and prints the status only (`-w`), and keeps `--fail`.
+
+const HEALTH_STEP_NAME = 'Post-deploy health check';
+
+function healthStepViolations(run: unknown): string[] {
+	const v: string[] = [];
+	if (typeof run !== 'string') return ['health-run-missing'];
+	if (!/(^|\s)-o\s+\/dev\/null(\s|$)/.test(run)) v.push('health-body-not-discarded');
+	if (!/(^|\s)-w\s+\S/.test(run)) v.push('health-status-not-printed');
+	if (!/(^|\s)--fail(\s|$)/.test(run)) v.push('health-no-fail');
+	if (!run.includes('https://peter.manahan.io/api/health')) v.push('health-wrong-url');
+	return v;
+}
+
+describe('the post-deploy health step prints no response body', () => {
+	const real = () => {
+		const s = stepsOf(jobs(load())[DEPLOY_JOB]).find((x) => x.name === HEALTH_STEP_NAME);
+		return s?.run;
+	};
+	const GOOD =
+		"curl -sS -o /dev/null -w 'health status %{http_code}\\n' --retry 5 --retry-delay 5 --max-time 30 --fail https://peter.manahan.io/api/health";
+
+	it('the real step discards the body, prints the status and keeps --fail', () => {
+		expect(healthStepViolations(real())).toEqual([]);
+	});
+
+	it('control: a known-good command raises nothing', () => {
+		expect(healthStepViolations(GOOD)).toEqual([]);
+	});
+
+	it('seed: the old command (body to the log) fails', () => {
+		expect(
+			healthStepViolations('curl --retry 5 --retry-delay 5 --max-time 30 --fail https://peter.manahan.io/api/health')
+		).toContain('health-body-not-discarded');
+	});
+
+	it('seed: no -o /dev/null', () => {
+		expect(healthStepViolations(GOOD.replace('-o /dev/null ', ''))).toContain('health-body-not-discarded');
+	});
+
+	it('seed: output to a file other than /dev/null', () => {
+		expect(healthStepViolations(GOOD.replace('/dev/null', 'out.txt'))).toContain('health-body-not-discarded');
+	});
+
+	it('seed: no -w', () => {
+		expect(healthStepViolations(GOOD.replace("-w 'health status %{http_code}\\n' ", ''))).toContain(
+			'health-status-not-printed'
+		);
+	});
+
+	it('seed: --fail removed', () => {
+		expect(healthStepViolations(GOOD.replace(' --fail', ''))).toContain('health-no-fail');
+	});
+
+	it('seed: no step', () => {
+		expect(healthStepViolations(undefined)).toEqual(['health-run-missing']);
+	});
 });

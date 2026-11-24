@@ -32,25 +32,48 @@ function instant(value) {
 	return ms;
 }
 
-/** One read: { text } when a 200 came back, { error } for anything else. Never throws. */
+/** A value that came from the network, quoted and cut so it cannot start a workflow command. */
+const show = (value) => JSON.stringify(String(value).slice(0, 2048));
+
+/** An error and each cause behind it, so "fetch failed" carries what failed. */
+function describeError(err) {
+	const parts = [];
+	let current = err;
+	for (let depth = 0; depth < 5 && current !== undefined && current !== null; depth += 1) {
+		parts.push(String(current));
+		current = current.cause;
+	}
+	return parts.join(' <- caused by ');
+}
+
+/** One read: { status, location, text } when a response came back, { error } when none did. Never throws. */
 async function read() {
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+	const timer = setTimeout(() => controller.abort(new Error('read timed out after 30 s')), READ_TIMEOUT_MS);
 	try {
 		const response = await fetch(URL_FRESHNESS, { redirect: 'manual', signal: controller.signal });
 		const text = await response.text();
-		if (response.status !== 200) return { error: `status ${response.status}`, text };
-		return { text };
+		return { status: response.status, location: response.headers.get('location'), text };
 	} catch (err) {
-		return { error: String(err) };
+		return { error: describeError(err) };
 	} finally {
 		clearTimeout(timer);
 	}
 }
 
+/** What a red prints: the reason, then the status, the Location of a redirect, and the body or error. */
+function report(reason, result) {
+	console.error(`RED: ${reason}`);
+	if (result.status !== undefined) console.error(`status: ${result.status}`);
+	if (result.location !== undefined && result.location !== null) console.error(`location: ${show(result.location)}`);
+	if (result.error !== undefined) console.error(`error: ${show(result.error)}`);
+	else console.error(`body: ${show(result.text)}`);
+}
+
 /** The reason a read is red, or null when it is green. `now` is read when the read settles. */
 function judge(result, now) {
-	if (result.error !== undefined) return result.error;
+	if (result.error !== undefined) return 'read failed';
+	if (result.status !== 200) return `status ${result.status}`;
 	let parsed;
 	try {
 		parsed = JSON.parse(result.text);
@@ -74,7 +97,7 @@ function judge(result, now) {
 async function main() {
 	try {
 		const first = await read();
-		console.log(`first read (not judged): ${first.error ?? 'answered 200'}`);
+		console.log(`first read (not judged): ${first.error !== undefined ? `failed, ${show(first.error)}` : `status ${first.status}`}`);
 		await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
 		const second = await read();
 		const reason = judge(second, Date.now());
@@ -82,11 +105,11 @@ async function main() {
 			console.log('green: both lists are fresh');
 			return 0;
 		}
-		console.error(`RED: ${reason}`);
-		console.error(second.text ?? second.error);
+		report(reason, second);
 		return 1;
 	} catch (err) {
-		console.error(`RED: unexpected ${String(err)}`);
+		console.error('RED: unexpected');
+		console.error(`error: ${show(describeError(err))}`);
 		return 1;
 	}
 }

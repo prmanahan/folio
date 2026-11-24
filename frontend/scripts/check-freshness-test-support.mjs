@@ -53,7 +53,8 @@ export function after(ms, value, signal) {
 /** A response that never arrives; rejects when the signal aborts, as a real fetch does. */
 export const hang = (init) =>
 	new Promise((_resolve, reject) => {
-		init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+		// A real fetch rejects with the signal's reason.
+		init?.signal?.addEventListener('abort', () => reject(init.signal.reason));
 	});
 
 /**
