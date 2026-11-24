@@ -33,7 +33,7 @@ pub const MAX_AGE_BEHIND: Duration = Duration::minutes(30);
 pub const MAX_AGE_AHEAD: Duration = Duration::minutes(5);
 
 const MAX_NAME_LEN: usize = 100;
-const MAX_DESCRIPTION_CODE_POINTS: usize = 350;
+pub(crate) const MAX_DESCRIPTION_CODE_POINTS: usize = 350;
 /// `YYYY-MM-DDTHH:MM:SS.sssZ`
 const FETCHED_AT_LEN: usize = 24;
 /// U+2028 and U+2029, by number: the rejected class is never typed as a
@@ -484,7 +484,7 @@ fn validate_group(owner: &'static str, raw_repos: Vec<RawRepo>) -> Result<Group,
 }
 
 /// `^[A-Za-z0-9._-]{1,100}$`
-fn is_valid_name(name: &str) -> bool {
+pub(crate) fn is_valid_name(name: &str) -> bool {
     (1..=MAX_NAME_LEN).contains(&name.len())
         && name
             .bytes()
