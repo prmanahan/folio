@@ -5,6 +5,7 @@ pub mod education;
 pub mod experience;
 pub mod faq;
 pub mod links;
+pub mod lists;
 pub mod profile;
 pub mod skills;
 
