@@ -39,7 +39,7 @@ if [ "$rc" -eq 0 ]; then
 fi
 
 if grep -q "did not match any packages" "$err"; then
-  echo "::error::$pkg is no longer in Cargo.lock. Remove this guard step (the step running 'scripts/check-dev-only.sh $pkg' in .github/workflows/test.yml and deploy.yml) and any ignore that depends on it (for chrono, the RUSTSEC-2026-0543 ignore in deny.toml)."
+  echo "::error::$pkg is no longer in Cargo.lock. Remove every guard step that runs it (find them with: grep -rn 'check-dev-only.sh $pkg' .github/workflows) and any ignore that depends on it (for chrono, the RUSTSEC-2026-0543 ignore in deny.toml)."
   cat "$err"
   exit 1
 fi

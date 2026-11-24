@@ -99,7 +99,8 @@ jobs:
       # #4851: deny.toml ignores RUSTSEC-2026-0543 (chrono) by ID for the whole
       # graph, sound only while chrono is dev-only. Fails if it enters the
       # shipped graph, and fails when it leaves the lockfile so the ignore gets
-      # removed. See the script for the three outcomes.
+      # removed. The script header lists every outcome, and
+      # frontend/src/lib/__tests__/check-dev-only.test.ts runs each one.
       - name: Check chrono stays dev-only
         run: scripts/check-dev-only.sh chrono
 
