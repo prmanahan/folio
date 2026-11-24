@@ -154,10 +154,7 @@ pub fn parse_feed(body: &[u8], now: OffsetDateTime) -> Result<FeedOutcome, FeedF
         return Err(FeedRule::Prolog.into());
     }
     let scan = Scanner::new(text).scan()?;
-    // The wall clock is the caller's; a year the grammar cannot hold is not a
-    // document we can write, so the feed fails rather than panics.
-    let fetched_at = format_fetched_at(now).map_err(|_| FeedRule::DocumentInvalid)?;
-    assemble(scan, &fetched_at)
+    assemble(scan, now)
 }
 
 /// The items among the first 20, in document order, each accepted or
@@ -609,7 +606,7 @@ fn validate_post(
     link: String,
     pub_date: &str,
 ) -> Result<Post, PostRule> {
-    let published = convert_pub_date(pub_date).ok_or(PostRule::PubDate)?;
+    let published = convert_pub_date(pub_date)?;
     let post = Post {
         title,
         summary,
@@ -636,12 +633,12 @@ fn validate_post(
 }
 
 /// R-11: at most 64 bytes, RFC 2822, stored in UTC in the `fetched_at` grammar.
-fn convert_pub_date(raw: &str) -> Option<String> {
+fn convert_pub_date(raw: &str) -> Result<String, PostRule> {
     if raw.len() > MAX_PUB_DATE_BYTES {
-        return None;
+        return Err(PostRule::PubDateTooLong);
     }
-    let instant = OffsetDateTime::parse(raw, &Rfc2822).ok()?;
-    format_fetched_at(instant).ok()
+    let instant = OffsetDateTime::parse(raw, &Rfc2822).map_err(|_| PostRule::PubDate)?;
+    format_fetched_at(instant).map_err(|_| PostRule::PubDate)
 }
 
 fn document_of(fetched_at: &str, posts: &[Post]) -> String {
@@ -660,8 +657,9 @@ fn document_of(fetched_at: &str, posts: &[Post]) -> String {
 }
 
 /// R-12: keep the valid posts in order, record the skips, and confirm the
-/// whole document with the validator the refresher will run.
-fn assemble(scan: Scan, fetched_at: &str) -> Result<FeedOutcome, FeedFailure> {
+/// whole document with the validator the refresher will run. A feed that
+/// fails here still reports the items it skipped.
+fn assemble(scan: Scan, now: OffsetDateTime) -> Result<FeedOutcome, FeedFailure> {
     if scan.items_seen == 0 {
         return Err(FeedRule::NoItems.into());
     }
@@ -673,11 +671,19 @@ fn assemble(scan: Scan, fetched_at: &str) -> Result<FeedOutcome, FeedFailure> {
             Err(rule) => skipped.push(SkippedItem { index, rule }),
         }
     }
+    let fail = |rule: FeedRule, skipped: Vec<SkippedItem>| FeedFailure { rule, skipped };
     if posts.is_empty() {
-        return Err(FeedRule::NoValidPost.into());
+        return Err(fail(FeedRule::NoValidPost, skipped));
     }
-    let document = document_of(fetched_at, &posts);
-    articles::parse(&document).map_err(|_| FeedRule::DocumentInvalid)?;
+    // The wall clock is the caller's; a year the grammar cannot hold is not a
+    // document we can write, so the feed fails rather than panics.
+    let Ok(fetched_at) = format_fetched_at(now) else {
+        return Err(fail(FeedRule::DocumentInvalid, skipped));
+    };
+    let document = document_of(&fetched_at, &posts);
+    if articles::parse(&document).is_err() {
+        return Err(fail(FeedRule::DocumentInvalid, skipped));
+    }
     Ok(FeedOutcome { document, skipped })
 }
 
