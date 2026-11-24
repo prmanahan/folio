@@ -27,10 +27,12 @@ rand = { workspace = true }
 sha2 = { workspace = true }
 tracing = { workspace = true }
 mime_guess = { workspace = true }
-time = { workspace = true, features = ["parsing"] }
+time = { workspace = true, features = ["parsing", "formatting", "macros"] }
+url = { workspace = true }
 jiff = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 axum-test = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
 mockito = "1"
