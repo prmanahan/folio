@@ -399,36 +399,74 @@ mod tests {
         Target::GithubOrg(Page::FIRST)
     }
 
-    /// Env vars are process-global: tests that set them take this lock.
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    // Tests that need an environment variable run as a child of this test
+    // binary with the variable set by the parent on the child's command line
+    // (`Command::env`), so no variable is ever set in this process and no
+    // test races another on the process environment.
+    const CHILD_MARK: &str = "FOLIO_OUTBOUND_TEST_CHILD";
 
-    struct EnvGuard {
-        names: Vec<&'static str>,
-        _lock: tokio::sync::MutexGuard<'static, ()>,
+    fn is_child() -> bool {
+        std::env::var_os(CHILD_MARK).is_some()
     }
 
-    impl EnvGuard {
-        async fn set(vars: &[(&'static str, &str)]) -> Self {
-            let lock = ENV_LOCK.lock().await;
-            for (k, v) in vars {
-                // SAFETY: every test that touches the environment holds
-                // ENV_LOCK, and none reads these variables concurrently.
-                unsafe { std::env::set_var(k, v) };
-            }
-            Self {
-                names: vars.iter().map(|(k, _)| *k).collect(),
-                _lock: lock,
-            }
-        }
+    /// Rerun test `name` in a child with `vars` set, and require that it ran
+    /// (`--exact` on a wrong name runs nothing and exits 0) and passed. The
+    /// two trust-root variables are removed first, so the parent's shell
+    /// cannot decide a case.
+    async fn run_child(name: &str, vars: &[(&str, &str)]) {
+        let module = module_path!().split_once("::").expect("a crate prefix").1;
+        let out = tokio::process::Command::new(std::env::current_exe().expect("this binary"))
+            .args(["--exact", &format!("{module}::{name}"), "--test-threads=1"])
+            .env(CHILD_MARK, "1")
+            .env_remove("SSL_CERT_FILE")
+            .env_remove("SSL_CERT_DIR")
+            .envs(vars.iter().copied())
+            .output()
+            .await
+            .expect("spawn the child test");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "the child test {name} did not pass
+stdout: {stdout}
+stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for k in &self.names {
-                // SAFETY: as in `set`; the lock is still held.
-                unsafe { std::env::remove_var(k) };
+    /// `der` as a PEM certificate. A public certificate, generated per run.
+    fn pem_of(der: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut b64 = String::new();
+        for chunk in der.chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    b64.push(TABLE[((n >> (18 - 6 * i)) & 63) as usize] as char);
+                } else {
+                    b64.push('=');
+                }
             }
         }
+        let lines: Vec<&str> = b64
+            .as_bytes()
+            .chunks(64)
+            .map(|c| std::str::from_utf8(c).expect("ascii"))
+            .collect();
+        format!(
+            "-----BEGIN CERTIFICATE-----
+{}
+-----END CERTIFICATE-----
+",
+            lines.join(
+                "
+"
+            )
+        )
     }
 
     fn unique(prefix: &str) -> String {
@@ -550,21 +588,66 @@ mod tests {
 
     #[tokio::test]
     async fn r2_ignores_the_proxy_environment() {
-        // Given the three proxy variables set to a listener that records connections
+        if is_child() {
+            // When a client built under the proxy variables fetches
+            let rig = rig(Reply::ok(JSON)).await;
+            // Then the fetch succeeds
+            assert!(rig.client.fetch(org()).await.is_ok());
+            assert_eq!(rig.server.requests().len(), 1);
+            return;
+        }
+        // Given the three proxy variables set, for the child, to a listener that records connections
         let proxy = CountingListener::start().await;
         let at = format!("http://{}", proxy.addr());
-        let _env = EnvGuard::set(&[
-            ("HTTPS_PROXY", &at),
-            ("HTTP_PROXY", &at),
-            ("ALL_PROXY", &at),
-        ])
+        run_child(
+            "r2_ignores_the_proxy_environment",
+            &[
+                ("HTTPS_PROXY", &at),
+                ("HTTP_PROXY", &at),
+                ("ALL_PROXY", &at),
+            ],
+        )
         .await;
-        // When a client built under them fetches
-        let rig = rig(Reply::ok(JSON)).await;
-        // Then the fetch succeeds and the proxy recorded nothing
-        assert!(rig.client.fetch(org()).await.is_ok());
+        // Then the proxy recorded nothing
         assert_eq!(proxy.connections(), 0);
-        assert_eq!(rig.server.requests().len(), 1);
+    }
+
+    // ---- Warden F-1: no trust root enters through the environment ----
+
+    #[tokio::test]
+    async fn r2_the_production_client_refuses_to_build_when_a_trust_root_variable_is_set() {
+        use crate::live_lists::harness::LogCapture;
+        if is_child() {
+            let (log, _guard) = LogCapture::install();
+            let set = |k: &str| std::env::var_os(k).is_some();
+            if set("SSL_CERT_FILE") || set("SSL_CERT_DIR") {
+                // Then the build fails closed, and says which variable, never its value
+                assert!(OutboundClient::new().is_err());
+                let text = log.text();
+                assert!(text.contains("ERROR"), "{text}");
+                assert!(
+                    text.contains("SSL_CERT_FILE") || text.contains("SSL_CERT_DIR"),
+                    "{text}"
+                );
+                assert!(!text.contains("root.pem"), "the value leaked: {text}");
+            } else {
+                // The positive control: with neither variable it builds
+                assert!(OutboundClient::new().is_ok());
+            }
+            return;
+        }
+        // Given a real PEM root, in a file and in a directory
+        let dir = crate::live_lists::test_support::TempDir::new();
+        let pem = dir.path().join("root.pem");
+        std::fs::write(&pem, pem_of(&Pki::new().root_der())).expect("write the PEM");
+        let (file, directory) = (
+            pem.to_str().expect("utf-8"),
+            dir.path().to_str().expect("utf-8"),
+        );
+        let name = "r2_the_production_client_refuses_to_build_when_a_trust_root_variable_is_set";
+        run_child(name, &[("SSL_CERT_FILE", file)]).await;
+        run_child(name, &[("SSL_CERT_DIR", directory)]).await;
+        run_child(name, &[]).await;
     }
 
     // ---- R-3 ----
@@ -587,19 +670,23 @@ mod tests {
 
     #[tokio::test]
     async fn r3_no_header_value_holds_an_app_secret() {
-        // Given four secrets, each a distinct value made for this run
-        let secrets: Vec<(&'static str, String)> = [
+        const KEYS: [&str; 4] = [
             "ADMIN_PASSWORD",
             "ANTHROPIC_API_KEY",
             "EDGE_AUTH_TOKEN",
             "PAGE_HIT_SALT",
-        ]
-        .into_iter()
-        .map(|k| (k, unique(k)))
-        .collect();
-        let vars: Vec<(&'static str, &str)> =
-            secrets.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let _env = EnvGuard::set(&vars).await;
+        ];
+        if !is_child() {
+            // Given four secrets, each a distinct value made for this run, set for the child
+            let secrets: Vec<(&str, String)> = KEYS.into_iter().map(|k| (k, unique(k))).collect();
+            let vars: Vec<(&str, &str)> = secrets.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            run_child("r3_no_header_value_holds_an_app_secret", &vars).await;
+            return;
+        }
+        let secrets: Vec<(&str, String)> = KEYS
+            .into_iter()
+            .map(|k| (k, std::env::var(k).expect("set by the parent")))
+            .collect();
         // When each URL is fetched
         for target in [org(), Target::GithubUser(Page::FIRST), Target::Feed] {
             let rig = rig(Reply::ok(JSON)).await;
@@ -613,6 +700,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ---- Cerberus L6: Link is read only for GitHub's targets ----
+
+    #[tokio::test]
+    async fn l6_the_link_header_is_read_only_for_the_github_targets() {
+        // Given a Link value that is not plain text
+        let unreadable = Reply::ok(JSON).with_header("Link", "<https://x/>; rel=\"n\u{e9}xt\"");
+        // Then a GitHub target fails the fetch, since pagination would be ambiguous
+        let github = rig(unreadable.clone()).await;
+        assert_eq!(
+            reason(github.client.fetch(org()).await),
+            Some(ReasonCode::TransportFailed)
+        );
+        // and the feed, which never paginates, ignores it, and carries no link
+        let feed = rig(unreadable).await;
+        let fetched = feed.client.fetch(Target::Feed).await.expect("the feed");
+        assert_eq!(fetched.link, None);
+        // and a readable Link on the feed is not carried either
+        let feed = rig(Reply::ok(JSON).with_header("Link", "<https://x/>; rel=\"next\"")).await;
+        let fetched = feed.client.fetch(Target::Feed).await.expect("the feed");
+        assert_eq!(fetched.link, None);
     }
 
     #[tokio::test]
