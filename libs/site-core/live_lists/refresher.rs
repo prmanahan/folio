@@ -7,17 +7,20 @@
 //! holds a handle that can start a refresh: the only owner of a
 //! [`Refresher`] is the task [`Refresher::spawn`] starts.
 
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
 use time::OffsetDateTime;
 
-use super::ReasonCode;
+use super::articles::ArticlesList;
 use super::clock::WallClock;
-use super::held::LiveLists;
+use super::held::{Held, ListDocument, LiveLists, Rejected};
 use super::store::ListStore;
 use super::switch::DisabledLists;
+use super::{ListName, ReasonCode};
+use crate::projects_list::ProjectsList;
 
 /// R-17: the 6-hour tick. Not a parameter; tests advance the tokio test clock.
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -83,11 +86,29 @@ pub struct Sources {
     pub articles: Option<Arc<dyn ListSource>>,
 }
 
+impl Sources {
+    fn get(&self, list: ListName) -> Option<&Arc<dyn ListSource>> {
+        match list {
+            ListName::Projects => self.projects.as_ref(),
+            ListName::Articles => self.articles.as_ref(),
+        }
+    }
+}
+
 /// What started a refresh (R-30's summary line).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trigger {
     Start,
     Tick,
+}
+
+impl Trigger {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Trigger::Start => "start",
+            Trigger::Tick => "tick",
+        }
+    }
 }
 
 pub struct Refresher {
@@ -115,8 +136,264 @@ impl Refresher {
         }
     }
 
-    /// Start the refresher without awaiting it.
-    pub fn spawn(self) {}
+    /// Start the refresher without awaiting it (R-5 step 6), and watch it.
+    pub fn spawn(self) {
+        let task = tokio::spawn(self.run());
+        // Detached on purpose: this watcher lives exactly as long as the
+        // refresher and has nothing to return. It exists so the refresher's
+        // end is never silent (R-17). The panic payload is not logged: it
+        // could hold text from a response body (R-30).
+        tokio::spawn(async move {
+            match task.await {
+                Ok(never) => match never {},
+                Err(ended) => tracing::error!(
+                    panicked = ended.is_panic(),
+                    "live lists refresher ended; the held copies stay as they were and nothing will refresh them"
+                ),
+            }
+        });
+    }
+
+    /// One refresh at start, then one every [`REFRESH_INTERVAL`]. A single
+    /// task running one refresh at a time is the single flight (R-17): a tick
+    /// that falls during a refresh is skipped, never run beside it.
+    async fn run(mut self) -> Infallible {
+        let mut interval = tokio::time::interval(REFRESH_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut trigger = Trigger::Start;
+        loop {
+            interval.tick().await;
+            self.refresh(trigger).await;
+            trigger = Trigger::Tick;
+        }
+    }
+
+    /// Fetch every enabled list at once, each bounded by [`REFRESH_BOUND`],
+    /// then commit each list on its own: one list failing never moves the
+    /// other's time (R-17).
+    async fn refresh(&mut self, trigger: Trigger) {
+        let began = tokio::time::Instant::now();
+        let now = self.clock.now();
+        // Owned inputs, not `&self`: the store is `Send` but not `Sync`, so
+        // a borrow of the whole refresher cannot cross an await in a task.
+        let fetch_of = |list: ListName| {
+            fetch(
+                self.disabled.contains(list),
+                self.sources.get(list).cloned(),
+                now,
+            )
+        };
+        let (projects, articles) =
+            futures::join!(fetch_of(ListName::Projects), fetch_of(ListName::Articles));
+        let outcomes = [
+            self.commit(ListName::Projects, projects, began),
+            self.commit(ListName::Articles, articles, began),
+        ];
+        log_summary(trigger, &outcomes);
+    }
+
+    /// Validate, persist, then swap, in that order (R-15). Returns what to
+    /// log. No lock is held here: the held-copy lock is taken only inside the
+    /// swap, and the store is this task's own.
+    fn commit(&mut self, list: ListName, fetch: Fetch, began: tokio::time::Instant) -> ListOutcome {
+        let (document, skipped, requests) = match fetch {
+            Fetch::Disabled => return ListOutcome::idle(list, Outcome::Disabled),
+            Fetch::NoSource => return ListOutcome::idle(list, Outcome::NoSource),
+            Fetch::BoundPassed => (Err(ReasonCode::RefreshBoundPassed), vec![], vec![]),
+            Fetch::Reported(r) => (r.document, r.skipped, r.requests),
+        };
+        let result = document.and_then(|text| match list {
+            ListName::Projects => self.swap_in::<ProjectsList>(
+                text,
+                ReasonCode::ProjectsDocumentRejected,
+                LiveLists::set_projects,
+            ),
+            ListName::Articles => self.swap_in::<ArticlesList>(
+                text,
+                ReasonCode::ArticlesDocumentRejected,
+                LiveLists::set_articles,
+            ),
+        });
+        ListOutcome {
+            list,
+            outcome: match result {
+                Ok(count) => Outcome::Advanced { count },
+                Err(reason) => Outcome::Failed(reason),
+            },
+            skipped,
+            requests,
+            elapsed: began.elapsed(),
+        }
+    }
+
+    fn swap_in<L: ListDocument>(
+        &mut self,
+        text: String,
+        rejected: ReasonCode,
+        swap: fn(&LiveLists, Arc<Held<L>>),
+    ) -> Result<usize, ReasonCode> {
+        let held = Held::<L>::new(text).map_err(|Rejected| rejected)?;
+        // The cause is dropped on purpose: the log carries the reason code
+        // only (R-30).
+        self.store
+            .persist(L::NAME, held.json())
+            .map_err(|_cause| ReasonCode::PersistFailed)?;
+        let count = held.list().count();
+        swap(&self.lists, Arc::new(held));
+        Ok(count)
+    }
+}
+
+/// One list's fetch, bounded by [`REFRESH_BOUND`]. A disabled list is never
+/// fetched (R-19).
+async fn fetch(disabled: bool, source: Option<Arc<dyn ListSource>>, now: OffsetDateTime) -> Fetch {
+    if disabled {
+        return Fetch::Disabled;
+    }
+    let Some(source) = source else {
+        return Fetch::NoSource;
+    };
+    match tokio::time::timeout(REFRESH_BOUND, source.fetch(now)).await {
+        Ok(report) => Fetch::Reported(report),
+        Err(_elapsed) => Fetch::BoundPassed,
+    }
+}
+
+/// What a list's fetch produced, before commit.
+enum Fetch {
+    Disabled,
+    NoSource,
+    BoundPassed,
+    Reported(FetchReport),
+}
+
+enum Outcome {
+    Advanced { count: usize },
+    Failed(ReasonCode),
+    Disabled,
+    NoSource,
+}
+
+struct ListOutcome {
+    list: ListName,
+    outcome: Outcome,
+    skipped: Vec<SkippedPost>,
+    requests: Vec<RequestNote>,
+    elapsed: Duration,
+}
+
+impl ListOutcome {
+    fn idle(list: ListName, outcome: Outcome) -> Self {
+        Self {
+            list,
+            outcome,
+            skipped: Vec::new(),
+            requests: Vec::new(),
+            elapsed: Duration::ZERO,
+        }
+    }
+
+    /// `outcome=advanced count=3 skipped=2:reason elapsed_ms=12`, one list's
+    /// part of the summary line.
+    fn describe(&self) -> String {
+        let skipped = if self.skipped.is_empty() {
+            "none".to_string()
+        } else {
+            self.skipped
+                .iter()
+                .map(|s| format!("{}:{}", s.index, s.reason.as_str()))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let elapsed_ms = self.elapsed.as_millis();
+        match &self.outcome {
+            Outcome::Advanced { count } => {
+                format!("outcome=advanced count={count} skipped={skipped} elapsed_ms={elapsed_ms}")
+            }
+            Outcome::Failed(reason) => format!(
+                "outcome=failed reason={} count=- skipped={skipped} elapsed_ms={elapsed_ms}",
+                reason.as_str()
+            ),
+            Outcome::Disabled => "outcome=disabled".to_string(),
+            Outcome::NoSource => "outcome=no_source".to_string(),
+        }
+    }
+}
+
+/// The per-list lines and the one summary line of a refresh (R-30). The
+/// summary is `info` when every list that was attempted succeeded and `warn`
+/// otherwise; a disabled list or one with no source was not attempted. It is
+/// written on every refresh and never rate-limited.
+fn log_summary(trigger: Trigger, outcomes: &[ListOutcome; 2]) {
+    for o in outcomes {
+        if let Outcome::Failed(reason) = &o.outcome {
+            tracing::warn!(
+                list = o.list.as_str(),
+                reason = reason.as_str(),
+                "live list refresh failed"
+            );
+        }
+        for skip in &o.skipped {
+            tracing::warn!(
+                list = o.list.as_str(),
+                index = skip.index,
+                reason = skip.reason.as_str(),
+                "post skipped"
+            );
+        }
+    }
+    let describe = |list: ListName| {
+        outcomes
+            .iter()
+            .find(|o| o.list == list)
+            .map(ListOutcome::describe)
+            .unwrap_or_default()
+    };
+    let (projects, articles) = (describe(ListName::Projects), describe(ListName::Articles));
+    let requests = join_notes(outcomes, |n| Some(n.status.to_string()));
+    let remaining = join_notes(outcomes, |n| n.ratelimit_remaining.map(|r| r.to_string()));
+    let all_ok = outcomes
+        .iter()
+        .all(|o| !matches!(o.outcome, Outcome::Failed(_)));
+    let trigger = tracing::field::display(trigger.as_str());
+    if all_ok {
+        tracing::info!(
+            trigger,
+            projects,
+            articles,
+            requests,
+            ratelimit_remaining = remaining,
+            "live lists refresh"
+        );
+    } else {
+        tracing::warn!(
+            trigger,
+            projects,
+            articles,
+            requests,
+            ratelimit_remaining = remaining,
+            "live lists refresh"
+        );
+    }
+}
+
+/// `projects:200,projects:200,articles:200` for the notes `pick` keeps, or
+/// `None` when it keeps none, so the field is absent rather than empty.
+fn join_notes(
+    outcomes: &[ListOutcome; 2],
+    pick: impl Fn(&RequestNote) -> Option<String>,
+) -> Option<String> {
+    let parts: Vec<String> = outcomes
+        .iter()
+        .flat_map(|o| {
+            o.requests
+                .iter()
+                .filter_map(|n| pick(n))
+                .map(|v| format!("{}:{v}", o.list.as_str()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(","))
 }
 
 #[cfg(test)]
@@ -458,12 +735,14 @@ mod tests {
      {
         // Given a first run that fetched and persisted both lists
         let env = Env::new();
-        let (p, a) = (projects_doc(T1), articles_doc(T1));
+        // (stamped at the wall clock, as a real fetch is: a copy dated hours
+        // ahead of the clock would be refused at load)
+        let (p, a) = (projects_doc_with(T0, "held"), articles_doc(T0));
         let first_p = FakeSource::answering(&p);
         let first_a = FakeSource::answering(&a);
         let first = launch(env.inputs(None, sources(Some(&first_p), Some(&first_a)))).await;
         settle().await;
-        assert_eq!(freshness(&first, &env).await["articles"], json!(T1));
+        assert_eq!(freshness(&first, &env).await["articles"], json!(T0));
         drop(first);
         // When the server restarts and both sources fail
         let down_p = FakeSource::failing(ReasonCode::RefreshBoundPassed);
@@ -474,7 +753,7 @@ mod tests {
         let fresh = freshness(&second, &env).await;
         assert_eq!(
             (&fresh["projects"], &fresh["articles"]),
-            (&json!(T1), &json!(T1))
+            (&json!(T0), &json!(T0))
         );
     }
 
