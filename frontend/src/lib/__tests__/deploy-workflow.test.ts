@@ -1286,7 +1286,15 @@ describe('R-35: the check scripts, imports and forbidden tokens', () => {
 		['a dynamic import by a concatenation', "const m = await import('node:' + 'fs');", 'import-non-literal'],
 		['a dynamic import by a template literal', 'const m = await import(`node:fs`);', 'import-non-literal'],
 		['a dynamic import by a call', 'const m = await import(pick());', 'import-non-literal'],
-		['a require call', "const fs = require('node:fs');", 'import-non-literal']
+		['a require call', "const fs = require('node:fs');", 'import-non-literal'],
+		// forms with no whitespace, or a comment, where a pattern for the usual spelling would miss
+		['a static import with no whitespace', "import{a}from'node:fs';", 'import-not-allowed:node:fs'],
+		['a side-effect import with no whitespace', "import'node:fs';", 'import-not-allowed:node:fs'],
+		['a dynamic import with a comment before the paren', "const m = await import /*x*/ ('node:fs');", 'import-non-literal'],
+		['a dynamic import with a comment inside the paren', "const m = await import(/*x*/'node:fs');", 'import-non-literal'],
+		['a re-export with no whitespace', "export*from'node:fs';", 'import-not-allowed:node:fs'],
+		['a default import with a tab', "import\tfs\tfrom\t'node:fs';", 'import-not-allowed:node:fs'],
+		['an import followed by a newline and a path', "import fs from\n'node:fs';", 'import-not-allowed:node:fs']
 	];
 	for (const [name, line, rule] of importSeeds) {
 		it(`seed: ${name}`, () => {
