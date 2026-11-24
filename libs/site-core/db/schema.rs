@@ -330,4 +330,131 @@ mod tests {
             "the DROP TABLE _migrations must roll back too — bookkeeping stays intact"
         );
     }
+
+    // ---- migration 008: live_lists (R-15) ----
+
+    /// `(name, sql)` of every table, as SQLite stored it.
+    fn table_sql(conn: &Connection) -> std::collections::BTreeMap<String, String> {
+        let mut stmt = conn
+            .prepare("SELECT name, sql FROM sqlite_master WHERE type='table'")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn migration_008_creates_live_lists_as_a_strict_table() {
+        // Given a fresh database with every migration applied
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        // Then live_lists exists and is STRICT
+        let strict: Option<bool> = conn
+            .query_row(
+                "SELECT strict FROM pragma_table_list WHERE name = 'live_lists'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        assert_eq!(strict, Some(true));
+    }
+
+    #[test]
+    fn migration_008_live_lists_columns_are_name_text_pk_and_document_text_not_null() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('live_lists') ORDER BY cid")
+            .unwrap();
+        let cols: Vec<(String, String, bool, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            cols,
+            vec![
+                ("name".to_string(), "TEXT".to_string(), true, 1),
+                ("document".to_string(), "TEXT".to_string(), true, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn migration_008_name_check_admits_only_projects_and_articles() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        let insert = |name: &str| {
+            conn.execute(
+                "INSERT INTO live_lists (name, document) VALUES (?1, '{}')",
+                [name],
+            )
+        };
+        assert!(insert("projects").is_ok());
+        assert!(insert("articles").is_ok());
+        for bad in ["other", "Projects", "projects ", ""] {
+            assert!(insert(bad).is_err(), "{bad:?} must violate the CHECK");
+        }
+    }
+
+    #[test]
+    fn migration_008_holds_one_row_per_list() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute("INSERT INTO live_lists VALUES ('projects', '{}')", [])
+            .unwrap();
+        assert!(
+            conn.execute("INSERT INTO live_lists VALUES ('projects', '{}')", [])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn migration_008_leaves_every_existing_table_schema_unchanged() {
+        // Given a database migrated through 007 only
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations_with(&conn, &MIGRATIONS[..7]).unwrap();
+        let before = table_sql(&conn);
+        assert!(!before.contains_key("live_lists"), "setup: 008 not applied");
+        // When the remaining migration runs
+        run_migrations(&conn).unwrap();
+        let after = table_sql(&conn);
+        // Then every table that existed has the identical stored schema,
+        // and the only addition is live_lists
+        for (name, sql) in &before {
+            assert_eq!(after.get(name), Some(sql), "table {name} changed");
+        }
+        let added: Vec<&String> = after.keys().filter(|k| !before.contains_key(*k)).collect();
+        assert_eq!(added, vec!["live_lists"]);
+    }
+
+    #[test]
+    fn migration_008_runs_against_a_populated_database_and_keeps_its_rows() {
+        // Given a populated database migrated through 007
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations_with(&conn, &MIGRATIONS[..7]).unwrap();
+        conn.execute(
+            "INSERT INTO site_config (key, value) VALUES ('probe.key', 'probe-value')",
+            [],
+        )
+        .unwrap();
+        // When 008 applies
+        run_migrations(&conn).unwrap();
+        // Then the row survives and 008 is recorded
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM site_config WHERE key = 'probe.key'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "probe-value");
+        let recorded: Option<String> = conn
+            .query_row("SELECT name FROM _migrations WHERE version = 8", [], |r| {
+                r.get(0)
+            })
+            .ok();
+        assert_eq!(recorded.as_deref(), Some("live_lists"));
+    }
 }
