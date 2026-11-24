@@ -124,6 +124,7 @@ pub fn build_app(
     Router::new()
         .route("/api/health", get(routes::health_check))
         .merge(routes::public_router())
+        .merge(routes::lists::routes())
         .merge(routes::ai::routes_with_connect_info())
         .merge(routes::admin::admin_router(db_state.clone()))
         .route("/api/avatars/{filename}", get(serve_avatar))
