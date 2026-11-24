@@ -90,6 +90,7 @@ Expect `1` (a "database is locked" error is safe to retry), then re-run B4's SEL
 - **Primary:** redeploy merge 1's recorded image with `fly deploy --image <recorded image> -a folio-prmanahan`, from a post-merge-2 checkout. A pre-merge-2 checkout's `fly.toml` still runs `./folio check-projects`, and the image's baked `projects.json` is past its 30-minute bound, so the release command refuses the deploy.
 - **Slow path:** revert merge 2 through `main`, which deploys. It needs GitHub up, because the reverted code fetches the list in CI.
 - **After either,** the old release ignores the `live_lists` table and serves its own baked list, and its prompt reads the `articles` table. `/api/lists/freshness` answers the JSON 404, so the daily check is red every day; that is expected.
+- **Rolled-back state (image rollback).** `main` still contains merge 2 and CI deploys every push to main. Merge nothing else until the revert PR is open and merged: the next push to main redeploys merge 2 through CI and undoes the rollback.
 - **Rolling back for bad content:** set `LIVE_LISTS_DISABLED` for that list before rolling forward. Otherwise the poisoned row loads and is served from the first request.
 
 ## Break-glass runbook
