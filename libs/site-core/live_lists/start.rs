@@ -47,6 +47,11 @@ use crate::state::{AppState, DbState};
 /// entry can't go stale faster than the window it's measured against.
 const GLOBAL_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
+/// Set by the panic-hook test's child process: a test build keeps libtest's
+/// hook unless this is present, so the one install call below is the same
+/// line production runs.
+const CHILD_VAR: &str = "FOLIO_TEST_PANIC_HOOK_CHILD";
+
 /// Everything `start` is given. Production fills it with
 /// [`StartInputs::production`]. The sources and the store are not fields a
 /// caller outside this crate can set: `start` builds the production ones
@@ -224,10 +229,7 @@ where
     // configuration are `StartError`s the caller logs, so the hook hides
     // nothing an operator needs. A test build keeps libtest's hook, so its
     // failures stay readable, unless the hook test's child process asks for it.
-    #[cfg(not(test))]
-    super::panic_hook::install();
-    #[cfg(test)]
-    if std::env::var_os("FOLIO_TEST_PANIC_HOOK_CHILD").is_some() {
+    if cfg!(not(test)) || std::env::var_os(CHILD_VAR).is_some() {
         super::panic_hook::install();
     }
 
@@ -1239,7 +1241,7 @@ mod tests {
 
     /// The env var that turns this test binary into the child of
     /// `a_start_installs_the_payload_free_hook`.
-    const CHILD: &str = "FOLIO_TEST_PANIC_HOOK_CHILD";
+    const CHILD: &str = CHILD_VAR;
     const SENTINEL: &str = "FOLIO_TEST_PANIC_SENTINEL";
 
     #[tokio::test]
