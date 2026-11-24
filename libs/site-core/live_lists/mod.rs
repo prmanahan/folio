@@ -9,6 +9,7 @@
 pub mod articles;
 pub mod clock;
 pub mod held;
+pub mod outbound;
 pub mod panic_hook;
 pub mod reason;
 pub mod refresher;
@@ -20,6 +21,8 @@ pub mod switch;
 mod harness;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod tls_harness;
 
 pub use held::LiveLists;
 pub use reason::ReasonCode;
