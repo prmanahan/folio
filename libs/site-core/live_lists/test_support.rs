@@ -136,9 +136,23 @@ pub(crate) struct FakeSource {
     calls: AtomicUsize,
     behaviour: Mutex<Behaviour>,
     probe: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Slept on tokio's clock before answering.
+    delay: std::time::Duration,
 }
 
 impl FakeSource {
+    /// Answers with `document` after sleeping `delay` on tokio's clock.
+    pub(crate) fn answering_after(document: &str, delay: std::time::Duration) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            behaviour: Mutex::new(Behaviour::Report(FetchReport::document(
+                document.to_string(),
+            ))),
+            probe: None,
+            delay,
+        })
+    }
+
     pub(crate) fn answering(document: &str) -> Arc<Self> {
         Self::with(
             Behaviour::Report(FetchReport::document(document.to_string())),
@@ -171,6 +185,7 @@ impl FakeSource {
             calls: AtomicUsize::new(0),
             behaviour: Mutex::new(behaviour),
             probe,
+            delay: std::time::Duration::ZERO,
         })
     }
 
@@ -192,7 +207,11 @@ impl ListSource for FakeSource {
             probe();
         }
         let behaviour = self.behaviour.lock().expect("behaviour lock").clone();
+        let delay = self.delay;
         Box::pin(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
             match behaviour {
                 Behaviour::Report(report) => report,
                 Behaviour::Never => std::future::pending().await,

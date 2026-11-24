@@ -9,6 +9,7 @@
 pub mod articles;
 pub mod clock;
 pub mod held;
+pub mod panic_hook;
 pub mod reason;
 pub mod refresher;
 pub mod start;
