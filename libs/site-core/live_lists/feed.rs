@@ -1751,6 +1751,20 @@ pub(crate) mod tests {
         Post(PostRule),
     }
 
+    /// Post rules the parser cannot produce: the field-level check runs first
+    /// for an empty or angle-bracket title or summary, and the validator is a
+    /// backstop. (`FeedRule::DocumentInvalid` is the feed-level counterpart,
+    /// an internal invariant with its own test.) One predicate, shared by the
+    /// reconciliation of the negative table and the mutation property.
+    pub(crate) fn unreachable_post_rule(rule: PostRule) -> bool {
+        matches!(
+            rule,
+            PostRule::Title(TextRule::Empty | TextRule::AngleBracket)
+                | PostRule::Summary(TextRule::Empty | TextRule::AngleBracket)
+                | PostRule::Validator
+        )
+    }
+
     /// One negative fixture per R-7 to R-12 bullet and listed alternative
     /// (R-14), as `(name, body, verdict)`. A body here is a failed feed or a
     /// skipped post; no entry is a valid feed.
@@ -2097,6 +2111,17 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_negative_table_holds_exactly_65_fixtures_with_distinct_names() {
+        // Pinned: a dropped fixture shrinks coverage while every other test
+        // stays green, and a repeated name hides which one a failure was.
+        let fixtures = negative_fixtures();
+        assert_eq!(fixtures.len(), 65);
+        let names: std::collections::BTreeSet<&str> =
+            fixtures.iter().map(|(name, _, _)| *name).collect();
+        assert_eq!(names.len(), fixtures.len(), "a fixture name repeats");
+    }
+
+    #[test]
     fn every_negative_fixture_is_negative_for_its_stated_rule() {
         // Given the table R-13 runs through a live refresher
         let fixtures = negative_fixtures();
@@ -2369,7 +2394,16 @@ pub(crate) mod tests {
         for i in 0..20_000 {
             let input = mutate(&seeds[i % seeds.len()], &mut rng);
             // When parsed (a panic fails the test)
-            if let Ok(out) = parse_feed(&input, now()) {
+            let parsed = parse_feed(&input, now());
+            if let Err(failure) = &parsed {
+                // an internal invariant, never the outcome of an input
+                assert_ne!(failure.rule, FeedRule::DocumentInvalid, "case {i}");
+            }
+            if let Ok(out) = parsed {
+                // a skip is never for a rule the parser cannot produce
+                for skipped in &out.skipped {
+                    assert!(!unreachable_post_rule(skipped.rule), "case {i}");
+                }
                 accepted += 1;
                 // Then an Ok output passes the articles validator, holds at
                 // most 20 posts, and every skip index is within the first 20

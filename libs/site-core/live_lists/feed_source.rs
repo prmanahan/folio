@@ -156,7 +156,7 @@ mod tests {
     use crate::live_lists::ListName;
     use crate::live_lists::articles::{LinkRule, TextRule};
     use crate::live_lists::feed::Field;
-    use crate::live_lists::feed::tests::{Verdict, negative_fixtures};
+    use crate::live_lists::feed::tests::{Verdict, negative_fixtures, unreachable_post_rule};
     use crate::live_lists::harness::{Env, LogCapture, Running, launch, settle};
     use crate::live_lists::refresher::{REFRESH_INTERVAL, RequestNote, Sources};
     use crate::live_lists::test_support::{T0, articles_doc};
@@ -237,6 +237,7 @@ mod tests {
     /// An exhaustive witness: a rule added to the parser fails to compile
     /// here until it has an index, and `the_rule_lists_cover_every_rule`
     /// then fails until the list holds it.
+    /// Every feed rule has its own index.
     fn index_of_feed(rule: FeedRule) -> usize {
         match rule {
             FeedRule::TooLarge => 0,
@@ -258,6 +259,8 @@ mod tests {
     }
     const FEED_RULES: usize = 15;
 
+    /// Every post rule has its own index, except that the four `MissingField`
+    /// alternatives share one: the cover test needs one index per rule, not per field.
     fn index_of_post(rule: PostRule) -> usize {
         match rule {
             PostRule::UnknownChild => 0,
@@ -321,18 +324,6 @@ mod tests {
             "all_post_rules is missing a rule"
         );
         assert_eq!(post.len(), POST_RULES, "all_post_rules repeats a rule");
-    }
-
-    /// Rules the parser cannot produce: the field-level check runs first for
-    /// an empty or angle-bracket title or summary, the validator is a
-    /// backstop, and `DocumentInvalid` is an internal invariant (its own test).
-    fn unreachable_post_rule(rule: PostRule) -> bool {
-        matches!(
-            rule,
-            PostRule::Title(TextRule::Empty | TextRule::AngleBracket)
-                | PostRule::Summary(TextRule::Empty | TextRule::AngleBracket)
-                | PostRule::Validator
-        )
     }
 
     #[test]
