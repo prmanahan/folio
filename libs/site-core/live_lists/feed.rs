@@ -661,7 +661,7 @@ fn assemble(scan: Scan, fetched_at: &str) -> Result<FeedOutcome, FeedRule> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::live_lists::articles;
     use serde_json::Value;
@@ -1705,6 +1705,301 @@ mod tests {
                 rule: PostRule::MissingField(Field::Title)
             }]
         );
+    }
+
+    // ---- the negative fixture table (R-13 runs it through a live refresher) ----
+
+    /// What a negative fixture must do to the feed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Verdict {
+        /// The whole feed fails with this rule.
+        Feed(FeedRule),
+        /// The feed is accepted and item 0 is skipped with this rule.
+        Post(PostRule),
+    }
+
+    /// One negative fixture per R-7 to R-12 bullet and listed alternative
+    /// (R-14), as `(name, body, verdict)`. A body here is a failed feed or a
+    /// skipped post; no entry is a valid feed.
+    pub(crate) fn negative_fixtures() -> Vec<(&'static str, Vec<u8>, Verdict)> {
+        let mut out: Vec<(&'static str, Vec<u8>, Verdict)> = Vec::new();
+        let mut feed_fail = |name: &'static str, body: String, rule: FeedRule| {
+            out.push((name, body.into_bytes(), Verdict::Feed(rule)));
+        };
+        let dt = "<!DOCTYPE rss>";
+        let pi = "<?xml-stylesheet href=\"a.css\"?>";
+        let decl = "<?xml version=\"1.0\"?>";
+        let twenty: String = (0..20).map(good).collect();
+        let ch = format!("<channel>{}</channel>", good(1));
+
+        feed_fail(
+            "r7 parse error: mismatched end tag",
+            "<rss><channel><item></channel></rss>".into(),
+            FeedRule::Xml,
+        );
+        feed_fail(
+            "r7 parse error: bare ampersand",
+            feed(&good_with(Field::Title, "<title>A & B</title>")),
+            FeedRule::Xml,
+        );
+        feed_fail(
+            "r7 prolog: text",
+            format!("junk{}", feed_plain(&good(1))),
+            FeedRule::Prolog,
+        );
+        feed_fail(
+            "r7 prolog: comment",
+            format!("<!-- c -->{}", feed_plain(&good(1))),
+            FeedRule::Prolog,
+        );
+        feed_fail(
+            "r7 prolog: byte-order mark",
+            format!("\u{FEFF}{}", feed_plain(&good(1))),
+            FeedRule::Prolog,
+        );
+        feed_fail(
+            "r7 doctype: prolog",
+            format!("{dt}{}", feed(&good(1))),
+            FeedRule::Doctype,
+        );
+        feed_fail(
+            "r7 doctype: inside a field",
+            feed(&good_with(Field::Title, &format!("<title>T{dt}</title>"))),
+            FeedRule::Doctype,
+        );
+        feed_fail(
+            "r7 doctype: inside discarded content",
+            feed(&format!("<language>en{dt}</language>{}", good(1))),
+            FeedRule::Doctype,
+        );
+        feed_fail(
+            "r7 doctype: after the 20th item",
+            feed(&format!("{twenty}<item><title>T{dt}</title></item>")),
+            FeedRule::Doctype,
+        );
+        feed_fail(
+            "r7 processing instruction: inside a field",
+            feed(&good_with(Field::Title, &format!("<title>T{pi}</title>"))),
+            FeedRule::ProcessingInstruction,
+        );
+        feed_fail(
+            "r7 second declaration",
+            format!("{decl}{}", feed(&good(1))),
+            FeedRule::XmlDeclaration,
+        );
+        feed_fail(
+            "r7 root other than rss",
+            "<feed><channel/></feed>".into(),
+            FeedRule::Root,
+        );
+        feed_fail(
+            "r7 second channel",
+            format!("<rss>{ch}{ch}</rss>"),
+            FeedRule::Channel,
+        );
+        feed_fail(
+            "r7 element beside channel",
+            format!("<rss>{ch}<extra/></rss>"),
+            FeedRule::Channel,
+        );
+        feed_fail(
+            "r7 text after </rss>",
+            format!("<rss>{ch}</rss>x"),
+            FeedRule::Close,
+        );
+        feed_fail(
+            "r7 truncated before </rss>",
+            format!("<rss>{ch}"),
+            FeedRule::Close,
+        );
+        feed_fail(
+            "r7 text under rss",
+            format!("<rss>x{ch}</rss>"),
+            FeedRule::StrayContent,
+        );
+        feed_fail(
+            "r7 cdata under channel",
+            feed(&format!("{}<![CDATA[x]]>", good(1))),
+            FeedRule::StrayContent,
+        );
+        feed_fail(
+            "r7 comment under channel",
+            feed(&format!("<!-- c -->{}", good(1))),
+            FeedRule::StrayContent,
+        );
+        feed_fail(
+            "r7 nesting 17 deep",
+            feed_plain(&format!("{}{}", nested_to(17), good(1))),
+            FeedRule::TooDeep,
+        );
+        feed_fail(
+            "r7 body over the cap",
+            format!("{}{}", feed(&good(1)), " ".repeat(MAX_BODY_BYTES)),
+            FeedRule::TooLarge,
+        );
+        feed_fail("r12 no item", feed(""), FeedRule::NoItems);
+        feed_fail(
+            "r12 every post bad",
+            feed("<item></item><item></item>"),
+            FeedRule::NoValidPost,
+        );
+        feed_fail(
+            "r12 doctype in the 21st item",
+            feed(&format!("{twenty}<item><title>T{dt}</title></item>")),
+            FeedRule::Doctype,
+        );
+        // not valid UTF-8, anywhere
+        let mut bytes = feed(&good(1)).into_bytes();
+        bytes.extend_from_slice(b"\n\xFF");
+        out.push(("r7 invalid UTF-8", bytes, Verdict::Feed(FeedRule::NotUtf8)));
+
+        let mut post_fail = |name: &'static str, item: String, rule: PostRule| {
+            let body = feed(&format!("{item}{}", good(1)));
+            out.push((name, body.into_bytes(), Verdict::Post(rule)));
+        };
+        post_fail(
+            "r8 item inside a rejected item",
+            good_plus(&format!("<extra>{}</extra>", good(9))),
+            PostRule::UnknownChild,
+        );
+        post_fail(
+            "r9 atom:link child",
+            good_plus("<atom:link href=\"x\"/>"),
+            PostRule::UnknownChild,
+        );
+        post_fail(
+            "r9 self-closing guid",
+            good_plus("<guid/>"),
+            PostRule::SelfClosingChild,
+        );
+        post_fail(
+            "r9 duplicate guid",
+            good_plus("<guid>a</guid><guid>b</guid>"),
+            PostRule::DuplicateField,
+        );
+        post_fail(
+            "r9 empty guid",
+            good_plus("<guid></guid>"),
+            PostRule::EmptyField,
+        );
+        post_fail(
+            "r9 cdata in guid",
+            good_plus("<guid><![CDATA[x]]></guid>"),
+            PostRule::CDataInField,
+        );
+        post_fail(
+            "r9 missing link",
+            "<item><title>T</title><description>D</description><pubDate>Tue, 28 Apr 2026 00:00:00 GMT</pubDate></item>".into(),
+            PostRule::MissingField(Field::Link),
+        );
+        post_fail(
+            "r9 field start tag with an attribute",
+            good_with(Field::Title, "<title lang=\"en\">T</title>"),
+            PostRule::StartTagNotBare,
+        );
+        post_fail(
+            "r9 text directly in item",
+            good_plus("stray"),
+            PostRule::StrayContent,
+        );
+        post_fail(
+            "r10 element in a field",
+            good_with(Field::Title, "<title>a<b>c</b></title>"),
+            PostRule::ElementInField,
+        );
+        post_fail(
+            "r10 cdata in a field",
+            good_with(Field::Title, "<title><![CDATA[x]]></title>"),
+            PostRule::CDataInField,
+        );
+        post_fail(
+            "r10 comment in a field",
+            good_with(Field::Title, "<title>a<!-- c -->b</title>"),
+            PostRule::CommentInField,
+        );
+        post_fail(
+            "r10 numeric reference",
+            good_with(Field::Title, "<title>a&#65;</title>"),
+            PostRule::NumericReference,
+        );
+        post_fail(
+            "r10 unknown entity",
+            good_with(Field::Title, "<title>a&nbsp;</title>"),
+            PostRule::UnknownEntity,
+        );
+        post_fail(
+            "r10 decoded less-than",
+            good_with(Field::Title, "<title>a&lt;b</title>"),
+            PostRule::AngleBracketInField,
+        );
+        post_fail(
+            "r11 title over 200",
+            good_with(Field::Title, &format!("<title>{}</title>", "t".repeat(201))),
+            PostRule::Title(TextRule::TooLong),
+        );
+        post_fail(
+            "r11 summary over 600",
+            good_with(
+                Field::Description,
+                &format!("<description>{}</description>", "d".repeat(601)),
+            ),
+            PostRule::Summary(TextRule::TooLong),
+        );
+        post_fail(
+            "r11 rejected char in the title",
+            good_with(Field::Title, "<title>a\u{2028}b</title>"),
+            PostRule::Title(TextRule::RejectedChar),
+        );
+        post_fail(
+            "r11 link host",
+            link_item("https://www.mnemra.dev/blog/x/"),
+            PostRule::Link(LinkRule::Host),
+        );
+        post_fail(
+            "r11 link scheme",
+            link_item("http://mnemra.dev/blog/x/"),
+            PostRule::Link(LinkRule::Scheme),
+        );
+        post_fail(
+            "r11 link query",
+            link_item("https://mnemra.dev/blog/x/?a=1"),
+            PostRule::Link(LinkRule::Query),
+        );
+        post_fail(
+            "r11 link path",
+            link_item("https://mnemra.dev/about/"),
+            PostRule::Link(LinkRule::Path),
+        );
+        post_fail(
+            "r11 pubDate not RFC 2822",
+            date_item("yesterday"),
+            PostRule::PubDate,
+        );
+        post_fail(
+            "r11 pubDate in year 10000 UTC",
+            date_item("Fri, 31 Dec 9999 23:00:00 -0100"),
+            PostRule::PubDate,
+        );
+        out
+    }
+
+    #[test]
+    fn every_negative_fixture_is_negative_for_its_stated_rule() {
+        // Given the table R-13 runs through a live refresher
+        let fixtures = negative_fixtures();
+        assert!(fixtures.len() >= 45, "{} fixtures", fixtures.len());
+        for (name, body, verdict) in fixtures {
+            // Then each fails the feed, or skips item 0, by exactly its rule
+            let got = match parse_feed(&body, now()) {
+                Err(rule) => Verdict::Feed(rule),
+                Ok(out) => {
+                    assert_eq!(out.skipped.len(), 1, "{name}: {:?}", out.skipped);
+                    assert_eq!(out.skipped[0].index, 0, "{name}");
+                    Verdict::Post(out.skipped[0].rule)
+                }
+            };
+            assert_eq!(got, verdict, "{name}");
+        }
     }
 
     // ---- declarations and encoding ----
