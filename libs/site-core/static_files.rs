@@ -244,26 +244,48 @@ fn check_csp_meta(index: &std::path::Path) -> bool {
     }
 }
 
+/// Why the static directory cannot be served. Operator configuration only.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StaticDirError {
+    NotADirectory(String),
+    NoIndex(String),
+}
+
+impl std::fmt::Display for StaticDirError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StaticDirError::NotADirectory(path) => write!(
+                f,
+                "STATIC_DIR '{path}' does not exist or is not a directory. \
+                 Set STATIC_DIR to the path containing your built frontend."
+            ),
+            StaticDirError::NoIndex(path) => write!(
+                f,
+                "STATIC_DIR '{path}' exists but contains no index.html. \
+                 Run the frontend build first."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StaticDirError {}
+
 /// Validate that the static directory and its index.html exist at startup.
-/// Panics with a clear message if either is missing.
-pub fn validate_static_dir(path: &str) {
+///
+/// # Errors
+/// [`StaticDirError`] when either is missing. The caller logs it and exits;
+/// this does not panic, so the process panic hook never has to carry it.
+pub fn validate_static_dir(path: &str) -> Result<(), StaticDirError> {
     let dir = std::path::Path::new(path);
     if !dir.is_dir() {
-        panic!(
-            "STATIC_DIR '{}' does not exist or is not a directory. \
-             Set STATIC_DIR to the path containing your built frontend.",
-            path
-        );
+        return Err(StaticDirError::NotADirectory(path.to_string()));
     }
     let index = dir.join("index.html");
     if !index.is_file() {
-        panic!(
-            "STATIC_DIR '{}' exists but contains no index.html. \
-             Run the frontend build first.",
-            path
-        );
+        return Err(StaticDirError::NoIndex(path.to_string()));
     }
     check_csp_meta(&index);
+    Ok(())
 }
 
 /// Serve an avatar image from `AVATAR_DIR` (default `data/avatars`).
@@ -420,7 +442,7 @@ mod tests {
             .with_ansi(false)
             .finish();
         let found = tracing::subscriber::with_default(subscriber, || {
-            validate_static_dir(dir.to_str().unwrap());
+            validate_static_dir(dir.to_str().unwrap()).unwrap();
             check_csp_meta(&dir.join("index.html"))
         });
         assert!(!found);
@@ -435,6 +457,27 @@ mod tests {
         )
         .unwrap();
         assert!(check_csp_meta(&dir.join("index.html")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_directory_is_an_error_naming_it_not_a_panic() {
+        let missing = std::env::temp_dir().join(format!("folio-no-such-{}", std::process::id()));
+        let path = missing.to_str().unwrap();
+        let err = validate_static_dir(path).unwrap_err();
+        assert_eq!(err, StaticDirError::NotADirectory(path.to_string()));
+        assert!(err.to_string().contains(path) && err.to_string().contains("STATIC_DIR"));
+    }
+
+    #[test]
+    fn a_directory_without_index_html_is_an_error_naming_it_not_a_panic() {
+        let dir = std::env::temp_dir().join(format!("folio-no-index-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_str().unwrap();
+        assert_eq!(
+            validate_static_dir(path).unwrap_err(),
+            StaticDirError::NoIndex(path.to_string())
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

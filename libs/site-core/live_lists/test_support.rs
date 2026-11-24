@@ -128,6 +128,8 @@ pub(crate) enum Behaviour {
     Report(FetchReport),
     /// Never answer.
     Never,
+    /// Panic while fetching.
+    Panic,
 }
 
 /// A source the test steers: it counts fetches, runs an optional probe at
@@ -162,6 +164,10 @@ impl FakeSource {
 
     pub(crate) fn failing(reason: ReasonCode) -> Arc<Self> {
         Self::with(Behaviour::Report(FetchReport::failed(reason)), None)
+    }
+
+    pub(crate) fn panicking() -> Arc<Self> {
+        Self::with(Behaviour::Panic, None)
     }
 
     pub(crate) fn never_answering() -> Arc<Self> {
@@ -215,6 +221,7 @@ impl ListSource for FakeSource {
             match behaviour {
                 Behaviour::Report(report) => report,
                 Behaviour::Never => std::future::pending().await,
+                Behaviour::Panic => panic!("a source panicked"),
             }
         })
     }
@@ -227,5 +234,14 @@ pub(crate) struct PanickingStore;
 impl ListStore for PanickingStore {
     fn persist(&mut self, _list: ListName, _document: &str) -> Result<(), PersistError> {
         panic!("forced panic in the persist step");
+    }
+}
+
+/// A store whose persist panics with a payload the test chose.
+pub(crate) struct SentinelStore(pub(crate) String);
+
+impl ListStore for SentinelStore {
+    fn persist(&mut self, _list: ListName, _document: &str) -> Result<(), PersistError> {
+        panic!("{}", self.0);
     }
 }

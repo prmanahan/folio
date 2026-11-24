@@ -994,4 +994,50 @@ mod tests {
             "{line}"
         );
     }
+
+    // ---- one source's panic fails only its own list ----
+
+    #[tokio::test(start_paused = true)]
+    async fn r13_a_panicking_source_fails_its_own_list_and_the_other_still_advances_and_the_next_tick_runs()
+     {
+        // Given a projects source that panics and a good articles source
+        let env = Env::new();
+        env.seed(ListName::Projects, &projects_doc(T0));
+        let projects = FakeSource::panicking();
+        let articles = FakeSource::answering(&articles_doc(T1));
+        let (log, _guard) = LogCapture::install();
+        let running = launch(env.inputs(None, sources(Some(&projects), Some(&articles)))).await;
+        settle().await;
+        // Then articles advanced, projects kept its held copy
+        let fresh = freshness(&running, &env).await;
+        assert_eq!(fresh["articles"], json!(T1));
+        assert_eq!(fresh["projects"], json!(T0));
+        // and the failure is logged with its reason code
+        let line = log.one_line("live list refresh failed");
+        assert!(line.contains(r#"list="projects""#), "{line}");
+        assert!(line.contains(r#"reason="source_panicked""#), "{line}");
+        // and the refresher is alive: the next tick fetches both again
+        tokio::time::advance(REFRESH_INTERVAL).await;
+        settle().await;
+        assert_eq!((projects.calls(), articles.calls()), (2, 2));
+        assert!(
+            log.lines_containing("refresher ended").is_empty(),
+            "{}",
+            log.text()
+        );
+    }
+
+    // ---- Debug never prints document text ----
+
+    #[test]
+    fn a_fetch_report_debug_prints_the_document_length_never_its_text() {
+        let sentinel = "sentinel-text-in-a-document";
+        let report = FetchReport::document(format!("{{\"x\":\"{sentinel}\"}}"));
+        let shown = format!("{report:?}");
+        assert!(!shown.contains(sentinel), "{shown}");
+        assert!(
+            shown.contains(&format!("{}", report.document.as_ref().unwrap().len())),
+            "{shown}"
+        );
+    }
 }
