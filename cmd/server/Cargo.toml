@@ -21,5 +21,4 @@ dotenvy = { workspace = true }
 
 [dev-dependencies]
 axum-test = { workspace = true }
-time = { workspace = true, features = ["formatting"] }
 serde_json = { workspace = true }
