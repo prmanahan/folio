@@ -8,6 +8,7 @@
 
 pub mod articles;
 pub mod clock;
+pub mod github;
 pub mod held;
 pub mod outbound;
 pub mod panic_hook;
