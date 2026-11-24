@@ -35,7 +35,11 @@ impl DeleteOutcome {
 /// Delete `list`'s row. The cause of a failure is dropped: the caller logs
 /// the `delete_failed` reason code.
 pub fn delete_row(conn: &Connection, list: ListName) -> DeleteOutcome {
-    DeleteOutcome::Failed
+    match conn.execute("DELETE FROM live_lists WHERE name = ?1", [list.as_str()]) {
+        Ok(0) => DeleteOutcome::Absent,
+        Ok(_) => DeleteOutcome::Deleted,
+        Err(_) => DeleteOutcome::Failed,
+    }
 }
 
 /// Why a list loads as no data yet, with its time missing (R-16).
@@ -66,7 +70,21 @@ impl NoData {
 /// ends in. Only the ahead-of-now bound is applied, never the behind bound:
 /// a restart after a long stop must serve the copy held before it.
 pub fn load<L: ListDocument>(conn: &Connection, now: OffsetDateTime) -> Result<Held<L>, NoData> {
-    Err(NoData::Absent)
+    let row: Result<String, rusqlite::Error> = conn.query_row(
+        "SELECT document FROM live_lists WHERE name = ?1",
+        [L::NAME.as_str()],
+        |r| r.get(0),
+    );
+    let document = match row {
+        Ok(document) => document,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Err(NoData::Absent),
+        Err(_) => return Err(NoData::Unreadable),
+    };
+    let held = Held::<L>::new(document).map_err(|_| NoData::Invalid)?;
+    if held.list().fetched_at_instant() - now > MAX_AGE_AHEAD {
+        return Err(NoData::AheadOfClock);
+    }
+    Ok(held)
 }
 
 /// R-15's write: one transaction, one row per list, overwritten.
@@ -100,7 +118,16 @@ impl SqliteStore {
 
 impl ListStore for SqliteStore {
     fn persist(&mut self, list: ListName, document: &str) -> Result<(), PersistError> {
-        Err(PersistError(rusqlite::Error::InvalidQuery))
+        let write = |conn: &mut Connection| -> Result<(), rusqlite::Error> {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT INTO live_lists (name, document) VALUES (?1, ?2) \
+                 ON CONFLICT(name) DO UPDATE SET document = excluded.document",
+                rusqlite::params![list.as_str(), document],
+            )?;
+            tx.commit()
+        };
+        write(&mut self.conn).map_err(PersistError)
     }
 }
 
