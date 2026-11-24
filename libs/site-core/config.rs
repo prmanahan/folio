@@ -6,7 +6,7 @@ use std::env;
 /// environment or in logs.
 pub const EDGE_AUTH_TOKEN_PREFIX: &str = "folio_edge_";
 
-/// Where the built frontend, and `projects.json` with it, lives when `STATIC_DIR` is unset.
+/// Where the built frontend lives when `STATIC_DIR` is unset.
 pub const DEFAULT_STATIC_DIR: &str = "frontend/build";
 
 /// Number of hex characters required after [`EDGE_AUTH_TOKEN_PREFIX`].

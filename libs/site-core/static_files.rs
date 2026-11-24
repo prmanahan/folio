@@ -35,7 +35,7 @@ pub(crate) struct FromStaticService(pub(crate) HeaderValue);
 /// `Content-Type` and its headers update the cached response, so a 304 with a
 /// weaker CSP would downgrade the cached page; non-SvelteKit HTML would
 /// otherwise miss the policy too. This sets no CSP header itself. No path gets
-/// special caching handling: `projects.json` is an ordinary static file.
+/// special caching handling.
 async fn mark_static_response(
     State(policy): State<HeaderValue>,
     request: axum::extract::Request,
