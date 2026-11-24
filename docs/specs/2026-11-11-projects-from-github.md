@@ -4,6 +4,7 @@ lock_tag: "brief/projects-from-github/spec-locked"             # brief/projects-
 ---
 
 # Feature: projects page from GitHub
+Superseded by `docs/specs/2026-11-18-live-lists-and-blog-move.md` except for the clauses that spec adopts
 
 > **Spec for:** folio task #4726 · **Date:** 2026-11-11, amended 2026-11-13 and 2026-11-18
 > **Design ref:** Frame `docs/intent/projects-from-github-frame.md` (locked, tag `brief/projects-from-github/frame-locked`, commit `d1a2633bf6b3a1a5abbd2b5c357b1115a75f3479`, blob `d60640f7667fbbd58c64f165518b43930406e64d`) · intake `docs/intent/projects-from-github.md`
