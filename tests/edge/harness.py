@@ -155,10 +155,11 @@ class FolioServer:
     env: extra child environment (str or bytes values; a None value leaves the variable unset).
     static_files: {name: bytes|str|dict} written into STATIC_DIR next to index.html (a dict is dumped as JSON).
     seed: (projects_doc, articles_doc) inserted into live_lists before the start under test; either may be None.
-    ready_timeout: seconds to wait for /api/health 200; expect_ready False skips the wait (the caller does it).
+    ready_timeout: seconds to wait for /api/health 200, a hard bound (each request is clamped to the time left);
+    expect_ready False skips the wait (the caller does it); spawn False starts no `serve` (see run_command).
     """
 
-    def __init__(self, binary, env=None, static_files=None, seed=None, ready_timeout=60, expect_ready=True):
+    def __init__(self, binary, env=None, static_files=None, seed=None, ready_timeout=60, expect_ready=True, spawn=True):
         self.binary = binary
         self.dir = tempfile.mkdtemp(prefix="folio-edge-")
         self.static_dir = os.path.join(self.dir, "static")
@@ -179,17 +180,20 @@ class FolioServer:
         self._log = None
         self.spawned_at = None
         self.ready_at = None
+        self.active_log_path = self.log_path
         try:
             if seed is not None:
                 self._seed(*seed)
-            self._spawn(dict(env or {}))
-            if expect_ready:
+            self._extra_env = dict(env or {})
+            if spawn:
+                self._spawn(self._extra_env)
+            if spawn and expect_ready:
                 self.wait_ready(ready_timeout)
         except BaseException:
             self.stop()
             raise
 
-    def _spawn(self, extra, log_path=None, count=True):
+    def _env(self, extra, count=True):
         env = {
             "PATH": os.environ.get("PATH", ""),
             "STATIC_DIR": self.static_dir,
@@ -207,7 +211,17 @@ class FolioServer:
             START_COUNT["all"] += 1
             for name in _enabled_lists(env.get("LIVE_LISTS_DISABLED")):
                 START_COUNT[name] += 1
-        self._log = open(log_path or self.log_path, "wb")
+        return env
+
+    def run_command(self, args, extra=None, timeout=30):
+        """Run `folio <args>` to completion in this server's environment (counted as a start)."""
+        return subprocess.run([self.binary, *args], env=self._env(dict(extra or {})), capture_output=True,
+                              timeout=timeout)
+
+    def _spawn(self, extra, log_path=None, count=True):
+        env = self._env(extra, count)
+        self.active_log_path = log_path or self.log_path
+        self._log = open(self.active_log_path, "wb")
         self.spawned_at = datetime.datetime.now(datetime.timezone.utc)
         self.proc = subprocess.Popen([self.binary, "serve"], env=env, stdout=self._log, stderr=subprocess.STDOUT)
 
@@ -232,18 +246,18 @@ class FolioServer:
             if self.proc.poll() is not None:
                 raise AssertionError(f"folio exited early (code {self.proc.returncode}):\n{self.log_text()}")
             try:
-                if self.request("GET", "/api/health", edge=True).status == 200:
+                if self.request("GET", "/api/health", edge=True, timeout=max(0.2, deadline - time.monotonic())).status == 200:
                     self.ready_at = datetime.datetime.now(datetime.timezone.utc)
                     return
             except OSError:
-                pass
+                pass  # includes socket timeouts, which the clamped per-request timeout makes the bound
             time.sleep(0.05)
         raise AssertionError(f"folio not ready within {timeout}s:\n{self.log_text()}")
 
     def log_text(self):
         if not self._log.closed:
             self._log.flush()
-        with open(self.log_path, "r", errors="replace") as f:
+        with open(self.active_log_path, "r", errors="replace") as f:
             return f.read()
 
     def live_list_rows(self):
@@ -254,12 +268,12 @@ class FolioServer:
         finally:
             con.close()
 
-    def request(self, method, path, edge=False, headers=None, body=None):
+    def request(self, method, path, edge=False, headers=None, body=None, timeout=20):
         """Raw HTTP: `path` is sent exactly as given (no client-side normalisation or encoding)."""
         hdrs = dict(headers or {})
         if edge:
             hdrs[EDGE_HEADER] = self.edge_token
-        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
         try:
             conn.putrequest(method, path, skip_accept_encoding=True)
             data = None
@@ -281,6 +295,13 @@ class FolioServer:
         if resp.status != 200:
             raise AssertionError(f"admin login failed: {resp.status} {resp.body!r}")
         return json.loads(resp.body)["token"]
+
+    def started_within(self, seconds):
+        """Seconds from spawn to the first health 200; fails when over `seconds`."""
+        took = (self.ready_at - self.spawned_at).total_seconds()
+        if took > seconds:
+            raise AssertionError(f"health first answered {took:.1f}s after spawn, over the {seconds}s bound")
+        return took
 
     def stop_process(self):
         if self.proc is not None and self.proc.poll() is None:

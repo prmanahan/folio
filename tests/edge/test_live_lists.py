@@ -23,18 +23,16 @@ import os
 import secrets
 import subprocess
 import sys
-import shutil
-import tempfile
 import time
 import unittest
 
 from harness import (
-    TIME_GRAMMAR, BareCase, EdgeCase, folio_bin, parse_log_lines, parse_stamp,
+    TIME_GRAMMAR, BareCase, EdgeCase, parse_log_lines, parse_stamp,
     seed_documents, stamp,
 )
 
 UNAVAILABLE = {"error": "Projects list unavailable"}
-LIMIT_BODY = {"error": "Too many requests. Please wait before retrying."}
+LIMIT_BODY = b'{"error":"Too many requests. Please wait before retrying."}'  # exact bytes (plan pin)
 LIMIT = 60
 BOTH_OFF = {"LIVE_LISTS_DISABLED": "projects,articles"}
 
@@ -96,7 +94,7 @@ def check_freshness(t, r):
 def check_refusal_429(t, r):
     t.assertEqual(r.status, 429)
     t.assertEqual(r.header("retry-after"), "60")
-    t.assertEqual(json.loads(r.body), LIMIT_BODY)
+    t.assertEqual(r.body, LIMIT_BODY)
 
 
 def error_lines(server):
@@ -135,6 +133,7 @@ class TestStart(BareCase):
         # and LIVE_LISTS_DISABLED unset, when the binary is spawned, then health answers 200 within 15 s and the
         # process is still running.
         server = self.start(ready_timeout=15)
+        server.started_within(15)  # a hard bound: spawn to the first health 200
         self.assertIsNone(server.proc.poll(), "process exited after answering health")
         self.assertFalse(os.path.exists(os.path.join(server.static_dir, "projects.json")))
 
@@ -145,12 +144,14 @@ class TestStart(BareCase):
         projects, _ = seed_documents()
         projects["fetched_at"] = "2026"
         server = self.start(static_files={"projects.json": projects}, ready_timeout=15)
+        server.started_within(15)
         self.assertIsNone(server.proc.poll())
 
     def test_LL_PY_18_starts_with_a_malformed_list_file(self):
         # R-29. Given a projects.json that is not valid JSON, the variable unset, when the binary is spawned, then
         # health answers 200 within 15 s and the process is still running.
         server = self.start(static_files={"projects.json": b"{not json"}, ready_timeout=15)
+        server.started_within(15)
         self.assertIsNone(server.proc.poll())
 
 
@@ -233,7 +234,8 @@ class TestSwitch(BareCase):
     def test_LL_PY_9_switch_projects_clears_the_projects_list_and_keeps_articles(self):
         # R-18, R-19. Given seeded rows and LIVE_LISTS_DISABLED=projects, when the server starts and is read, then
         # the projects route is the 503 contract, freshness projects is null and articles is not, and after stop
-        # the store has no projects row and still has the articles row; a log line names projects and `deleted`.
+        # the store has no projects row and still has the articles row; a start line carries `projects_delete=deleted`
+        # (the wording observed on the built binary; the spec leaves the format open, plan G4).
         server, _, _ = self._start_seeded({"LIVE_LISTS_DISABLED": "projects"})
         check_projects_unavailable(self, server.request("GET", "/api/lists/projects", edge=True))
         fresh = self._freshness(server)
@@ -244,13 +246,13 @@ class TestSwitch(BareCase):
         self.assertNotIn("projects", rows)
         self.assertIn("articles", rows)
         messages = [m for _, m in parse_log_lines(server.log_text(), server.dir)]
-        self.assertTrue(any("projects" in m and "deleted" in m for m in messages), "\n".join(messages))
+        self.assertTrue(any("projects_delete=deleted" in m for m in messages), "\n".join(messages))
 
     def test_LL_PY_10_switch_articles_clears_only_the_articles_list(self):
         # R-18, R-19. Given seeded rows and LIVE_LISTS_DISABLED=articles, when the server starts and is read, then
         # freshness articles is null, the projects route is the full 200 contract (equal to the seeded document if
         # its fetched_at is the seeded one), freshness projects is not null, after stop the store has no articles
-        # row and still a projects row, and a log line names articles and `deleted`.
+        # row and still a projects row, and the start line carries `articles_delete=deleted` (observed wording, as in LL-PY-9).
         server, projects, _ = self._start_seeded({"LIVE_LISTS_DISABLED": "articles"})
         doc = check_projects_document(self, server.request("GET", "/api/lists/projects", edge=True))
         if doc["fetched_at"] == projects["fetched_at"]:
@@ -263,7 +265,7 @@ class TestSwitch(BareCase):
         self.assertNotIn("articles", rows)
         self.assertIn("projects", rows)
         messages = [m for _, m in parse_log_lines(server.log_text(), server.dir)]
-        self.assertTrue(any("articles" in m and "deleted" in m for m in messages), "\n".join(messages))
+        self.assertTrue(any("articles_delete=deleted" in m for m in messages), "\n".join(messages))
 
     def test_LL_PY_11_switch_absent_serves_the_held_copies_from_the_first_request(self):
         # R-18 (absent), R-16. Given seeded rows and the variable unset, when the server starts and the first
@@ -282,11 +284,16 @@ class TestSwitch(BareCase):
     def _unclean_switch_disables_both(self, value, token_name):
         server, _, _ = self._start_seeded({"LIVE_LISTS_DISABLED": value})
         baseline, _, _ = self._start_seeded({})
-        check_projects_unavailable(self, server.request("GET", "/api/lists/projects", edge=True))
-        fresh = self._freshness(server)
-        self.assertIsNone(fresh["projects"])
-        self.assertIsNone(fresh["articles"])
-        self.assertEqual(server.request("GET", "/api/health", edge=True).status, 200)
+        # The baseline replays the switched run's requests, so request-triggered log lines cancel too.
+        for run in (server, baseline):
+            r = run.request("GET", "/api/lists/projects", edge=True)
+            if run is server:
+                check_projects_unavailable(self, r)
+            fresh = self._freshness(run)
+            if run is server:
+                self.assertIsNone(fresh["projects"])
+                self.assertIsNone(fresh["articles"])
+            self.assertEqual(run.request("GET", "/api/health", edge=True).status, 200)
         errors = error_lines(server)
         base_errors = error_lines(baseline)
         self.assertEqual(server.live_list_rows(), {})
@@ -314,25 +321,12 @@ class TestSwitch(BareCase):
 class TestRetired(BareCase):
     def test_LL_PY_14_check_projects_subcommand_is_gone(self):
         # R-29 (subcommand). Given a STATIC_DIR with a valid, fresh projects.json (the shape on which the retired
-        # subcommand exited 0), when `folio check-projects` runs, then it exits non-zero and does not serve.
+        # subcommand exited 0) and both lists disabled (no outbound request), when `folio check-projects` runs, then
+        # it exits non-zero and does not serve.
         projects, _ = seed_documents()
-        d = tempfile.mkdtemp(prefix="folio-edge-cp-")
-        self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
-        os.mkdir(os.path.join(d, "static"))
-        with open(os.path.join(d, "static", "index.html"), "w") as f:
-            f.write("<!doctype html><title>edge</title>")
-        with open(os.path.join(d, "static", "projects.json"), "w") as f:
-            json.dump(projects, f)
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "STATIC_DIR": os.path.join(d, "static"),
-            "DATABASE_URL": os.path.join(d, "site.db"),
-            "ADMIN_PASSWORD": secrets.token_urlsafe(24),
-            "EDGE_AUTH_TOKEN": "folio_edge_" + secrets.token_hex(32),
-            "PORT": "0",
-        }
+        server = self.start(env=BOTH_OFF, static_files={"projects.json": projects}, spawn=False)
         try:
-            done = subprocess.run([folio_bin(), "check-projects"], env=env, capture_output=True, timeout=30)
+            done = server.run_command(["check-projects"], extra=BOTH_OFF, timeout=30)
         except subprocess.TimeoutExpired:
             self.fail("`folio check-projects` did not exit within 30 s (it started serving?)")
         self.assertNotEqual(done.returncode, 0)
@@ -344,6 +338,9 @@ class TestRetired(BareCase):
         server = self.start(env=BOTH_OFF, static_files={"projects.json": projects, "control.json": projects})
         got = server.request("GET", "/projects.json", edge=True)
         control = server.request("GET", "/control.json", edge=True)
+        self.assertEqual(got.status, 200)
+        with open(os.path.join(server.static_dir, "projects.json"), "rb") as f:
+            self.assertEqual(got.body, f.read())
         for h in ("content-type", "cache-control"):
             self.assertEqual(got.header(h), control.header(h), h)
         self.assertEqual(got.status, control.status)
