@@ -15,11 +15,13 @@
  * their imports and tokens; it never runs them.
  *
  * Shape: `r7Violations(doc)` is test-side checker logic derived from R-7's clauses, each returning a
- * rule id. Polarity is allowlist: the fetch step and Deploy's env are pinned to exactly the permitted
- * form, so a form the checker did not think to forbid still fails. Three kinds of test:
+ * rule id. Polarity is allowlist: Deploy's env is pinned to exactly the permitted form, and outside the
+ * Deploy step no secret may be referenced, so a form the checker did not think to forbid still fails.
+ * The deploy fetch step was retired in T15 (#4853), so the rules about it are gone and one rule
+ * (`fetch-step-present`) keeps it from returning. Three kinds of test:
  *  1. the real file, one test per clause, plus the pins;
- *  2. a compliant baseline (the real file with its fetch step re-set to the compliant one) must have
- *     zero violations, so a seeded failure below cannot be a false positive of the checker;
+ *  2. a compliant baseline (the real file) must have zero violations, so a seeded failure below
+ *     cannot be a false positive of the checker;
  *  3. seeded copies of the baseline, one per violation, each must raise the named rule. These guard
  *     the checker itself.
  * The action pins (`pinViolations`) and the checkout pin (`checkoutViolations`) run over every workflow file in the directory.
@@ -161,10 +163,8 @@ function r7Violations(doc: Workflow): string[] {
 	const deploy = J[DEPLOY_JOB];
 	const dsteps = stepsOf(deploy);
 	const deployIdx = dsteps.findIndex((s) => s.name === DEPLOY_STEP_NAME);
-	const fetchIdxs = dsteps.map((s, i) => (s.name === FETCH_STEP_NAME ? i : -1)).filter((i) => i >= 0);
-	const fetchStep = fetchIdxs.length === 1 ? dsteps[fetchIdxs[0]] : undefined;
 
-	// secrets outside Deploy: only GITHUB_TOKEN, and only as `env` of the fetch step
+	// outside the Deploy step, no secret is referenced
 	for (const [jobName, job] of Object.entries(J)) {
 		const leaves: { path: string[]; text: string }[] = [];
 		walk(job as Json, [jobName], leaves);
@@ -177,20 +177,7 @@ function r7Violations(doc: Workflow): string[] {
 		for (const leaf of leaves) {
 			if (isDeployStepLeaf(leaf.path)) continue;
 			for (const expr of expressions(leaf.text)) {
-				for (const name of secretNames(expr)) {
-					if (name !== 'GITHUB_TOKEN') {
-						v.push('secret-other-than-github-token-outside-deploy');
-						continue;
-					}
-					const si = leaf.path.indexOf('steps');
-					const isFetchEnv =
-						jobName === DEPLOY_JOB &&
-						si >= 0 &&
-						fetchIdxs.length === 1 &&
-						Number(leaf.path[si + 1]) === fetchIdxs[0] &&
-						leaf.path[si + 2] === 'env';
-					if (!isFetchEnv) v.push('github-token-not-fetch-step-env');
-				}
+				if (secretNames(expr).length > 0) v.push('secret-outside-deploy');
 			}
 		}
 	}
@@ -222,20 +209,13 @@ function r7Violations(doc: Workflow): string[] {
 		}
 	}
 
-	// the fetch step: exists once, expected name, before Deploy, no escape hatches
-	if (fetchIdxs.length !== 1) {
-		v.push('fetch-step-missing-or-duplicated');
-	} else {
-		const s = fetchStep as Step;
-		if (!isDeepStrictEqual(s, COMPLIANT_FETCH)) v.push('fetch-step-not-pinned');
-		if (deployIdx < 0 || fetchIdxs[0] > deployIdx) v.push('fetch-step-not-before-deploy');
-		if ('continue-on-error' in s) v.push('fetch-step-continue-on-error');
-		if ('if' in s) v.push('fetch-step-if');
-		if ('shell' in s) v.push('fetch-step-shell');
-		if (typeof s.run !== 'string' || s.run.trim() === '') {
-			v.push('fetch-step-no-run');
-		} else {
-			if (s.run.includes('|')) v.push('fetch-step-pipe-or-or');
+	// R-29, T15: the deploy fetch step is gone. No step in any job is named for it or runs the script,
+	// so it cannot return under another name.
+	for (const job of Object.values(J)) {
+		for (const s of stepsOf(job)) {
+			if (s.name === FETCH_STEP_NAME || (typeof s.run === 'string' && s.run.includes('fetch-projects'))) {
+				v.push('fetch-step-present');
+			}
 		}
 	}
 
@@ -323,25 +303,6 @@ function nodeAt(docs: Record<string, Workflow>, loc: string): Obj {
 	return idx === 'job' ? j : stepsOf(j)[Number(idx)];
 }
 
-/** A compliant fetch step, as the plan describes it (D14); inserted in front of Deploy. */
-const COMPLIANT_FETCH: Step = {
-	name: FETCH_STEP_NAME,
-	env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' },
-	run: 'node frontend/scripts/fetch-projects.mjs',
-};
-
-function withFetchStep(doc: Workflow, step: Step = COMPLIANT_FETCH): Workflow {
-	const d = clone(doc);
-	const steps = stepsOf(jobs(d)[DEPLOY_JOB]);
-	// Idempotent: the real file gains its own fetch step in T8, and the baseline must not hold two.
-	for (let j = steps.length - 1; j >= 0; j--) {
-		if (steps[j].name === FETCH_STEP_NAME) steps.splice(j, 1);
-	}
-	const i = steps.findIndex((s) => s.name === DEPLOY_STEP_NAME);
-	steps.splice(i, 0, clone(step));
-	return d;
-}
-
 function deploySteps(d: Workflow): Step[] {
 	return stepsOf(jobs(d)[DEPLOY_JOB]);
 }
@@ -365,37 +326,16 @@ describe('R-7: the real deploy.yml', () => {
 		expect(r7Violations(real())).not.toContain('env-mentions-fly-token');
 	});
 
-	it('R-7 outside Deploy the only secret referenced is GITHUB_TOKEN, and only as env on the fetch step', () => {
+	it('R-7 outside the Deploy step, no secret is referenced', () => {
 		const v = r7Violations(real());
-		expect(v).not.toContain('secret-other-than-github-token-outside-deploy');
-		expect(v).not.toContain('github-token-not-fetch-step-env');
+		expect(v).not.toContain('secret-outside-deploy');
 		expect(v).not.toContain('secret-at-workflow-level');
 	});
 
-	it('R-7 the fetch step "Fetch projects list" exists exactly once in the deploy job', () => {
-		const names = deploySteps(real()).map((s) => s.name);
-		expect(names.filter((n) => n === FETCH_STEP_NAME)).toEqual([FETCH_STEP_NAME]);
-	});
-
-	it('R-7 the fetch step comes before Deploy', () => {
-		const names = deploySteps(real()).map((s) => s.name);
-		const f = names.indexOf(FETCH_STEP_NAME);
-		const d = names.indexOf(DEPLOY_STEP_NAME);
-		expect(f).toBeGreaterThanOrEqual(0);
-		expect(d).toBeGreaterThanOrEqual(0);
-		expect(f).toBeLessThan(d);
-	});
-
-	it('R-7 the fetch step has no continue-on-error, if, shell, pipe or ||', () => {
-		const step = deploySteps(real()).find((s) => s.name === FETCH_STEP_NAME);
-		expect(step, 'fetch step must exist').toBeDefined();
-		const s = step as Step;
-		expect('continue-on-error' in s).toBe(false);
-		expect('if' in s).toBe(false);
-		expect('shell' in s).toBe(false);
-		expect(typeof s.run).toBe('string');
-		expect(String(s.run).trim()).not.toBe('');
-		expect(String(s.run)).not.toContain('|');
+	it('R-29 deploy.yml has no fetch step: no step is named for it or runs fetch-projects', () => {
+		expect(r7Violations(real())).not.toContain('fetch-step-present');
+		const names = Object.values(jobs(real())).flatMap((j) => stepsOf(j).map((s) => s.name));
+		expect(names).not.toContain(FETCH_STEP_NAME);
 	});
 
 	it('R-7 Deploy run is exactly "flyctl deploy --remote-only"', () => {
@@ -412,9 +352,8 @@ describe('R-7: the real deploy.yml', () => {
 		expect(r7Violations(real())).not.toContain('uses-not-on-deploy-allowlist');
 	});
 
-	it('R-7 the fetch step is exactly the pinned form and Deploy env is exactly FLY_API_TOKEN', () => {
+	it('R-7 Deploy env is exactly FLY_API_TOKEN', () => {
 		const d = real();
-		expect(stepByName(d, FETCH_STEP_NAME)).toEqual(COMPLIANT_FETCH);
 		const deploy = stepByName(d, DEPLOY_STEP_NAME);
 		expect(deploy.env).toEqual(DEPLOY_ENV);
 		expect('with' in deploy).toBe(false);
@@ -426,50 +365,21 @@ describe('R-7: the real deploy.yml', () => {
 });
 
 describe('R-7: the checker, on seeded copies of a compliant baseline', () => {
-	const baseline = () => withFetchStep(load());
+	const baseline = () => load();
 
 	it('control: the compliant baseline has no violation', () => {
 		expect(r7Violations(baseline())).toEqual([]);
 	});
 
-	it('seed: removed fetch step', () => {
+	it.each([
+		['the fetch step re-added before Deploy', { name: FETCH_STEP_NAME, run: 'node frontend/scripts/fetch-projects.mjs' }],
+		['the fetch step re-added under another name', { name: 'Get projects', run: 'node frontend/scripts/fetch-projects.mjs' }],
+		['a step named for the fetch with another run', { name: FETCH_STEP_NAME, run: 'echo nothing' }],
+	])('seed: %s', (_k, step) => {
 		const d = baseline();
 		const steps = deploySteps(d);
-		steps.splice(steps.findIndex((s) => s.name === FETCH_STEP_NAME), 1);
-		expect(r7Violations(d)).toContain('fetch-step-missing-or-duplicated');
-	});
-
-	it('seed: renamed fetch step', () => {
-		const d = baseline();
-		stepByName(d, FETCH_STEP_NAME).name = 'Get projects';
-		expect(r7Violations(d)).toContain('fetch-step-missing-or-duplicated');
-	});
-
-	it('seed: fetch step after Deploy', () => {
-		const d = baseline();
-		const steps = deploySteps(d);
-		const [f] = steps.splice(steps.findIndex((s) => s.name === FETCH_STEP_NAME), 1);
-		steps.splice(steps.findIndex((s) => s.name === DEPLOY_STEP_NAME) + 1, 0, f);
-		expect(r7Violations(d)).toContain('fetch-step-not-before-deploy');
-	});
-
-	it.each([
-		['continue-on-error', 'fetch-step-continue-on-error', { 'continue-on-error': true }],
-		['if', 'fetch-step-if', { if: "github.ref == 'refs/heads/main'" }],
-		['shell', 'fetch-step-shell', { shell: 'bash {0}' }],
-	])('seed: fetch step sets %s', (_k, rule, extra) => {
-		const d = baseline();
-		Object.assign(stepByName(d, FETCH_STEP_NAME), extra);
-		expect(r7Violations(d)).toContain(rule);
-	});
-
-	it.each([
-		['a pipe', 'node frontend/scripts/fetch-projects.mjs | tee out.log'],
-		['||', 'node frontend/scripts/fetch-projects.mjs || true'],
-	])('seed: fetch run contains %s', (_k, run) => {
-		const d = baseline();
-		stepByName(d, FETCH_STEP_NAME).run = run;
-		expect(r7Violations(d)).toContain('fetch-step-pipe-or-or');
+		steps.splice(steps.findIndex((s) => s.name === DEPLOY_STEP_NAME), 0, step as Step);
+		expect(r7Violations(d)).toContain('fetch-step-present');
 	});
 
 	it.each([
@@ -531,16 +441,16 @@ describe('R-7: the checker, on seeded copies of a compliant baseline', () => {
 	});
 
 	it.each([
-		['FLY_API_TOKEN in the fetch step env', (d: Workflow) => (stepByName(d, FETCH_STEP_NAME).env = { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}', X: '${{ secrets.FLY_API_TOKEN }}' })],
-		['secrets[...] bracket form in the fetch step env', (d: Workflow) => (stepByName(d, FETCH_STEP_NAME).env = { GITHUB_TOKEN: "${{ secrets['FLY_API_TOKEN'] }}" })],
-		['toJSON(secrets) in the fetch step env', (d: Workflow) => (stepByName(d, FETCH_STEP_NAME).env = { ALL: '${{ toJSON(secrets) }}' })],
+		['FLY_API_TOKEN in the install step env', (d: Workflow) => (stepByName(d, 'Install flyctl').env = { X: '${{ secrets.FLY_API_TOKEN }}' })],
+		['secrets[...] bracket form in the install step env', (d: Workflow) => (stepByName(d, 'Install flyctl').env = { X: "${{ secrets['FLY_API_TOKEN'] }}" })],
+		['toJSON(secrets) in the install step env', (d: Workflow) => (stepByName(d, 'Install flyctl').env = { ALL: '${{ toJSON(secrets) }}' })],
 		['a secret in the test job', (d: Workflow) => (stepsOf(jobs(d).test)[0].env = { T: '${{ secrets.FLY_API_TOKEN }}' })],
 		['a secret in the install step with:', (d: Workflow) => (stepByName(d, 'Install flyctl').with = { token: '${{ secrets.FLY_API_TOKEN }}' })],
 		['a secret in the post-deploy health check', (d: Workflow) => (stepByName(d, 'Post-deploy health check').env = { T: '${{ secrets.FLY_API_TOKEN }}' })],
 	])('seed: %s', (_k, mutate) => {
 		const d = baseline();
 		mutate(d);
-		expect(r7Violations(d)).toContain('secret-other-than-github-token-outside-deploy');
+		expect(r7Violations(d)).toContain('secret-outside-deploy');
 	});
 
 	it.each([
@@ -553,15 +463,6 @@ describe('R-7: the checker, on seeded copies of a compliant baseline', () => {
 			"github['token'] in a later step env",
 			'github-context-token-reference',
 			(d: Workflow) => (stepByName(d, 'Post-deploy health check').env = { T: "${{ github['token'] }}" }),
-		],
-		[
-			'toJSON(github) in the fetch step env',
-			'github-context-token-reference',
-			(d: Workflow) =>
-				(stepByName(d, FETCH_STEP_NAME).env = {
-					GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}',
-					X: '${{ toJSON(github) }}',
-				}),
 		],
 		[
 			'toJSON(secrets) in Deploy env',
@@ -586,24 +487,6 @@ describe('R-7: the checker, on seeded copies of a compliant baseline', () => {
 			'deploy-step-unexpected-key',
 			(d: Workflow) => (stepByName(d, DEPLOY_STEP_NAME).with = { token: 'x' }),
 		],
-		[
-			'a fetch run wrapped in if ! ...; then echo warn; fi',
-			'fetch-step-not-pinned',
-			(d: Workflow) =>
-				(stepByName(d, FETCH_STEP_NAME).run =
-					'if ! node frontend/scripts/fetch-projects.mjs; then echo warn; fi'),
-		],
-		[
-			'set +e added to the fetch run',
-			'fetch-step-not-pinned',
-			(d: Workflow) =>
-				(stepByName(d, FETCH_STEP_NAME).run = 'set +e\nnode frontend/scripts/fetch-projects.mjs'),
-		],
-		[
-			'an extra key on the fetch step',
-			'fetch-step-not-pinned',
-			(d: Workflow) => (stepByName(d, FETCH_STEP_NAME)['timeout-minutes'] = 5),
-		],
 	])('seed (allowlist): %s', (_k, rule, mutate) => {
 		const d = baseline();
 		mutate(d);
@@ -611,13 +494,12 @@ describe('R-7: the checker, on seeded copies of a compliant baseline', () => {
 	});
 
 	it.each([
-		['in the fetch step run:', (d: Workflow) => (stepByName(d, FETCH_STEP_NAME).run = 'node x.mjs ${{ secrets.GITHUB_TOKEN }}')],
 		['in the install step env', (d: Workflow) => (stepByName(d, 'Install flyctl').env = { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' })],
 		['in the test job env', (d: Workflow) => (stepsOf(jobs(d).test)[0].env = { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' })],
-	])('seed: GITHUB_TOKEN outside the fetch step env, %s', (_k, mutate) => {
+	])('seed: GITHUB_TOKEN outside the Deploy step, %s', (_k, mutate) => {
 		const d = baseline();
 		mutate(d);
-		expect(r7Violations(d)).toContain('github-token-not-fetch-step-env');
+		expect(r7Violations(d)).toContain('secret-outside-deploy');
 	});
 });
 
