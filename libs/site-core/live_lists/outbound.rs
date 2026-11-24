@@ -214,17 +214,6 @@ fn policy() -> reqwest::ClientBuilder {
         .timeout(TOTAL_TIMEOUT)
 }
 
-/// `a: b: c`, an error and its sources.
-fn cause_chain(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut parts = vec![error.to_string()];
-    let mut next = error.source();
-    while let Some(cause) = next {
-        parts.push(cause.to_string());
-        next = cause.source();
-    }
-    parts.join(": ")
-}
-
 /// The one client. Cheap to clone; clones share a connection pool.
 #[derive(Clone)]
 pub struct OutboundClient {
@@ -243,7 +232,7 @@ impl OutboundClient {
     ///
     /// # Errors
     /// [`BuildError`] when either trust-root variable is set, or the TLS
-    /// stack cannot be initialised. The cause is logged at `error`.
+    /// stack cannot be initialised. Only a fixed message is logged, at `error`.
     pub fn new() -> Result<Self, BuildError> {
         for name in TRUST_ROOT_VARIABLES {
             if std::env::var_os(name).is_some() {
@@ -272,18 +261,13 @@ impl OutboundClient {
     }
 
     fn finish(builder: reqwest::ClientBuilder) -> Result<Self, BuildError> {
-        match builder.build() {
-            Ok(inner) => Ok(Self { inner }),
-            Err(error) => {
-                // The builder's causes are about this process (TLS setup, root
-                // loading), never a response, so the chain is safe to log.
-                tracing::error!(
-                    causes = %cause_chain(&error),
-                    "the outbound client could not be built"
-                );
-                Err(BuildError)
-            }
-        }
+        // The cause is dropped: a fixed message is all that is logged (R-30),
+        // as [`BuildError`] says.
+        let inner = builder.build().map_err(|_cause| {
+            tracing::error!("the outbound client could not be built");
+            BuildError
+        })?;
+        Ok(Self { inner })
     }
 
     /// Fetch one of R-1's URLs.
@@ -356,7 +340,7 @@ impl OutboundClient {
         {
             match value.to_str() {
                 Ok(text) => link_values.push(text.to_string()),
-                Err(_unreadable) => return Err(failed(ReasonCode::TransportFailed, Some(note))),
+                Err(_unreadable) => return Err(failed(ReasonCode::LinkMalformed, Some(note))),
             }
         }
         let link = (!link_values.is_empty()).then(|| link_values.join(", "));
@@ -464,8 +448,16 @@ mod tests {
     // test races another on the process environment.
     const CHILD_MARK: &str = "FOLIO_OUTBOUND_TEST_CHILD";
 
+    /// True only in a child this binary's own `run_child` spawned: the marker
+    /// holds the spawning process's id, and that id must be this process's
+    /// parent. A marker left in a developer's shell, or inherited from an
+    /// outer test run, names no such parent, so it cannot make a test run its
+    /// child body in the parent, where it would assert nothing.
     fn is_child() -> bool {
-        std::env::var_os(CHILD_MARK).is_some()
+        std::env::var(CHILD_MARK).is_ok_and(|mark| {
+            mark.split_once(':')
+                .is_some_and(|(pid, _)| pid == std::os::unix::process::parent_id().to_string())
+        })
     }
 
     /// Rerun test `name` in a child with `vars` set, and require that it ran
@@ -474,9 +466,13 @@ mod tests {
     /// cannot decide a case.
     async fn run_child(name: &str, vars: &[(&str, &str)]) {
         let module = module_path!().split_once("::").expect("a crate prefix").1;
+        let mark = format!("{}:{}", std::process::id(), uuid::Uuid::new_v4().simple());
+        // Printed (and so visible under --nocapture) to show this process took
+        // the parent path.
+        println!("spawned-child:{name}");
         let out = tokio::process::Command::new(std::env::current_exe().expect("this binary"))
             .args(["--exact", &format!("{module}::{name}"), "--test-threads=1"])
-            .env(CHILD_MARK, "1")
+            .env(CHILD_MARK, &mark)
             .env_remove("SSL_CERT_FILE")
             .env_remove("SSL_CERT_DIR")
             .envs(vars.iter().copied())
@@ -490,6 +486,28 @@ mod tests {
 stdout: {stdout}
 stderr: {}",
             String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn a_stale_child_marker_does_not_make_a_test_run_as_its_own_child() {
+        // Given a marker in the environment that names no spawning parent
+        let out = std::process::Command::new(std::env::current_exe().expect("this binary"))
+            .args([
+                "--exact",
+                "live_lists::outbound::tests::r2_ignores_the_proxy_environment",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_MARK, "1")
+            .output()
+            .expect("spawn");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // Then the test still took the parent path and spawned a real child
+        assert!(out.status.success(), "{stdout}");
+        assert!(
+            stdout.contains("spawned-child:r2_ignores_the_proxy_environment"),
+            "the stale marker made the test its own child: {stdout}"
         );
     }
 
@@ -692,7 +710,12 @@ stderr: {}",
                     text.contains("SSL_CERT_FILE") || text.contains("SSL_CERT_DIR"),
                     "{text}"
                 );
-                assert!(!text.contains("root.pem"), "the value leaked: {text}");
+                for k in ["SSL_CERT_FILE", "SSL_CERT_DIR"] {
+                    if let Some(v) = std::env::var_os(k) {
+                        let v = v.to_string_lossy().into_owned();
+                        assert!(!text.contains(&v), "{k}'s value leaked: {text}");
+                    }
+                }
             } else {
                 // The positive control: with neither variable it builds
                 assert!(OutboundClient::new().is_ok());
@@ -775,7 +798,7 @@ stderr: {}",
         let github = rig(unreadable.clone()).await;
         assert_eq!(
             reason(github.client.fetch(org()).await),
-            Some(ReasonCode::TransportFailed)
+            Some(ReasonCode::LinkMalformed)
         );
         // and the feed, which never paginates, ignores it, and carries no link
         let feed = rig(unreadable).await;
@@ -901,7 +924,14 @@ stderr: {}",
         .await;
         let client = OutboundClient::for_test(TestNet::new(&pki, &[(GITHUB, server.addr())]));
         let began = Instant::now();
-        let result = client.fetch(org()).await;
+        // The outer timeout turns a deleted `.connect_timeout` into a failure with
+        // a message, not a CI job that hangs.
+        let result = tokio::time::timeout(
+            CONNECT_TIMEOUT + Duration::from_secs(5),
+            client.fetch(org()),
+        )
+        .await
+        .expect("the connect outlived its limit: the connect timeout is gone");
         let took = began.elapsed();
         assert_eq!(reason(result), Some(ReasonCode::ConnectTimeout));
         assert!(took >= CONNECT_TIMEOUT, "failed early, at {took:?}");
@@ -941,7 +971,14 @@ stderr: {}",
         reply.stall_after = Some(3);
         let rig = rig(reply).await;
         let began = Instant::now();
-        let result = rig.client.fetch(org()).await;
+        // The outer timeout turns a deleted `.timeout` into a failure with a
+        // message, not a CI job that hangs.
+        let result = tokio::time::timeout(
+            TOTAL_TIMEOUT + Duration::from_secs(5),
+            rig.client.fetch(org()),
+        )
+        .await
+        .expect("the fetch outlived its limit: the total timeout is gone");
         let took = began.elapsed();
         assert_eq!(reason(result), Some(ReasonCode::TotalTimeout));
         assert!(took >= TOTAL_TIMEOUT, "failed early, at {took:?}");
