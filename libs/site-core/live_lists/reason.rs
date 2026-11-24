@@ -144,7 +144,7 @@ pub enum ReasonCode {
     PostLinkPath,
     /// R-11: the parsed link's serialized form differs from the raw link.
     PostLinkNotCanonical,
-    /// R-11: `pubDate` is over 64 bytes, not RFC 2822, or not representable.
+    /// R-11: `pubDate` is not RFC 2822, or not representable.
     PostPubDate,
     /// R-11: `pubDate` is over 64 bytes.
     PostPubDateTooLong,
