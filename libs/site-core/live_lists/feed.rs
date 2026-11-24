@@ -15,9 +15,9 @@ use time::format_description::well_known::Rfc2822;
 
 use super::articles::{self, ArticlesError, LinkRule, MAX_POSTS, TextRule};
 use super::clock::format_fetched_at;
+// R-4's cap, enforced here too so the parser never trusts its caller.
+use super::outbound::MAX_BODY_BYTES;
 
-/// R-4's body cap, enforced here too so the parser never trusts its caller.
-pub const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// R-7: element nesting deeper than this fails the feed, `<rss>` being 1.
 pub const MAX_DEPTH: usize = 16;
 /// R-11: the longest `pubDate` accepted.

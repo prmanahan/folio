@@ -4,15 +4,18 @@
 //!
 //! Every failure is a [`ReasonCode`]; no response byte reaches a log line
 //! (R-30). The mappings below are wildcard-free matches, so a rule added to
-//! the parser fails to compile here until it has a code.
+//! the parser fails to compile here until it has a code. The refresher
+//! validates the document again with the articles validator before it
+//! persists or swaps it (R-15).
 
 use futures::future::BoxFuture;
 use time::OffsetDateTime;
 
 use super::ReasonCode;
-use super::feed::{FeedRule, PostRule};
-use super::outbound::{FetchFailure, Fetched, OutboundClient};
-use super::refresher::{FetchReport, ListSource};
+use super::articles::{LinkRule, TextRule};
+use super::feed::{FeedRule, Field, PostRule, parse_feed};
+use super::outbound::{FetchFailure, Fetched, OutboundClient, Target};
+use super::refresher::{FetchReport, ListSource, SkippedPost};
 
 /// Fetches the articles document from the feed.
 pub struct FeedArticlesSource {
@@ -27,28 +30,114 @@ impl FeedArticlesSource {
 
 impl ListSource for FeedArticlesSource {
     fn fetch(&self, now: OffsetDateTime) -> BoxFuture<'_, FetchReport> {
-        let _ = (&self.client, now);
-        Box::pin(async { FetchReport::failed(ReasonCode::TransportFailed) })
+        Box::pin(async move { feed_report(self.client.fetch(Target::Feed).await, now) })
     }
 }
 
 /// What a fetch of the feed produced, turned into the refresher's report.
 /// Everything after the transport is here, so a test drives it without one.
+/// A skipped post's `index` is zero-based (the parser's own base).
 pub(crate) fn feed_report(
-    _fetched: Result<Fetched, FetchFailure>,
-    _now: OffsetDateTime,
+    fetched: Result<Fetched, FetchFailure>,
+    now: OffsetDateTime,
 ) -> FetchReport {
-    FetchReport::failed(ReasonCode::TransportFailed)
+    let fetched = match fetched {
+        Ok(fetched) => fetched,
+        Err(FetchFailure { reason, note }) => {
+            return FetchReport {
+                document: Err(reason),
+                skipped: Vec::new(),
+                requests: note.into_iter().collect(),
+            };
+        }
+    };
+    let requests = vec![fetched.note];
+    match parse_feed(&fetched.body, now) {
+        Err(rule) => FetchReport {
+            document: Err(reason_of_feed(rule)),
+            skipped: Vec::new(),
+            requests,
+        },
+        Ok(outcome) => FetchReport {
+            document: Ok(outcome.document),
+            skipped: outcome
+                .skipped
+                .into_iter()
+                .map(|s| SkippedPost {
+                    index: s.index,
+                    reason: reason_of_post(s.rule),
+                })
+                .collect(),
+            requests,
+        },
+    }
 }
 
-/// R-30: the code a failed feed logs.
-pub(crate) fn reason_of_feed(_rule: FeedRule) -> ReasonCode {
-    ReasonCode::TransportFailed
+/// R-30: the code a failed feed logs. A body over the cap is R-4's code.
+pub(crate) fn reason_of_feed(rule: FeedRule) -> ReasonCode {
+    match rule {
+        FeedRule::TooLarge => ReasonCode::BodyOverCap,
+        FeedRule::NotUtf8 => ReasonCode::FeedNotUtf8,
+        FeedRule::Xml => ReasonCode::FeedXmlParse,
+        FeedRule::Prolog => ReasonCode::FeedProlog,
+        FeedRule::Doctype => ReasonCode::FeedDoctype,
+        FeedRule::ProcessingInstruction => ReasonCode::FeedProcessingInstruction,
+        FeedRule::XmlDeclaration => ReasonCode::FeedXmlDeclaration,
+        FeedRule::Root => ReasonCode::FeedRoot,
+        FeedRule::Channel => ReasonCode::FeedChannel,
+        FeedRule::Close => ReasonCode::FeedClose,
+        FeedRule::StrayContent => ReasonCode::FeedStrayContent,
+        FeedRule::TooDeep => ReasonCode::FeedTooDeep,
+        FeedRule::NoItems => ReasonCode::FeedNoItems,
+        FeedRule::NoValidPost => ReasonCode::FeedNoValidPost,
+        FeedRule::DocumentInvalid => ReasonCode::FeedDocumentInvalid,
+    }
 }
 
-/// R-30: the code a skipped post logs.
-pub(crate) fn reason_of_post(_rule: PostRule) -> ReasonCode {
-    ReasonCode::TransportFailed
+/// R-30: the code a skipped post logs. Two parser routes to one rule share a
+/// code: an empty title or summary is `EmptyField`, a decoded `<` is
+/// `AngleBracket`.
+pub(crate) fn reason_of_post(rule: PostRule) -> ReasonCode {
+    match rule {
+        PostRule::UnknownChild => ReasonCode::PostUnknownChild,
+        PostRule::SelfClosingChild => ReasonCode::PostSelfClosingChild,
+        PostRule::DuplicateField => ReasonCode::PostDuplicateField,
+        PostRule::EmptyField => ReasonCode::PostEmptyField,
+        PostRule::MissingField(
+            Field::Title | Field::Link | Field::Description | Field::PubDate,
+        ) => ReasonCode::PostMissingField,
+        PostRule::StartTagNotBare => ReasonCode::PostStartTagNotBare,
+        PostRule::StrayContent => ReasonCode::PostStrayContent,
+        PostRule::ElementInField => ReasonCode::PostElementInField,
+        PostRule::CDataInField => ReasonCode::PostCDataInField,
+        PostRule::CommentInField => ReasonCode::PostCommentInField,
+        PostRule::AngleBracketInField => ReasonCode::PostAngleBracket,
+        PostRule::NumericReference => ReasonCode::PostNumericReference,
+        PostRule::UnknownEntity => ReasonCode::PostUnknownEntity,
+        PostRule::Title(TextRule::Empty) | PostRule::Summary(TextRule::Empty) => {
+            ReasonCode::PostEmptyField
+        }
+        PostRule::Title(TextRule::AngleBracket) | PostRule::Summary(TextRule::AngleBracket) => {
+            ReasonCode::PostAngleBracket
+        }
+        PostRule::Title(TextRule::TooLong) => ReasonCode::PostTitleTooLong,
+        PostRule::Title(TextRule::RejectedChar) => ReasonCode::PostTitleRejectedChar,
+        PostRule::Summary(TextRule::TooLong) => ReasonCode::PostSummaryTooLong,
+        PostRule::Summary(TextRule::RejectedChar) => ReasonCode::PostSummaryRejectedChar,
+        PostRule::Link(LinkRule::TooLong) => ReasonCode::PostLinkTooLong,
+        PostRule::Link(LinkRule::RejectedChar) => ReasonCode::PostLinkRejectedChar,
+        PostRule::Link(LinkRule::NotAUrl) => ReasonCode::PostLinkNotUrl,
+        PostRule::Link(LinkRule::Scheme) => ReasonCode::PostLinkScheme,
+        PostRule::Link(LinkRule::Host) => ReasonCode::PostLinkHost,
+        PostRule::Link(LinkRule::Port) => ReasonCode::PostLinkPort,
+        PostRule::Link(LinkRule::Userinfo) => ReasonCode::PostLinkUserinfo,
+        PostRule::Link(LinkRule::Query) => ReasonCode::PostLinkQuery,
+        PostRule::Link(LinkRule::Fragment) => ReasonCode::PostLinkFragment,
+        PostRule::Link(LinkRule::Path) => ReasonCode::PostLinkPath,
+        PostRule::Link(LinkRule::NotCanonical) => ReasonCode::PostLinkNotCanonical,
+        PostRule::PubDate => ReasonCode::PostPubDate,
+        PostRule::Validator => ReasonCode::PostValidatorRefused,
+    }
 }
 
 #[cfg(test)]
