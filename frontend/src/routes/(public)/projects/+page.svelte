@@ -36,9 +36,24 @@
 	function hasRejectedCodePoint(text: string): boolean {
 		for (const ch of text) {
 			const cp = ch.codePointAt(0) ?? 0;
-			if (/\p{Cc}/u.test(ch) || cp === 0x2028 || cp === 0x2029 || isInvisible(cp)) return true;
+			// \p{Cs}: `for...of` yields an unpaired surrogate as its own element (R-4's lone-surrogate rule).
+			if (/\p{Cc}|\p{Cs}/u.test(ch) || cp === 0x2028 || cp === 0x2029 || isInvisible(cp)) return true;
 		}
 		return false;
+	}
+
+	/** `YYYY-MM-DDTHH:MM:SS.sssZ` and a real calendar instant (Rust `parse_fetched_at`). */
+	const FETCHED_AT_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+	function isFetchedAt(s: string): boolean {
+		// `toISOString()` throws RangeError on an invalid date (for example Feb 30 parses to NaN); the
+		// caller's try lands that on the unavailable line. A rolled-over date (Feb 30 -> Mar 2) differs
+		// from `s`, so the equality rejects it.
+		return FETCHED_AT_SHAPE.test(s) && new Date(s).toISOString() === s;
+	}
+
+	/** R-8 order: strictly increasing by ASCII-lowercased name, by code unit. Equal names (case twins) fail. */
+	function asciiLower(s: string): string {
+		return s.replace(/[A-Z]/g, (c) => c.toLowerCase());
 	}
 
 	const NAME_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
@@ -47,31 +62,36 @@
 	/**
 	 * Parse the held list (adopted Data Model, R-8/R-10 rules) at the boundary; any other document is an
 	 * error. Exactly two groups, `mnemra` then `prmanahan`, each with at least one repo; names match
-	 * NAME_PATTERN and are unique within an owner (the keyed each below throws on a repeated key);
-	 * descriptions are at most 350 code points with no rejected-class code point; no unknown key at any level.
+	 * NAME_PATTERN and strictly increase per owner (R-8, ASCII-lowercased), so a repeated name, which the
+	 * keyed each below would throw on, is rejected here; `fetched_at` has the exact grammar;
+	 * descriptions are at most 350 code points with no rejected-class or lone-surrogate code point;
+	 * no unknown key at any level.
 	 */
 	function parseList(body: unknown): Group[] {
 		const fail = (): never => {
 			throw new Error('Failed to load');
 		};
 		if (!isRecord(body) || !hasExactKeys(body, ['fetched_at', 'groups'])) return fail();
-		if (typeof body.fetched_at !== 'string' || !Array.isArray(body.groups)) return fail();
+		if (typeof body.fetched_at !== 'string' || !isFetchedAt(body.fetched_at)) return fail();
+		if (!Array.isArray(body.groups)) return fail();
 		if (body.groups.length !== OWNERS.length) return fail();
 		return body.groups.map((g: unknown, i): Group => {
 			if (!isRecord(g) || !hasExactKeys(g, ['owner', 'repos'])) return fail();
 			const owner = OWNERS[i];
 			if (typeof g.owner !== 'string' || g.owner !== owner) return fail();
 			if (!Array.isArray(g.repos) || g.repos.length === 0) return fail();
-			const names = new Set<string>();
+			let prevName: string | null = null;
 			return {
 				owner,
 				repos: g.repos.map((r: unknown): Repo => {
 					if (!isRecord(r) || !hasExactKeys(r, ['name', 'description'])) return fail();
 					if (typeof r.name !== 'string' || typeof r.description !== 'string') return fail();
-					if (!NAME_PATTERN.test(r.name) || names.has(r.name)) return fail();
+					if (!NAME_PATTERN.test(r.name)) return fail();
+					// Strictly increasing also rejects a repeated name and a case-only twin.
+					if (prevName !== null && !(asciiLower(prevName) < asciiLower(r.name))) return fail();
 					if ([...r.description].length > MAX_DESCRIPTION_CODE_POINTS) return fail();
 					if (hasRejectedCodePoint(r.description)) return fail();
-					names.add(r.name);
+					prevName = r.name;
 					return { name: r.name, description: r.description };
 				}),
 			};
