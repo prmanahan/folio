@@ -10,8 +10,16 @@
 		repos: Repo[];
 	}
 
+	/** R-24: a request not settled after 15 s is aborted and counts as a network error. */
+	const TIMEOUT_MS = 15_000;
+	/** R-24's one line, shown for every failed load. */
+	const UNAVAILABLE = 'The project list is temporarily unavailable; try again shortly.';
+	// The two owners the list is drawn from; R-24 links to both when the list is unavailable.
+	const OWNERS = ['mnemra', 'prmanahan'] as const;
+
+	type LoadState = 'loading' | 'ready' | 'unavailable';
 	let groups: Group[] = $state([]);
-	let error: string | null = $state(null);
+	let status: LoadState = $state('loading');
 
 	function isRecord(v: unknown): v is Record<string, unknown> {
 		return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -45,16 +53,31 @@
 		});
 	}
 
-	// Loaded in the browser, not at build time: the list file exists only on the deployed server (R-16).
-	onMount(async () => {
-		try {
-			const res = await fetch('/projects.json');
-			if (!res.ok) throw new Error('Failed to load');
-			groups = parseList(await res.json());
-		} catch {
-			groups = [];
-			error = 'Failed to load';
-		}
+	// Loaded in the browser from the held list (R-24). The timeout is setTimeout + AbortController,
+	// not AbortSignal.timeout: the edge test's page.clock can fake only the former (T17, LL-PW-4).
+	onMount(() => {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+		void (async () => {
+			try {
+				const res = await fetch('/api/lists/projects', { signal: controller.signal });
+				if (!res.ok) throw new Error('Failed to load');
+				const parsed = parseList(await res.json());
+				// A response arriving after the abort is never applied.
+				if (controller.signal.aborted) throw new Error('Failed to load');
+				groups = parsed;
+				status = 'ready';
+			} catch {
+				groups = [];
+				status = 'unavailable';
+			} finally {
+				clearTimeout(timer);
+			}
+		})();
+		return () => {
+			clearTimeout(timer);
+			controller.abort();
+		};
 	});
 </script>
 
@@ -64,8 +87,19 @@
 
 <div class="container page">
 	<h1>Projects</h1>
-	{#if error}
-		<p class="error" role="alert">{error}</p>
+	{#if status === 'loading'}
+		<!-- R-24: only the heading while pending. -->
+	{:else if status === 'unavailable'}
+		<p class="error" role="alert">{UNAVAILABLE}</p>
+		<ul class="owner-links">
+			{#each OWNERS as owner (owner)}
+				<li>
+					<a href="https://github.com/{owner}" target="_blank" rel="noopener noreferrer"
+						>{owner} on GitHub</a
+					>
+				</li>
+			{/each}
+		</ul>
 	{:else if groups.length === 0}
 		<p class="empty">No projects yet.</p>
 	{:else}
@@ -134,5 +168,15 @@
 
 	.error {
 		color: var(--color-gap);
+	}
+
+	.owner-links {
+		list-style: none;
+		padding: 0;
+		margin: 0.5rem 0 0;
+	}
+
+	.owner-links a {
+		text-decoration: underline;
 	}
 </style>
