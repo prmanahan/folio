@@ -15,9 +15,9 @@ pub(crate) const BLOG_URL: &str = "https://mnemra.dev/blog/";
 const CACHE_CONTROL: &str = "public, max-age=3600";
 
 /// Strict percent-decoding of a request path. `None` when a `%` is not followed
-/// by two hex digits, or the decoded bytes are not UTF-8. Stricter than
-/// `static_files::percent_decode_utf8`, which keeps an invalid escape literally
-/// (R-25), so that helper is deliberately not reused.
+/// by two hex digits, or the decoded bytes are not UTF-8. Stricter than the
+/// decoding `ServeDir` applies to static paths, which keeps an invalid escape
+/// literally (R-25), so the redirect decides on its own strict reading.
 fn strict_percent_decode(path: &str) -> Option<String> {
     let bytes = path.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

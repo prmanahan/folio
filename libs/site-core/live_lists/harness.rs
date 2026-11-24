@@ -107,10 +107,6 @@ impl Env {
         self.dir.path().join("static")
     }
 
-    pub(crate) fn projects_json_path(&self) -> PathBuf {
-        self.static_dir().join("projects.json")
-    }
-
     pub(crate) fn db_path(&self) -> PathBuf {
         self.dir.path().join("site.db")
     }

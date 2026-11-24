@@ -38,12 +38,13 @@ Every request to the backend — page loads included — now requires the `EDGE_
 
 ### Frontend hot-reload (recommended for browsing)
 
-The server refuses to start without a valid `frontend/build/projects.json`. Fetch the projects list, then build the frontend once:
+The server needs a built frontend in `frontend/build`. Build it once:
 
 ```bash
-GITHUB_TOKEN=<a token> just fetch-projects
 cd frontend && npm run build
 ```
+
+The projects and articles lists are not part of the build. The server fetches them itself when it starts and keeps them fresh; until a list has arrived (or if the network is closed), `/projects` shows its "temporarily unavailable" line.
 
 In one terminal, run the backend:
 
@@ -60,8 +61,6 @@ just frontend-dev   # serves on port 5173
 Open `http://localhost:5173` in a browser. Vite serves pages directly (not through the backend), and its `/api` proxy reads `EDGE_AUTH_TOKEN` from `.env` and attaches it to every proxied request on your behalf — so this is the one entry point the origin lock doesn't block.
 
 ### Full stack
-
-First run `GITHUB_TOKEN=<a token> just fetch-projects` (the server refuses to start without `frontend/build/projects.json`), then:
 
 ```bash
 just run

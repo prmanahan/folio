@@ -1,4 +1,4 @@
-//! Validator for the public list file `projects.json` (spec R-8, R-10, R-18,
+//! Validator for the public projects list document (spec R-8, R-10, R-18,
 //! Data Model).
 //!
 //! Untrusted input: list text arrives from the refresher and from the store,

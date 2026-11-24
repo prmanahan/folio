@@ -841,12 +841,18 @@ mod tests {
 
     // ---- R-29: the startup refusal is retired ----
 
+    /// The retired list file, named on purpose: R-29's tests prove the start no longer reads it
+    /// (R-29's grep exempts an inline `#[cfg(test)]` module that does).
+    fn retired_list_file(env: &Env) -> std::path::PathBuf {
+        env.static_dir().join("projects.json")
+    }
+
     #[tokio::test]
     async fn r29_with_no_list_file_and_an_empty_store_the_start_serves_and_both_lists_read_as_no_data_yet()
      {
         // Given no list file and an empty store
         let env = Env::new();
-        assert!(!env.projects_json_path().exists(), "setup: no list file");
+        assert!(!retired_list_file(&env).exists(), "setup: no list file");
         // When the start function runs
         let result = try_launch(env.inputs(None, Sources::default())).await;
         // Then it serves
@@ -871,7 +877,7 @@ mod tests {
     #[tokio::test]
     async fn r29_a_list_file_that_is_present_but_invalid_is_not_read() {
         let env = Env::new();
-        std::fs::write(env.projects_json_path(), "{}").unwrap();
+        std::fs::write(retired_list_file(&env), "{}").unwrap();
         let result = try_launch(env.inputs(None, Sources::default())).await;
         assert!(
             result.is_ok(),
