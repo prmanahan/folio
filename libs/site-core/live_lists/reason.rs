@@ -143,6 +143,8 @@ pub enum ReasonCode {
     PostLinkNotCanonical,
     /// R-11: `pubDate` is over 64 bytes, not RFC 2822, or not representable.
     PostPubDate,
+    /// R-11: `pubDate` is over 64 bytes.
+    PostPubDateTooLong,
     /// R-11: the articles validator refused a post for a reason no field rule names.
     PostValidatorRefused,
     /// R-7 to R-11: the source's articles document failed the articles
@@ -216,6 +218,7 @@ impl ReasonCode {
             ReasonCode::PostLinkPath => "post_link_path",
             ReasonCode::PostLinkNotCanonical => "post_link_not_canonical",
             ReasonCode::PostPubDate => "post_pub_date",
+            ReasonCode::PostPubDateTooLong => "post_pub_date_too_long",
             ReasonCode::PostValidatorRefused => "post_validator_refused",
             ReasonCode::ArticlesDocumentRejected => "articles_document_rejected",
         }

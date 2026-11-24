@@ -86,6 +86,25 @@ pub enum FeedRule {
     DocumentInvalid,
 }
 
+/// Why the whole feed failed, and the items among the first 20 that were
+/// rejected on the way (R-12): a feed with no valid post still reports each
+/// skipped item. Only [`FeedRule::NoValidPost`] and [`FeedRule::DocumentInvalid`]
+/// carry any; every other rule fails before the items are judged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedFailure {
+    pub rule: FeedRule,
+    pub skipped: Vec<SkippedItem>,
+}
+
+impl From<FeedRule> for FeedFailure {
+    fn from(rule: FeedRule) -> Self {
+        Self {
+            rule,
+            skipped: Vec::new(),
+        }
+    }
+}
+
 /// Why one post was rejected (R-8 to R-11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PostRule {
@@ -109,6 +128,8 @@ pub enum PostRule {
     Summary(TextRule),
     Link(LinkRule),
     PubDate,
+    /// R-11: `pubDate` is over 64 bytes.
+    PubDateTooLong,
     /// The articles validator refused for a reason no field rule names.
     Validator,
 }
@@ -121,16 +142,16 @@ pub enum PostRule {
 /// are collected and validated (R-12).
 ///
 /// # Errors
-/// The [`FeedRule`] that failed the whole feed.
-pub fn parse_feed(body: &[u8], now: OffsetDateTime) -> Result<FeedOutcome, FeedRule> {
+/// The [`FeedFailure`]: the rule that failed the whole feed, and the skips.
+pub fn parse_feed(body: &[u8], now: OffsetDateTime) -> Result<FeedOutcome, FeedFailure> {
     if body.len() > MAX_BODY_BYTES {
-        return Err(FeedRule::TooLarge);
+        return Err(FeedRule::TooLarge.into());
     }
     let text = std::str::from_utf8(body).map_err(|_| FeedRule::NotUtf8)?;
     // A byte-order mark is not whitespace, so it is a prolog violation. It is
     // refused here so the outcome never depends on whether the reader skips it.
     if text.starts_with('\u{FEFF}') {
-        return Err(FeedRule::Prolog);
+        return Err(FeedRule::Prolog.into());
     }
     let scan = Scanner::new(text).scan()?;
     // The wall clock is the caller's; a year the grammar cannot hold is not a
@@ -640,9 +661,9 @@ fn document_of(fetched_at: &str, posts: &[Post]) -> String {
 
 /// R-12: keep the valid posts in order, record the skips, and confirm the
 /// whole document with the validator the refresher will run.
-fn assemble(scan: Scan, fetched_at: &str) -> Result<FeedOutcome, FeedRule> {
+fn assemble(scan: Scan, fetched_at: &str) -> Result<FeedOutcome, FeedFailure> {
     if scan.items_seen == 0 {
-        return Err(FeedRule::NoItems);
+        return Err(FeedRule::NoItems.into());
     }
     let mut posts = Vec::new();
     let mut skipped = Vec::new();
@@ -653,7 +674,7 @@ fn assemble(scan: Scan, fetched_at: &str) -> Result<FeedOutcome, FeedRule> {
         }
     }
     if posts.is_empty() {
-        return Err(FeedRule::NoValidPost);
+        return Err(FeedRule::NoValidPost.into());
     }
     let document = document_of(fetched_at, &posts);
     articles::parse(&document).map_err(|_| FeedRule::DocumentInvalid)?;
@@ -731,7 +752,7 @@ pub(crate) mod tests {
     }
 
     fn run(body: &str) -> Result<FeedOutcome, FeedRule> {
-        parse_feed(body.as_bytes(), now())
+        parse_feed(body.as_bytes(), now()).map_err(|f| f.rule)
     }
 
     fn fails(body: &str, rule: FeedRule) {
@@ -839,11 +860,17 @@ pub(crate) mod tests {
             body.push(0xFF);
             body.extend_from_slice(after.as_bytes());
             body.extend_from_slice(b"</channel></rss>");
-            assert_eq!(parse_feed(&body, now()), Err(FeedRule::NotUtf8));
+            assert_eq!(
+                parse_feed(&body, now()).map_err(|f| f.rule),
+                Err(FeedRule::NotUtf8)
+            );
         }
         let mut body = feed(&good(1)).into_bytes();
         body.extend_from_slice(b"\n\xFF");
-        assert_eq!(parse_feed(&body, now()), Err(FeedRule::NotUtf8));
+        assert_eq!(
+            parse_feed(&body, now()).map_err(|f| f.rule),
+            Err(FeedRule::NotUtf8)
+        );
     }
 
     #[test]
@@ -1991,7 +2018,7 @@ pub(crate) mod tests {
         for (name, body, verdict) in fixtures {
             // Then each fails the feed, or skips item 0, by exactly its rule
             let got = match parse_feed(&body, now()) {
-                Err(rule) => Verdict::Feed(rule),
+                Err(failure) => Verdict::Feed(failure.rule),
                 Ok(out) => {
                     assert_eq!(out.skipped.len(), 1, "{name}: {:?}", out.skipped);
                     assert_eq!(out.skipped[0].index, 0, "{name}");
@@ -2045,7 +2072,7 @@ pub(crate) mod tests {
         // 23:00 at -01:00 on 31 Dec 9999 is year 10000 in UTC
         let at = time::macros::datetime!(9999-12-31 23:00 -1);
         assert_eq!(
-            parse_feed(feed(&good(1)).as_bytes(), at),
+            parse_feed(feed(&good(1)).as_bytes(), at).map_err(|f| f.rule),
             Err(FeedRule::DocumentInvalid)
         );
     }
