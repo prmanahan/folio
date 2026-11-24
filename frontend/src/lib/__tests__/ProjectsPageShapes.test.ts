@@ -56,7 +56,7 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-describe('R-13: a wrong-shape list file shows the error state and no entries', () => {
+describe('R-24: a wrong-shape list file shows the unavailable line and no entries', () => {
 	it('the fixture has at least one group with a repo, so each mutation below changes real data', () => {
 		expect(EXPECTED.groups.length).toBeGreaterThan(0);
 		expect(EXPECTED.groups[0].repos.length).toBeGreaterThan(0);
@@ -125,10 +125,23 @@ describe('Data Model: one rule per case, each shows the unavailable line', () =>
 		['a description with a newline (Cc)', (l) => (l.groups[0].repos[0].description = 'a\nb')],
 		['a description with DEL (Cc)', (l) => (l.groups[0].repos[0].description = 'a\u007fb')],
 		['a description with U+0085 (C1 control)', (l) => (l.groups[0].repos[0].description = 'a\u0085b')],
-		['a description with U+2028', (l) => (l.groups[0].repos[0].description = 'a b')],
-		['a description with U+2029', (l) => (l.groups[0].repos[0].description = 'a b')],
-		['a description with a zero-width space (invisible table)', (l) => (l.groups[0].repos[0].description = 'a​b')],
-		['a description with a bidi control (invisible table)', (l) => (l.groups[0].repos[0].description = 'a‮b')],
+		['a description with U+2028', (l) => (l.groups[0].repos[0].description = 'a\u2028b')],
+		['a description with U+2029', (l) => (l.groups[0].repos[0].description = 'a\u2029b')],
+		['a description with a zero-width space (invisible table)', (l) => (l.groups[0].repos[0].description = 'a\u200bb')],
+		['a description with a bidi control (invisible table)', (l) => (l.groups[0].repos[0].description = 'a\u202eb')],
+		['a description with a lone high surrogate', (l) => (l.groups[0].repos[0].description = 'a\ud800b')],
+		['a description with a lone low surrogate', (l) => (l.groups[0].repos[0].description = 'a\udc00b')],
+		['a description with a reversed surrogate pair', (l) => (l.groups[0].repos[0].description = '\udc00\ud800')],
+		['a description ending in a high surrogate', (l) => (l.groups[0].repos[0].description = 'abc\ud83d')],
+		['fetched_at with a numeric offset', (l) => (l.fetched_at = '2026-11-13T12:00:00.000+00:00')],
+		['fetched_at with a lowercase t', (l) => (l.fetched_at = '2026-11-13t12:00:00.000Z')],
+		['fetched_at with a lowercase z', (l) => (l.fetched_at = '2026-11-13T12:00:00.000z')],
+		['fetched_at with no fraction', (l) => (l.fetched_at = '2026-11-13T12:00:00Z')],
+		['fetched_at with a one-digit fraction', (l) => (l.fetched_at = '2026-11-13T12:00:00.0Z')],
+		['fetched_at with a four-digit fraction', (l) => (l.fetched_at = '2026-11-13T12:00:00.0000Z')],
+		['fetched_at that is not a calendar instant (Feb 30)', (l) => (l.fetched_at = '2026-02-30T12:00:00.000Z')],
+		['a case-only twin within an owner', (l) => l.groups[0].repos.splice(1, 0, { name: 'fixture-A-B', description: '' })],
+		['an out-of-order pair within an owner', (l) => l.groups[0].repos.reverse()],
 		['a description with a tag character (invisible table)', (l) => (l.groups[0].repos[0].description = 'a\u{E0041}b')],
 		['an unknown key at the top level', (l) => Object.assign(l, { extra: 1 })],
 		['an unknown key on a group', (l) => Object.assign(l.groups[0], { extra: 1 })],
@@ -151,7 +164,8 @@ describe('Data Model: one rule per case, each shows the unavailable line', () =>
 			'a description of 350 astral code points (700 UTF-16 units)',
 			(l) => (l.groups[0].repos[0].description = '\u{1F600}'.repeat(350)),
 		],
-		['a name with dot, underscore and hyphen', (l) => (l.groups[0].repos[0].name = 'Fixture.a_b-C')],
+		// Last of mnemra: lowercased 'fixture.z_y-z' sorts after 'fixture-mixed-b' ('.' > '-'), so order holds.
+		['a name with dot, underscore and hyphen', (l) => (l.groups[0].repos[4].name = 'fixture.z_y-Z')],
 	];
 	for (const [name, mutate] of accepts) {
 		it(`accepts ${name}`, async () => {

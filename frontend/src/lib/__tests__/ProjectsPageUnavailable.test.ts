@@ -48,6 +48,7 @@ beforeEach(() => {
 	vi.unstubAllGlobals();
 });
 afterEach(() => {
+	vi.restoreAllMocks();
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
@@ -106,7 +107,8 @@ describe('R-24: pending and the 15 s abort', () => {
 
 	it('unmounting aborts the request and leaves no timer behind', async () => {
 		vi.useFakeTimers();
-		stubFetch(hang);
+		// Never settles and ignores the signal, so only the page's own cleanup can clear its timer.
+		stubFetch(() => new Promise<Response>(() => {}));
 		const { unmount } = render(ProjectsPage);
 		await vi.advanceTimersByTimeAsync(1_000);
 		expect(vi.getTimerCount()).toBeGreaterThan(0);
@@ -126,7 +128,6 @@ describe('R-24: pending and the 15 s abort', () => {
 
 		expect(signals[0].aborted).toBe(true);
 		expect(spy).not.toHaveBeenCalled();
-		spy.mockRestore();
 	});
 
 	it('a response that settles before 15 s is applied and the timer does not later replace it', async () => {
