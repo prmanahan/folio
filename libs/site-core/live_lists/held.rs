@@ -4,9 +4,10 @@
 //! whatever the readers serve was validated, and the stored row, the held
 //! text and a 200 body are one string (R-15, R-21).
 //!
-//! The refresher is the only writer. A write replaces one `Arc` under a lock
-//! held for that assignment alone, so no lock is held across a path that can
-//! panic (R-17).
+//! The writers are the start-up load and the refresher, both inside this
+//! crate (the setters are `pub(crate)`); no request handler can write. A write
+//! replaces one `Arc` under a lock held for that assignment alone, so no lock
+//! is held across a path that can panic (R-17).
 
 use std::sync::{Arc, PoisonError, RwLock};
 
@@ -149,7 +150,7 @@ impl LiveLists {
             .clone()
     }
 
-    pub fn set_projects(&self, held: Arc<Held<ProjectsList>>) {
+    pub(crate) fn set_projects(&self, held: Arc<Held<ProjectsList>>) {
         self.0
             .snapshot
             .write()
@@ -157,7 +158,7 @@ impl LiveLists {
             .projects = Some(held);
     }
 
-    pub fn set_articles(&self, held: Arc<Held<ArticlesList>>) {
+    pub(crate) fn set_articles(&self, held: Arc<Held<ArticlesList>>) {
         self.0
             .snapshot
             .write()

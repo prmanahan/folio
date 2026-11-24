@@ -17,7 +17,16 @@ pub fn install() {
 
 /// The hook body: where and on which thread, never what.
 pub fn log_panic(info: &PanicHookInfo<'_>) {
-    let _ = info;
+    let location = info
+        .location()
+        .map(|l| format!("{}:{}", l.file(), l.line()))
+        .unwrap_or_else(|| "unknown".to_string());
+    let current = std::thread::current();
+    tracing::error!(
+        location = %location,
+        thread = current.name().unwrap_or("<unnamed>"),
+        "panic (payload withheld)"
+    );
 }
 
 #[cfg(test)]

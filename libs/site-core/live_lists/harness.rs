@@ -90,6 +90,9 @@ impl Env {
             r#"<!doctype html><meta http-equiv="content-security-policy" content="default-src 'self'">"#,
         )
         .expect("write index.html");
+        // A usable header policy, so a start logs no CSP error of its own.
+        std::fs::write(static_dir.join("csp-header.txt"), "default-src 'self'")
+            .expect("write csp-header.txt");
         std::fs::write(static_dir.join("projects.json"), projects_doc(T0))
             .expect("write projects.json");
         // Generated per run: no credential literal in the source.
@@ -167,7 +170,7 @@ impl Env {
             cors_origin: Some("http://localhost:3000".to_string()),
             switch,
             clock: self.clock.clone(),
-            sources,
+            sources: Some(sources),
             store: None,
         }
     }

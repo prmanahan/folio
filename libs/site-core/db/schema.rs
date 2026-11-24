@@ -73,8 +73,9 @@ fn ensure_migrations_table(conn: &Connection) -> Result<(), rusqlite::Error> {
 /// `transaction()` adds over `unchecked_transaction()` is compile-time
 /// protection against *nested* transactions — not needed here because no
 /// caller anywhere in this codebase ever holds an open transaction on the
-/// connection passed in here (no other `.transaction()` /
-/// `unchecked_transaction()` call exists anywhere else in the codebase), and
+/// connection passed in here (the only other transaction user,
+/// `live_lists::store::SqliteStore::persist`, runs on its own connection that
+/// never calls the migration runner while a transaction is open), and
 /// no migration SQL contains BEGIN/COMMIT/SAVEPOINT. This function *is*
 /// called more than once per process on the same connection in some paths
 /// (e.g. re-entrant `db::migrate` calls in tests) — that's fine precisely
