@@ -176,6 +176,7 @@ test.describe('/projects reads /api/lists/projects (R-24)', () => {
     const description = page.getByText(hostile, { exact: true });
     await expect(description).toHaveCount(1, { timeout: 10000 });
     const region = page.locator('ul', { has: description });
+    await expect(region).toHaveCount(1);
     await expect(region.locator('img')).toHaveCount(0);
     await expect(region.locator('strong')).toHaveCount(0);
   });
