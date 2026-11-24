@@ -1564,7 +1564,7 @@ pub(crate) mod tests {
     fn r11_pubdate_is_at_most_64_bytes_and_rfc_2822() {
         let long = format!("Tue, 28 Apr 2026 00:00:00 GMT{}", " ".repeat(40));
         assert!(long.len() > 64);
-        rejects_post(&date_item(&long), PostRule::PubDate);
+        rejects_post(&date_item(&long), PostRule::PubDateTooLong);
         rejects_post(&date_item("yesterday"), PostRule::PubDate);
         rejects_post(&date_item("2026-04-28T00:00:00Z"), PostRule::PubDate);
         rejects_post(
@@ -1584,7 +1584,7 @@ pub(crate) mod tests {
             doc(&out)["posts"][0]["published"],
             "2026-04-28T00:00:00.000Z"
         );
-        rejects_post(&date_item(&format!("{at_64} ")), PostRule::PubDate);
+        rejects_post(&date_item(&format!("{at_64} ")), PostRule::PubDateTooLong);
     }
 
     #[test]
@@ -1998,6 +1998,86 @@ pub(crate) mod tests {
             PostRule::Link(LinkRule::Path),
         );
         post_fail(
+            "r7 atom:title item is a missing title",
+            "<item><atom:title>T</atom:title><link>https://mnemra.dev/blog/x/</link><description>D</description><pubDate>Tue, 28 Apr 2026 00:00:00 GMT</pubDate></item>".into(),
+            PostRule::MissingField(Field::Title),
+        );
+        post_fail(
+            "r9 duplicate title",
+            good_plus("<title>again</title>"),
+            PostRule::DuplicateField,
+        );
+        post_fail(
+            "r9 empty title",
+            good_with(Field::Title, "<title></title>"),
+            PostRule::EmptyField,
+        );
+        post_fail(
+            "r9 self-closing title",
+            good_with(Field::Title, "<title/>"),
+            PostRule::SelfClosingChild,
+        );
+        post_fail(
+            "r9 whitespace after a field name",
+            good_with(Field::Title, "<title >T</title>"),
+            PostRule::StartTagNotBare,
+        );
+        post_fail(
+            "r9 cdata directly in item",
+            good_plus("<![CDATA[x]]>"),
+            PostRule::StrayContent,
+        );
+        post_fail(
+            "r9 comment directly in item",
+            good_plus("<!-- c -->"),
+            PostRule::StrayContent,
+        );
+        post_fail(
+            "r11 rejected char in the summary",
+            good_with(Field::Description, "<description>a\u{2028}b</description>"),
+            PostRule::Summary(TextRule::RejectedChar),
+        );
+        post_fail(
+            "r11 raw link over 300 bytes",
+            link_item(&format!("https://mnemra.dev/blog/{}", "a".repeat(300))),
+            PostRule::Link(LinkRule::TooLong),
+        );
+        post_fail(
+            "r11 raw link with a rejected-class code point",
+            link_item("https://mnemra.dev/blog/a\u{2028}b"),
+            PostRule::Link(LinkRule::RejectedChar),
+        );
+        post_fail(
+            "r11 link not a URL",
+            link_item("not a url"),
+            PostRule::Link(LinkRule::NotAUrl),
+        );
+        post_fail(
+            "r11 link port",
+            link_item("https://mnemra.dev:8443/blog/x/"),
+            PostRule::Link(LinkRule::Port),
+        );
+        post_fail(
+            "r11 link userinfo",
+            link_item("https://user@mnemra.dev/blog/x/"),
+            PostRule::Link(LinkRule::Userinfo),
+        );
+        post_fail(
+            "r11 link fragment",
+            link_item("https://mnemra.dev/blog/x/#top"),
+            PostRule::Link(LinkRule::Fragment),
+        );
+        post_fail(
+            "r11 link whose serialized form differs",
+            link_item("https://MNEMRA.dev/blog/x/"),
+            PostRule::Link(LinkRule::NotCanonical),
+        );
+        post_fail(
+            "r11 pubDate over 64 bytes",
+            date_item(&format!("Tue, 28 Apr 2026 00:00:00 GMT{}", " ".repeat(40))),
+            PostRule::PubDateTooLong,
+        );
+        post_fail(
             "r11 pubDate not RFC 2822",
             date_item("yesterday"),
             PostRule::PubDate,
@@ -2014,7 +2094,6 @@ pub(crate) mod tests {
     fn every_negative_fixture_is_negative_for_its_stated_rule() {
         // Given the table R-13 runs through a live refresher
         let fixtures = negative_fixtures();
-        assert!(fixtures.len() >= 45, "{} fixtures", fixtures.len());
         for (name, body, verdict) in fixtures {
             // Then each fails the feed, or skips item 0, by exactly its rule
             let got = match parse_feed(&body, now()) {
@@ -2027,6 +2106,59 @@ pub(crate) mod tests {
             };
             assert_eq!(got, verdict, "{name}");
         }
+    }
+
+    // ---- R-12: a failed feed still reports its skipped items ----
+
+    #[test]
+    fn r12_a_feed_with_no_valid_post_carries_every_skipped_item() {
+        let failure = parse_feed(feed("<item></item><item/><item></item>").as_bytes(), now())
+            .expect_err("no valid post");
+        assert_eq!(failure.rule, FeedRule::NoValidPost);
+        let missing = PostRule::MissingField(Field::Title);
+        assert_eq!(
+            failure.skipped,
+            vec![
+                SkippedItem {
+                    index: 0,
+                    rule: missing
+                },
+                SkippedItem {
+                    index: 1,
+                    rule: missing
+                },
+                SkippedItem {
+                    index: 2,
+                    rule: missing
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn r12_a_document_invalid_failure_carries_the_skipped_items_too() {
+        let at = time::macros::datetime!(9999-12-31 23:00 -1);
+        let body = feed(&format!("<item></item>{}", good(1)));
+        let failure = parse_feed(body.as_bytes(), at).expect_err("clock out of range");
+        assert_eq!(failure.rule, FeedRule::DocumentInvalid);
+        assert_eq!(
+            failure.skipped,
+            vec![SkippedItem {
+                index: 0,
+                rule: PostRule::MissingField(Field::Title)
+            }]
+        );
+    }
+
+    #[test]
+    fn a_whole_feed_failure_before_the_items_are_judged_carries_no_skips() {
+        let failure = parse_feed(
+            feed(&format!("<item></item>{}<!DOCTYPE x>", good(1))).as_bytes(),
+            now(),
+        )
+        .expect_err("doctype");
+        assert_eq!(failure.rule, FeedRule::Doctype);
+        assert!(failure.skipped.is_empty());
     }
 
     // ---- declarations and encoding ----

@@ -204,9 +204,15 @@ mod tests {
             PostRule::NumericReference,
             PostRule::UnknownEntity,
             PostRule::PubDate,
+            PostRule::PubDateTooLong,
             PostRule::Validator,
         ];
-        for t in [TextRule::TooLong, TextRule::RejectedChar] {
+        for t in [
+            TextRule::Empty,
+            TextRule::TooLong,
+            TextRule::RejectedChar,
+            TextRule::AngleBracket,
+        ] {
             rules.push(PostRule::Title(t));
             rules.push(PostRule::Summary(t));
         }
@@ -228,6 +234,137 @@ mod tests {
         rules
     }
 
+    /// An exhaustive witness: a rule added to the parser fails to compile
+    /// here until it has an index, and `the_rule_lists_cover_every_rule`
+    /// then fails until the list holds it.
+    fn index_of_feed(rule: FeedRule) -> usize {
+        match rule {
+            FeedRule::TooLarge => 0,
+            FeedRule::NotUtf8 => 1,
+            FeedRule::Xml => 2,
+            FeedRule::Prolog => 3,
+            FeedRule::Doctype => 4,
+            FeedRule::ProcessingInstruction => 5,
+            FeedRule::XmlDeclaration => 6,
+            FeedRule::Root => 7,
+            FeedRule::Channel => 8,
+            FeedRule::Close => 9,
+            FeedRule::StrayContent => 10,
+            FeedRule::TooDeep => 11,
+            FeedRule::NoItems => 12,
+            FeedRule::NoValidPost => 13,
+            FeedRule::DocumentInvalid => 14,
+        }
+    }
+    const FEED_RULES: usize = 15;
+
+    fn index_of_post(rule: PostRule) -> usize {
+        match rule {
+            PostRule::UnknownChild => 0,
+            PostRule::SelfClosingChild => 1,
+            PostRule::DuplicateField => 2,
+            PostRule::EmptyField => 3,
+            PostRule::MissingField(
+                Field::Title | Field::Link | Field::Description | Field::PubDate,
+            ) => 4,
+            PostRule::StartTagNotBare => 5,
+            PostRule::StrayContent => 6,
+            PostRule::ElementInField => 7,
+            PostRule::CDataInField => 8,
+            PostRule::CommentInField => 9,
+            PostRule::AngleBracketInField => 10,
+            PostRule::NumericReference => 11,
+            PostRule::UnknownEntity => 12,
+            PostRule::Title(TextRule::Empty) => 13,
+            PostRule::Title(TextRule::TooLong) => 14,
+            PostRule::Title(TextRule::RejectedChar) => 15,
+            PostRule::Title(TextRule::AngleBracket) => 16,
+            PostRule::Summary(TextRule::Empty) => 17,
+            PostRule::Summary(TextRule::TooLong) => 18,
+            PostRule::Summary(TextRule::RejectedChar) => 19,
+            PostRule::Summary(TextRule::AngleBracket) => 20,
+            PostRule::Link(LinkRule::TooLong) => 21,
+            PostRule::Link(LinkRule::RejectedChar) => 22,
+            PostRule::Link(LinkRule::NotAUrl) => 23,
+            PostRule::Link(LinkRule::Scheme) => 24,
+            PostRule::Link(LinkRule::Host) => 25,
+            PostRule::Link(LinkRule::Port) => 26,
+            PostRule::Link(LinkRule::Userinfo) => 27,
+            PostRule::Link(LinkRule::Query) => 28,
+            PostRule::Link(LinkRule::Fragment) => 29,
+            PostRule::Link(LinkRule::Path) => 30,
+            PostRule::Link(LinkRule::NotCanonical) => 31,
+            PostRule::PubDate => 32,
+            PostRule::PubDateTooLong => 33,
+            PostRule::Validator => 34,
+        }
+    }
+    const POST_RULES: usize = 35;
+
+    #[test]
+    fn the_rule_lists_cover_every_rule() {
+        let feed: Vec<usize> = all_feed_rules().into_iter().map(index_of_feed).collect();
+        assert_eq!(
+            feed.iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            (0..FEED_RULES).collect(),
+            "all_feed_rules is missing a rule"
+        );
+        assert_eq!(feed.len(), FEED_RULES, "all_feed_rules repeats a rule");
+        let post: Vec<usize> = all_post_rules().into_iter().map(index_of_post).collect();
+        assert_eq!(
+            post.iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            (0..POST_RULES).collect(),
+            "all_post_rules is missing a rule"
+        );
+        assert_eq!(post.len(), POST_RULES, "all_post_rules repeats a rule");
+    }
+
+    /// Rules the parser cannot produce: the field-level check runs first for
+    /// an empty or angle-bracket title or summary, the validator is a
+    /// backstop, and `DocumentInvalid` is an internal invariant (its own test).
+    fn unreachable_post_rule(rule: PostRule) -> bool {
+        matches!(
+            rule,
+            PostRule::Title(TextRule::Empty | TextRule::AngleBracket)
+                | PostRule::Summary(TextRule::Empty | TextRule::AngleBracket)
+                | PostRule::Validator
+        )
+    }
+
+    #[test]
+    fn the_negative_table_produces_exactly_the_reason_codes_the_mappings_can() {
+        // The codes the table's fixtures produce, through the same mappings
+        let produced: std::collections::BTreeSet<&str> = negative_fixtures()
+            .into_iter()
+            .map(|(_, _, verdict)| match verdict {
+                Verdict::Feed(rule) => reason_of_feed(rule).as_str(),
+                Verdict::Post(rule) => reason_of_post(rule).as_str(),
+            })
+            .collect();
+        // The image of the mappings over every reachable rule
+        let mut image: std::collections::BTreeSet<&str> = all_feed_rules()
+            .into_iter()
+            .filter(|r| *r != FeedRule::DocumentInvalid)
+            .map(|r| reason_of_feed(r).as_str())
+            .collect();
+        image.extend(
+            all_post_rules()
+                .into_iter()
+                .filter(|r| !unreachable_post_rule(*r))
+                .map(|r| reason_of_post(r).as_str()),
+        );
+        let missing: Vec<_> = image.difference(&produced).collect();
+        let extra: Vec<_> = produced.difference(&image).collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "table lacks codes {missing:?}; table has unreachable codes {extra:?}"
+        );
+    }
+
     #[test]
     fn r30_every_feed_rule_has_its_own_reason_code_and_a_body_over_the_cap_reuses_r4s() {
         let codes: Vec<ReasonCode> = all_feed_rules().into_iter().map(reason_of_feed).collect();
@@ -240,7 +377,18 @@ mod tests {
 
     #[test]
     fn r30_every_post_rule_has_its_own_reason_code() {
-        let codes: Vec<ReasonCode> = all_post_rules().into_iter().map(reason_of_post).collect();
+        // the four routes that share another rule's code are asserted below
+        let codes: Vec<ReasonCode> = all_post_rules()
+            .into_iter()
+            .filter(|r| {
+                !matches!(
+                    r,
+                    PostRule::Title(TextRule::Empty | TextRule::AngleBracket)
+                        | PostRule::Summary(TextRule::Empty | TextRule::AngleBracket)
+                )
+            })
+            .map(reason_of_post)
+            .collect();
         let distinct: HashSet<&str> = codes.iter().map(|c| c.as_str()).collect();
         assert_eq!(distinct.len(), codes.len(), "{codes:?}");
         // the same rule through two parser routes is one code
@@ -304,6 +452,22 @@ mod tests {
         );
         assert_eq!(report.document, Err(ReasonCode::NonSuccessStatus));
         assert_eq!(report.requests, vec![note]);
+    }
+
+    #[test]
+    fn an_all_bad_feed_reports_the_failure_code_and_one_skip_per_item() {
+        let body = "<rss><channel><item></item><item/></channel></rss>";
+        let report = feed_report(ok_fetched(body.as_bytes()), datetime!(2026-11-24 12:00 UTC));
+        assert_eq!(report.document, Err(ReasonCode::FeedNoValidPost));
+        let skips: Vec<(usize, ReasonCode)> =
+            report.skipped.iter().map(|s| (s.index, s.reason)).collect();
+        assert_eq!(
+            skips,
+            vec![
+                (0, ReasonCode::PostMissingField),
+                (1, ReasonCode::PostMissingField)
+            ]
+        );
     }
 
     #[test]
@@ -410,6 +574,11 @@ mod tests {
                         Some(articles_doc(T0)),
                         "{name}"
                     );
+                    if rule == FeedRule::NoValidPost {
+                        // R-12, R-30: one `post skipped` line per item, though
+                        // the feed failed
+                        assert_eq!(log.lines_containing("post skipped").len(), 2, "{name}");
+                    }
                     let line = log.one_line("live list refresh failed");
                     assert!(
                         line.contains(&format!(r#"reason="{}""#, reason_of_feed(rule).as_str())),
