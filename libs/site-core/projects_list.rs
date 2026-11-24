@@ -261,7 +261,7 @@ impl std::error::Error for FetchedAtError {}
 
 /// Check the exact grammar, then parse as RFC 3339. The grammar check comes
 /// first because Rfc3339 alone accepts offsets, lowercase `t`/`z` and other
-/// fraction lengths that the fetch script never writes.
+/// fraction lengths that `live_lists::clock::format_fetched_at` never writes.
 pub fn parse_fetched_at(s: &str) -> Result<OffsetDateTime, FetchedAtError> {
     if !matches_fetched_at_grammar(s) {
         return Err(FetchedAtError::Grammar);
@@ -276,7 +276,7 @@ fn matches_fetched_at_grammar(s: &str) -> bool {
     }
     b.iter().enumerate().all(|(i, &c)| match i {
         // Seconds 00..=59: Rfc3339 accepts a month-end `:60`, which the
-        // fetch script's `toISOString` never writes.
+        // `live_lists::clock::format_fetched_at` never writes.
         17 => (b'0'..=b'5').contains(&c),
         4 | 7 => c == b'-',
         10 => c == b'T',

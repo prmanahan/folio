@@ -54,11 +54,11 @@ async fn main() {
     }
 }
 
+#[cfg(test)]
 /// R-29 (#4853): the release command and the `check-projects` subcommand are
 /// retired. Absence is asserted here because `Cli` is private to the bin crate;
 /// these tests name the removed path on purpose (R-29's grep exempts an inline
 /// `#[cfg(test)]` module that does).
-#[cfg(test)]
 mod retired_release_command_tests {
     use super::*;
 
