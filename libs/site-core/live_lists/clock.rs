@@ -29,7 +29,16 @@ impl WallClock for SystemClock {
 /// the grammar's four-digit year cannot hold; [`FormatError::Format`] when
 /// `time` fails to write.
 pub fn format_fetched_at(instant: OffsetDateTime) -> Result<String, FormatError> {
-    Ok(String::new())
+    use time::macros::format_description;
+    const FETCHED_AT: &[time::format_description::BorrowedFormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
+    let utc = instant.to_offset(time::UtcOffset::UTC);
+    // A negative year would write a leading `-`, and a year past 9999 five
+    // digits: neither is the grammar.
+    if !(0..=9999).contains(&utc.year()) {
+        return Err(FormatError::YearOutOfRange);
+    }
+    utc.format(FETCHED_AT).map_err(FormatError::Format)
 }
 
 #[derive(Debug)]
