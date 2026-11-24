@@ -35,6 +35,7 @@ jiff = { workspace = true, features = ["std"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls"] }
 # The type a certificate-class error is recognised by (R-2, R-30). Already in Cargo.lock.
 rustls = { version = "0.23", default-features = false, features = ["std"] }
+quick-xml = "~0.42"
 
 [dev-dependencies]
 axum-test = { workspace = true }
