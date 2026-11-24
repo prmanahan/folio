@@ -218,60 +218,6 @@ impl Outcome {
         );
     }
 
-    /// R-10 refusal by `folio serve`: a non-zero exit, with output that
-    /// names the list file's path. The path is the discriminator from the
-    /// ADMIN_PASSWORD, EDGE_AUTH_TOKEN, `validate_static_dir` and bind
-    /// panics, none of which can name it. A panic that names the path is
-    /// still a refusal: the spec requires a non-zero exit naming the path
-    /// and no more.
-    pub fn assert_refused_naming(&self, path: &Path) {
-        assert!(!self.timed_out, "child did not exit within the deadline");
-        let p = path.to_string_lossy();
-        assert!(
-            !self.output.contains(BIND_FAILURE),
-            "the server started without refusing: it got as far as binding the port; output:\n{}",
-            self.output
-        );
-        match self.code {
-            Some(0) => panic!("expected non-zero exit, got 0; output:\n{}", self.output),
-            Some(_) => {}
-            None => panic!("child died on a signal; output:\n{}", self.output),
-        }
-        assert!(
-            self.output.contains(p.as_ref()),
-            "output does not name the path {p}; output:\n{}",
-            self.output
-        );
-    }
-
-    /// R-10 load by `folio serve`: the list was accepted and logged. The
-    /// output carries the `fetched_at` literal and each owner's count, and
-    /// holds no ERROR line naming the list file (so a refusal that merely
-    /// quotes the literal cannot satisfy it). Other ERROR lines are not
-    /// this assertion's business: a server with no `csp-header.txt` logs one.
-    pub fn assert_loaded_and_logged(&self, fetched_at: &str, counts: &[(&str, usize)]) {
-        assert!(
-            !self
-                .output
-                .lines()
-                .any(|l| l.contains(" ERROR ") && l.contains("projects.json")),
-            "an ERROR line names the list file in the output of a valid load; output:\n{}",
-            self.output
-        );
-        assert!(
-            self.output.lines().any(|l| l.contains(fetched_at)),
-            "no output line contains the fetched_at literal {fetched_at}; output:\n{}",
-            self.output
-        );
-        for (owner, count) in counts {
-            assert!(
-                self.output.lines().any(|l| has_count(l, owner, *count)),
-                "no output line shows owner {owner} with count {count}; output:\n{}",
-                self.output
-            );
-        }
-    }
-
     /// R-18 pass line: exit 0, and one line of the combined output that
     /// contains the path, the `fetched_at` literal, the age, the bound and
     /// each owner's count. The spec does not pin how age and bound are

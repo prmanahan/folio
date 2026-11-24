@@ -14,7 +14,7 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use super::{Sandbox, fake_admin_password, fake_edge_auth_token, fetched_at, valid_doc};
+use super::{Sandbox, fake_admin_password, fake_edge_auth_token};
 
 /// R-5 / fly.toml's `grace_period`.
 pub const HEALTH_DEADLINE: Duration = Duration::from_secs(15);
@@ -44,15 +44,13 @@ impl Response {
     }
 }
 
-/// Spawn `folio serve` on a free port with a valid list file, and wait for it
-/// to answer health.
+/// Spawn `folio serve` on a free port with no list file (R-29), and wait for
+/// it to answer health.
 ///
 /// # Panics
 /// When the child exits, or has not answered `/api/health` with 200 within
 /// [`HEALTH_DEADLINE`]; the message carries the child's output.
 pub fn spawn_serve(sb: &Sandbox) -> RunningServer {
-    // The list file stays required until the later task that retires it.
-    sb.write_list(&valid_doc(&fetched_at(0)));
     std::fs::write(
         sb.static_dir.join("index.html"),
         "<!doctype html><html><head><meta http-equiv=\"content-security-policy\" content=\"default-src 'self'\"></head><body></body></html>",

@@ -4,7 +4,7 @@
 //! open the database and migrate, (3) delete the disabled lists' rows, (4)
 //! load and re-validate the rest, (5) fix `started_at`, (6) spawn the
 //! refresher without awaiting it, (7) serve. The work `main.rs` did before
-//! (static-directory check, `projects.json` load and refusal, admin password
+//! (static-directory check, admin password
 //! hash, AI client, CORS and origin-lock state, rate-limit purge task) runs
 //! inside it in its old relative order, before step 6.
 //!
@@ -39,7 +39,7 @@ use crate::config::Config;
 use crate::db;
 use crate::middleware::global_rate_limit::GlobalRateLimitState;
 use crate::middleware::origin_lock::OriginLockState;
-use crate::projects_list::{self, ProjectsList};
+use crate::projects_list::ProjectsList;
 use crate::state::{AppState, DbState};
 
 /// Sliding window used by `global_rate_limit_middleware` (60 req/min) and
@@ -115,9 +115,6 @@ impl StartInputs {
 /// Why `start` ended before serving, or why serving ended.
 #[derive(Debug)]
 pub enum StartError {
-    /// R-10 (projects-from-github): `projects.json` is missing or invalid.
-    /// The reason is logged naming the path; the process exits 1.
-    ProjectsListRefused,
     Database(rusqlite::Error),
     PasswordHash(crate::error::AppError),
     StartedAt(FormatError),
@@ -172,26 +169,8 @@ where
     }
 
     // Today's work, in today's order: it needs no database, so it runs
-    // before step 2. R-10 (projects-from-github) fails closed before anything
-    // is opened. No age check: a Fly restart must not depend on how long ago
-    // the last deploy was (the release command checks freshness). Retired by
-    // the task that moves the prompts onto the held copies.
+    // before step 2.
     crate::static_files::validate_static_dir(&config.static_dir);
-    let projects_path = std::path::Path::new(&config.static_dir).join("projects.json");
-    let projects = match projects_list::load(&projects_path) {
-        Ok(list) => Arc::new(list),
-        Err(e) => {
-            tracing::error!(path = %projects_path.display(), error = %e, remedy = "run `GITHUB_TOKEN=<token> just fetch-projects`, then rebuild the frontend", "refusing to start: projects list invalid");
-            return Err(StartError::ProjectsListRefused);
-        }
-    };
-    let counts: Vec<String> = projects.counts().map(|(o, n)| format!("{o}={n}")).collect();
-    tracing::info!(
-        path = %projects_path.display(),
-        fetched_at = projects.fetched_at(),
-        counts = counts.join(" "),
-        "projects list loaded"
-    );
     tracing::info!(port = config.port, "starting server");
 
     // Step 2.
@@ -780,7 +759,7 @@ mod tests {
      {
         // Given no list file and an empty store
         let env = Env::new();
-        std::fs::remove_file(env.projects_json_path()).unwrap();
+        assert!(!env.projects_json_path().exists(), "setup: no list file");
         // When the start function runs
         let result = try_launch(env.inputs(None, Sources::default())).await;
         // Then it serves

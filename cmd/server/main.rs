@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use site_core::config::{Config, DEFAULT_STATIC_DIR};
-use site_core::live_lists::start::{StartError, StartInputs, serve_tcp, start};
+use site_core::live_lists::start::{StartInputs, serve_tcp, start};
 use site_core::projects_list;
 use tracing_subscriber::EnvFilter;
 
@@ -76,8 +76,6 @@ async fn run_server() {
     let inputs = StartInputs::production(config, cors_origin, switch);
     match start(inputs, move |app| serve_tcp(port, app)).await {
         Ok(()) => {}
-        // Already logged, naming the path.
-        Err(StartError::ProjectsListRefused) => std::process::exit(1),
         Err(e) => panic!("server start failed: {e:?}"),
     }
 }

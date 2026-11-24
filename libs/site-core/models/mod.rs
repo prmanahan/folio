@@ -1,5 +1,4 @@
 pub mod agent;
-pub mod article;
 pub mod education;
 pub mod experience;
 pub mod faq;
