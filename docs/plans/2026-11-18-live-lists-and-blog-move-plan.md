@@ -375,7 +375,7 @@ Every merge to `main` deploys (`.github/workflows/deploy.yml`, no path filter). 
 - **Type:** backend
 - **Depends on:** T8
 - **Delivery:** `live-lists`
-- **held:** level 3 (2026-11-24). rcgen 0.14.10 with default-features off and aws_lc_rs puts 11 packages in Cargo.lock: rcgen and yasna, which are built, and 9 that are never built. The 9 are x509-parser, asn1-rs, asn1-rs-derive, asn1-rs-impl, der-parser, oid-registry, rusticata-macros, bit-vec and untrusted 0.7.1, which are lock-only entries for rcgen's optional x509-parser dependency. The TLS-harness row admits only rcgen and its dependencies under the features named. The task also needs two direct edges no row approves: tokio-rustls 0.26.4 (dev) and rustls 0.23.46, both already in the lock. Waiting on Peter's ruling; the lead clears this line through Wyrd.
+- **Ruling:** Peter, 2026-11-24, "Accept all (Recommended)": rcgen 0.14.10 with its lock-only optional-dependency entries, tokio-rustls 0.26.4 (dev) and rustls 0.23.46 direct.
 - **What:**
   - The one-constructor HTTPS client: R-1's fixed URLs, R-2's refusals, R-3's header set and no decompression, and R-4's limits.
   - It is tested through the production constructor against an in-memory `rcgen` TLS server (R-5).
@@ -433,7 +433,6 @@ Every merge to `main` deploys (`.github/workflows/deploy.yml`, no path filter). 
 - **Type:** backend
 - **Depends on:** T8, T9
 - **Delivery:** `live-lists`
-- **held:** sub-run 3 (articles source wiring, R-13 live-refresher run) waits on T9's hold; the parser sub-runs proceed.
 - **What:** Parse the feed under R-7 to R-12's fail-closed rules, reusing T8's articles field rules and the rejected class. Plug the articles source into the refresher through T9's client.
 - **Reaches:** the start refresh fetches https://mnemra.dev/rss.xml through `folio serve`, and the freshness `articles` time advances. The held articles copy reaches the prompts in T11.
 - **Sub-run hint:** expect about 3 agent runs.
