@@ -1,13 +1,12 @@
 /**
- * R-13 and R-14 (docs/specs/2026-11-11-projects-from-github.md): component tests of the /projects
- * page. Red phase for #4726 T7.
+ * Adopted rendering R-13 and R-14 (docs/specs/2026-11-11-projects-from-github.md) of the /projects
+ * page, served from `/api/lists/projects`. The failed-load outcomes are R-24's
+ * (docs/specs/2026-11-18-live-lists-and-blog-move.md), asserted in ProjectsPageUnavailable.test.ts;
+ * R-13's "existing error text" no longer applies.
  *
  * Reads, and why:
  *  - frontend/scripts/projects-fixtures/list-expected.json: the expected list file (spec R-8), used
- *    as the served `/api/lists/projects` body and as the oracle for hrefs and order;
- *  - the current page (src/routes/(public)/projects/+page.svelte): its error element is
- *    `<p class="error">`; R-13 says "the existing error text", so the error element is located as
- *    `.error` or `[role=alert]`. No error string is pinned (plan D14).
+ *    as the served body and as the oracle for hrefs and order;
  *  - spec R-13 and R-14, the Data Model.
  * Only global `fetch` is substituted (the network boundary); the page is rendered for real.
  *
@@ -67,8 +66,18 @@ function repoAnchors(container: HTMLElement): HTMLAnchorElement[] {
 	);
 }
 
-function errorElement(container: HTMLElement): HTMLElement | null {
-	return container.querySelector<HTMLElement>('.error, [role="alert"]');
+/** A valid two-owner list (R-24 / Data Model: exactly mnemra then prmanahan, each with a repo) whose
+ *  first repo is `fixture-solo` with the given description. */
+function soloGroups(description: string): Group[] {
+	return [
+		{ owner: 'mnemra', repos: [{ name: 'fixture-solo', description }] },
+		{ owner: 'prmanahan', repos: [{ name: 'fixture-other', description: '' }] },
+	];
+}
+
+/** Text of the first repo entry, so assertions ignore the second owner's entry. */
+function firstItemText(container: HTMLElement): string {
+	return norm(container.querySelector('li')?.textContent);
 }
 
 function esc(s: string): string {
@@ -153,57 +162,23 @@ describe('R-13: /projects renders the list file', () => {
 	it('an empty description shows the name alone', async () => {
 		serveList({
 			fetched_at: EXPECTED.fetched_at,
-			groups: [{ owner: 'mnemra', repos: [{ name: 'fixture-solo', description: '' }] }],
+			groups: soloGroups(''),
 		});
 		const { container } = render(ProjectsPage);
-		await waitFor(() => expect(repoAnchors(container).length).toBe(1));
+		await waitFor(() => expect(repoAnchors(container).length).toBe(2));
 
-		expect(bodyTextWithoutHeadings(container)).toBe('fixture-solo');
+		expect(firstItemText(container)).toBe('fixture-solo');
 	});
 
 	it('a described repo shows the name, then the description, and nothing else', async () => {
 		serveList({
 			fetched_at: EXPECTED.fetched_at,
-			groups: [{ owner: 'mnemra', repos: [{ name: 'fixture-solo', description: 'Alpha beta' }] }],
+			groups: soloGroups('Alpha beta'),
 		});
 		const { container } = render(ProjectsPage);
-		await waitFor(() => expect(repoAnchors(container).length).toBe(1));
+		await waitFor(() => expect(repoAnchors(container).length).toBe(2));
 
-		expect(bodyTextWithoutHeadings(container)).toMatch(/^fixture-solo[^A-Za-z0-9_]*Alpha beta$/);
-	});
-});
-
-describe('R-13: a failed load shows the error and no entries', () => {
-	async function expectErrorState(container: HTMLElement) {
-		await waitFor(() => expect(errorElement(container)).not.toBeNull());
-		expect(requestedProjectsList()).toBe(true);
-		expect(norm(errorElement(container)?.textContent)).not.toBe('');
-		expect(repoAnchors(container).length).toBe(0);
-		expect(container.querySelectorAll('h2').length).toBe(0);
-	}
-
-	it('a non-2xx response', async () => {
-		serve(() => new Response('upstream down', { status: 500 }));
-		const { container } = render(ProjectsPage);
-		await expectErrorState(container);
-	});
-
-	it('a 404 response whose body is a valid list', async () => {
-		serve(() => new Response(JSON.stringify(EXPECTED), { status: 404 }));
-		const { container } = render(ProjectsPage);
-		await expectErrorState(container);
-	});
-
-	it('a body that is not JSON', async () => {
-		serve(() => new Response('<html>not json</html>', { status: 200, headers: { 'content-type': 'text/html' } }));
-		const { container } = render(ProjectsPage);
-		await expectErrorState(container);
-	});
-
-	it('a wrong shape: groups as an object', async () => {
-		serveList({ fetched_at: EXPECTED.fetched_at, groups: { owner: 'mnemra', repos: [] } });
-		const { container } = render(ProjectsPage);
-		await expectErrorState(container);
+		expect(firstItemText(container)).toMatch(/^fixture-solo[^A-Za-z0-9_]*Alpha beta$/);
 	});
 });
 
@@ -213,14 +188,14 @@ describe('R-14: names and descriptions render as text only', () => {
 	it('the description <img src=x onerror=alert(1)> **b** creates no img or strong element and its text equals the input', async () => {
 		serveList({
 			fetched_at: EXPECTED.fetched_at,
-			groups: [{ owner: 'mnemra', repos: [{ name: 'fixture-solo', description: HOSTILE }] }],
+			groups: soloGroups(HOSTILE),
 		});
 		const { container } = render(ProjectsPage);
-		await waitFor(() => expect(repoAnchors(container).length).toBe(1));
+		await waitFor(() => expect(repoAnchors(container).length).toBe(2));
 
 		expect(container.querySelector('img')).toBeNull();
 		expect(container.querySelector('strong')).toBeNull();
 		expect(container.querySelector('[onerror]')).toBeNull();
-		expect(bodyTextWithoutHeadings(container)).toMatch(new RegExp(`^fixture-solo[^A-Za-z0-9_]*${esc(HOSTILE)}$`));
+		expect(firstItemText(container)).toMatch(new RegExp(`^fixture-solo[^A-Za-z0-9_]*${esc(HOSTILE)}$`));
 	});
 });
