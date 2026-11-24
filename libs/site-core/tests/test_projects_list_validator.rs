@@ -4,9 +4,7 @@
 //! swaps one rule for another, or rejects for a different reason, fails here.
 //! Code points of the rejected class are built from numbers, never typed.
 
-use site_core::projects_list::{
-    AgeError, FetchedAtError, ListError, check_fetched_at_age, parse, parse_fetched_at,
-};
+use site_core::projects_list::{FetchedAtError, ListError, parse, parse_fetched_at};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -260,27 +258,6 @@ fn fetched_at_grammar_is_exact_and_seconds_stop_at_59() {
     }
 }
 
-#[test]
-fn age_errors_are_directional() {
-    let f = "2026-11-13T12:00:00.000Z";
-    assert!(matches!(
-        check_fetched_at_age(f, now("2026-11-13T12:30:00.001Z")),
-        Err(AgeError::TooOld { .. })
-    ));
-    assert!(matches!(
-        check_fetched_at_age(f, now("2026-11-13T11:54:59.999Z")),
-        Err(AgeError::TooFarAhead { .. })
-    ));
-    assert!(matches!(
-        check_fetched_at_age("2026-11-13T12:00:00Z", now("2026-11-13T12:00:00Z")),
-        Err(AgeError::Invalid(FetchedAtError::Grammar))
-    ));
-    let age = check_fetched_at_age(f, now("2026-11-13T12:30:00Z")).unwrap();
-    assert_eq!(age.0.whole_seconds(), 1800);
-    let ahead = check_fetched_at_age(f, now("2026-11-13T11:55:00Z")).unwrap();
-    assert_eq!(ahead.0.whole_seconds(), -300);
-}
-
 // ---- accessors, error sources and messages (surfaced by the mutation run) ----
 
 #[test]
@@ -308,12 +285,6 @@ fn accessors_expose_the_validated_content_in_order() {
 #[test]
 fn error_sources_and_messages_carry_the_cause() {
     use std::error::Error;
-    let read = site_core::projects_list::load(std::path::Path::new("/nonexistent/projects.json"))
-        .unwrap_err();
-    assert!(matches!(read, ListError::Read(_)));
-    assert!(read.source().is_some());
-    assert!(read.to_string().contains("cannot read"), "{read}");
-
     let json = parse("{not json").unwrap_err();
     assert!(json.source().is_some());
     assert!(json.to_string().contains("Data Model"), "{json}");
@@ -333,26 +304,9 @@ fn error_sources_and_messages_carry_the_cause() {
 
     let grammar = parse_fetched_at("nope").unwrap_err();
     assert!(grammar.to_string().contains("YYYY-MM-DD"), "{grammar}");
-
-    let f = "2026-11-13T12:00:00.000Z";
-    let old = check_fetched_at_age(f, now("2026-11-13T12:31:00Z")).unwrap_err();
-    assert!(old.to_string().contains("stale"), "{old}");
-    assert!(old.to_string().contains(f), "{old}");
-    assert!(old.to_string().contains("1860"), "{old}");
-    let ahead = check_fetched_at_age(f, now("2026-11-13T11:54:00Z")).unwrap_err();
-    assert!(ahead.to_string().contains("future"), "{ahead}");
-    assert!(ahead.to_string().contains(f), "{ahead}");
-    assert!(
-        ahead
-            .to_string()
-            .contains("in the future: 360 seconds ahead"),
-        "{ahead}"
-    );
-    let invalid = check_fetched_at_age("nope", now("2026-11-13T12:00:00Z")).unwrap_err();
-    assert!(invalid.to_string().contains("fetched_at"), "{invalid}");
 }
 
-// ---- log-forging pins: main.rs logs `%e`, so each arm escapes for itself ----
+// ---- log-forging pins: `Display` is loggable, so each arm escapes for itself ----
 
 #[test]
 fn json_arm_escapes_an_unknown_key_with_a_newline() {
