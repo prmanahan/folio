@@ -8,12 +8,20 @@
 //! Errors are closed enums with no payload, so no byte of the body can reach a
 //! log line through them (R-30).
 
-use super::articles::{LinkRule, TextRule};
+use quick_xml::Reader;
+use quick_xml::events::{BytesRef, BytesStart, BytesText, Event};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc2822;
+
+use super::articles::{self, ArticlesError, LinkRule, MAX_POSTS, TextRule};
+use super::clock::format_fetched_at;
 
 /// R-4's body cap, enforced here too so the parser never trusts its caller.
 pub const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// R-7: element nesting deeper than this fails the feed, `<rss>` being 1.
 pub const MAX_DEPTH: usize = 16;
+/// R-11: the longest `pubDate` accepted.
+const MAX_PUB_DATE_BYTES: usize = 64;
 
 /// A feed that produced a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,17 +96,537 @@ pub enum PostRule {
     Summary(TextRule),
     Link(LinkRule),
     PubDate,
+    /// The articles validator refused for a reason no field rule names.
+    Validator,
 }
 
-/// Parse a feed body.
+/// Parse a feed body into the articles document.
+///
+/// `fetched_at` is the document's `fetched_at` in its grammar; the caller
+/// writes it from the wall clock. Whole-feed rules (R-7) are enforced for the
+/// entire body, including items past the 20th. Only the first 20 `<item>`s
+/// are collected and validated (R-12).
 ///
 /// # Errors
 /// The [`FeedRule`] that failed the whole feed.
-pub fn parse_feed(_body: &[u8], _fetched_at: &str) -> Result<FeedOutcome, FeedRule> {
-    Ok(FeedOutcome {
-        document: String::from("{\"posts\":[]}"),
-        skipped: Vec::new(),
-    })
+pub fn parse_feed(body: &[u8], fetched_at: &str) -> Result<FeedOutcome, FeedRule> {
+    if body.len() > MAX_BODY_BYTES {
+        return Err(FeedRule::TooLarge);
+    }
+    let text = std::str::from_utf8(body).map_err(|_| FeedRule::NotUtf8)?;
+    // A byte-order mark is not whitespace, so it is a prolog violation. It is
+    // refused here so the outcome never depends on whether the reader skips it.
+    if text.starts_with('\u{FEFF}') {
+        return Err(FeedRule::Prolog);
+    }
+    let scan = Scanner::new(text).scan()?;
+    assemble(scan, fetched_at)
+}
+
+/// The items among the first 20, in document order, each accepted or
+/// rejected, and how many direct `<item>` children the channel held.
+struct Scan {
+    first_20: Vec<Result<Post, PostRule>>,
+    items_seen: usize,
+}
+
+/// A post whose fields passed R-9 to R-11, ready for the document.
+struct Post {
+    title: String,
+    summary: String,
+    link: String,
+    published: String,
+}
+
+/// One event, classified. Whole-feed rules never reach a caller: [`Scanner::step`]
+/// fails the feed on them first, so no state can forget one.
+enum Tok<'a> {
+    Start(BytesStart<'a>),
+    Empty(BytesStart<'a>),
+    End,
+    Text(BytesText<'a>),
+    CData,
+    Comment,
+    Ref(BytesRef<'a>),
+    Eof,
+}
+
+struct Scanner<'a> {
+    reader: Reader<&'a [u8]>,
+    depth: usize,
+    seen_decl: bool,
+}
+
+impl<'a> Scanner<'a> {
+    /// DSP-16: every reader option is set, none left to a default that a
+    /// library upgrade could change.
+    fn new(text: &'a str) -> Self {
+        let mut reader = Reader::from_str(text);
+        let config = reader.config_mut();
+        config.allow_dangling_amp = false;
+        config.allow_unmatched_ends = false;
+        config.check_comments = true;
+        config.check_end_names = true;
+        config.expand_empty_elements = false;
+        config.trim_markup_names_in_closing_tags = true;
+        config.trim_text_start = false;
+        config.trim_text_end = false;
+        Self {
+            reader,
+            depth: 0,
+            seen_decl: false,
+        }
+    }
+
+    /// Read one event. The match names every `Event` variant: a variant added
+    /// by a library upgrade fails to compile instead of passing through.
+    fn step(&mut self) -> Result<Tok<'a>, FeedRule> {
+        let position = self.reader.buffer_position();
+        // The cause is dropped on purpose: it can quote body text (R-30).
+        let event = self.reader.read_event().map_err(|_| FeedRule::Xml)?;
+        match event {
+            Event::DocType(_) => Err(FeedRule::Doctype),
+            Event::PI(_) => Err(FeedRule::ProcessingInstruction),
+            Event::Decl(_) => {
+                if self.seen_decl {
+                    return Err(FeedRule::XmlDeclaration);
+                }
+                if position != 0 {
+                    return Err(FeedRule::Prolog);
+                }
+                self.seen_decl = true;
+                self.step()
+            }
+            Event::Start(e) => {
+                self.depth += 1;
+                if self.depth > MAX_DEPTH {
+                    return Err(FeedRule::TooDeep);
+                }
+                Ok(Tok::Start(e))
+            }
+            Event::Empty(e) => {
+                if self.depth + 1 > MAX_DEPTH {
+                    return Err(FeedRule::TooDeep);
+                }
+                Ok(Tok::Empty(e))
+            }
+            Event::End(_) => {
+                self.depth = self.depth.checked_sub(1).ok_or(FeedRule::Xml)?;
+                Ok(Tok::End)
+            }
+            Event::Text(t) => Ok(Tok::Text(t)),
+            Event::CData(_) => Ok(Tok::CData),
+            Event::Comment(_) => Ok(Tok::Comment),
+            Event::GeneralRef(r) => Ok(Tok::Ref(r)),
+            Event::Eof => Ok(Tok::Eof),
+        }
+    }
+
+    fn scan(mut self) -> Result<Scan, FeedRule> {
+        self.prolog()?;
+        let scan = self.rss_children()?;
+        self.after_rss()?;
+        Ok(scan)
+    }
+
+    /// Everything before `<rss>`: at most the declaration, which `step` has
+    /// already checked sits at byte 0, then whitespace.
+    fn prolog(&mut self) -> Result<(), FeedRule> {
+        loop {
+            match self.step()? {
+                Tok::Text(t) if is_xml_whitespace(&t) => {}
+                Tok::Text(_) | Tok::CData | Tok::Comment | Tok::Ref(_) => {
+                    return Err(FeedRule::Prolog);
+                }
+                Tok::Start(e) if e.name().as_ref() == "rss" => return Ok(()),
+                // `<rss/>` is a root with no channel; handled by the caller
+                // as the end of the document.
+                Tok::Empty(e) if e.name().as_ref() == "rss" => return Err(FeedRule::Channel),
+                Tok::Start(_) | Tok::Empty(_) | Tok::End | Tok::Eof => return Err(FeedRule::Root),
+            }
+        }
+    }
+
+    /// `<rss>`'s content: exactly one `<channel>`, then `</rss>`.
+    fn rss_children(&mut self) -> Result<Scan, FeedRule> {
+        let mut scan = None;
+        loop {
+            match self.step()? {
+                Tok::Text(t) if is_xml_whitespace(&t) => {}
+                Tok::Text(_) | Tok::CData | Tok::Comment | Tok::Ref(_) => {
+                    return Err(FeedRule::StrayContent);
+                }
+                Tok::Start(e) if e.name().as_ref() == "channel" && scan.is_none() => {
+                    scan = Some(self.channel_children()?);
+                }
+                Tok::Empty(e) if e.name().as_ref() == "channel" && scan.is_none() => {
+                    scan = Some(Scan {
+                        first_20: Vec::new(),
+                        items_seen: 0,
+                    });
+                }
+                // another `<channel>`, or any other element child
+                Tok::Start(_) | Tok::Empty(_) => return Err(FeedRule::Channel),
+                Tok::End => return scan.ok_or(FeedRule::Channel),
+                Tok::Eof => return Err(FeedRule::Close),
+            }
+        }
+    }
+
+    /// After `</rss>`: whitespace, then the end of the body.
+    fn after_rss(&mut self) -> Result<(), FeedRule> {
+        loop {
+            match self.step()? {
+                Tok::Text(t) if is_xml_whitespace(&t) => {}
+                Tok::Eof => return Ok(()),
+                Tok::Text(_)
+                | Tok::CData
+                | Tok::Comment
+                | Tok::Ref(_)
+                | Tok::Start(_)
+                | Tok::Empty(_)
+                | Tok::End => return Err(FeedRule::Close),
+            }
+        }
+    }
+
+    /// `<channel>`'s content, `<channel>` already consumed. Only direct
+    /// `<item>` children count (R-8); every other child is skipped whole.
+    fn channel_children(&mut self) -> Result<Scan, FeedRule> {
+        let mut scan = Scan {
+            first_20: Vec::new(),
+            items_seen: 0,
+        };
+        loop {
+            match self.step()? {
+                Tok::Text(t) if is_xml_whitespace(&t) => {}
+                Tok::Text(_) | Tok::CData | Tok::Comment | Tok::Ref(_) => {
+                    return Err(FeedRule::StrayContent);
+                }
+                Tok::Start(e) if e.name().as_ref() == "item" => {
+                    scan.items_seen += 1;
+                    if scan.items_seen <= MAX_POSTS {
+                        let post = self.item()?;
+                        scan.first_20.push(post);
+                    } else {
+                        self.skip_element()?;
+                    }
+                }
+                Tok::Empty(e) if e.name().as_ref() == "item" => {
+                    scan.items_seen += 1;
+                    if scan.items_seen <= MAX_POSTS {
+                        scan.first_20.push(ItemAcc::default().finish());
+                    }
+                }
+                Tok::Start(_) => self.skip_element()?,
+                Tok::Empty(_) => {}
+                Tok::End => return Ok(scan),
+                Tok::Eof => return Err(FeedRule::Close),
+            }
+        }
+    }
+
+    /// Skip to the end tag matching the start tag just consumed. Content is
+    /// never decoded or kept; `step` still enforces the whole-feed rules.
+    fn skip_element(&mut self) -> Result<(), FeedRule> {
+        let target = self.depth - 1;
+        loop {
+            match self.step()? {
+                Tok::End if self.depth == target => return Ok(()),
+                Tok::Eof => return Err(FeedRule::Close),
+                Tok::Start(_)
+                | Tok::Empty(_)
+                | Tok::End
+                | Tok::Text(_)
+                | Tok::CData
+                | Tok::Comment
+                | Tok::Ref(_) => {}
+            }
+        }
+    }
+
+    /// One `<item>`, start tag consumed; returns at its matching end tag, so a
+    /// rejected post resumes there (R-8).
+    fn item(&mut self) -> Result<Result<Post, PostRule>, FeedRule> {
+        let mut acc = ItemAcc::default();
+        loop {
+            match self.step()? {
+                Tok::Text(t) if is_xml_whitespace(&t) => {}
+                Tok::Text(_) | Tok::CData | Tok::Comment | Tok::Ref(_) => {
+                    acc.flag(PostRule::StrayContent);
+                }
+                Tok::Start(e) => match ChildName::of(e.name().as_ref()) {
+                    ChildName::Unknown => {
+                        acc.flag(PostRule::UnknownChild);
+                        self.skip_element()?;
+                    }
+                    known => {
+                        // Attributes are never read; a field's start tag must
+                        // be its bare name (R-9). `guid` may carry any.
+                        let bare = e.len() == e.name().as_ref().len();
+                        if !bare && known != ChildName::Guid {
+                            acc.mark_seen(known);
+                            acc.flag(PostRule::StartTagNotBare);
+                            self.skip_element()?;
+                        } else {
+                            let read = self.field_text()?;
+                            acc.take(known, read);
+                        }
+                    }
+                },
+                Tok::Empty(e) => match ChildName::of(e.name().as_ref()) {
+                    ChildName::Unknown => acc.flag(PostRule::UnknownChild),
+                    known => {
+                        acc.mark_seen(known);
+                        acc.flag(PostRule::SelfClosingChild);
+                    }
+                },
+                Tok::End => return Ok(acc.finish()),
+                Tok::Eof => return Err(FeedRule::Close),
+            }
+        }
+    }
+
+    /// A field's content under R-10, start tag consumed; returns at its end
+    /// tag. Only text and the five named entities are accepted.
+    fn field_text(&mut self) -> Result<FieldRead, FeedRule> {
+        let mut text = String::new();
+        let mut bad = None;
+        loop {
+            match self.step()? {
+                Tok::Text(t) => text.push_str(&t),
+                Tok::Ref(r) => match decode_entity(&r) {
+                    Ok(c) => text.push(c),
+                    Err(rule) => {
+                        bad.get_or_insert(rule);
+                    }
+                },
+                Tok::CData => {
+                    bad.get_or_insert(PostRule::CDataInField);
+                }
+                Tok::Comment => {
+                    bad.get_or_insert(PostRule::CommentInField);
+                }
+                Tok::Start(_) => {
+                    bad.get_or_insert(PostRule::ElementInField);
+                    self.skip_element()?;
+                }
+                Tok::Empty(_) => {
+                    bad.get_or_insert(PostRule::ElementInField);
+                }
+                Tok::End => return Ok(FieldRead { text, bad }),
+                Tok::Eof => return Err(FeedRule::Close),
+            }
+        }
+    }
+}
+
+/// XML whitespace is these four bytes, not Unicode whitespace.
+fn is_xml_whitespace(s: &str) -> bool {
+    s.bytes().all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+}
+
+/// R-10: the five named entities and nothing else.
+fn decode_entity(r: &BytesRef<'_>) -> Result<char, PostRule> {
+    match &**r {
+        "lt" => Ok('<'),
+        "gt" => Ok('>'),
+        "amp" => Ok('&'),
+        "quot" => Ok('"'),
+        "apos" => Ok('\''),
+        name if name.starts_with('#') => Err(PostRule::NumericReference),
+        _ => Err(PostRule::UnknownEntity),
+    }
+}
+
+struct FieldRead {
+    text: String,
+    bad: Option<PostRule>,
+}
+
+/// An item child, by exact qualified name (R-9): `atom:link` is `Unknown`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChildName {
+    Field(Field),
+    Guid,
+    Unknown,
+}
+
+impl ChildName {
+    fn of(name: &str) -> Self {
+        match name {
+            "title" => ChildName::Field(Field::Title),
+            "link" => ChildName::Field(Field::Link),
+            "description" => ChildName::Field(Field::Description),
+            "pubDate" => ChildName::Field(Field::PubDate),
+            "guid" => ChildName::Guid,
+            _ => ChildName::Unknown,
+        }
+    }
+}
+
+/// What one `<item>` has shown so far. The first rule broken is the one kept.
+#[derive(Default)]
+struct ItemAcc {
+    title: Slot,
+    link: Slot,
+    description: Slot,
+    pub_date: Slot,
+    guid: Slot,
+    problem: Option<PostRule>,
+}
+
+#[derive(Default)]
+struct Slot {
+    seen: bool,
+    text: String,
+}
+
+impl ItemAcc {
+    fn flag(&mut self, rule: PostRule) {
+        self.problem.get_or_insert(rule);
+    }
+
+    fn slot(&mut self, name: ChildName) -> Option<&mut Slot> {
+        match name {
+            ChildName::Field(Field::Title) => Some(&mut self.title),
+            ChildName::Field(Field::Link) => Some(&mut self.link),
+            ChildName::Field(Field::Description) => Some(&mut self.description),
+            ChildName::Field(Field::PubDate) => Some(&mut self.pub_date),
+            ChildName::Guid => Some(&mut self.guid),
+            ChildName::Unknown => None,
+        }
+    }
+
+    /// The child was present, whatever its content: no `MissingField` for it.
+    fn mark_seen(&mut self, name: ChildName) {
+        if let Some(slot) = self.slot(name) {
+            slot.seen = true;
+        }
+    }
+
+    fn take(&mut self, name: ChildName, read: FieldRead) {
+        let Some(slot) = self.slot(name) else {
+            return;
+        };
+        let duplicate = std::mem::replace(&mut slot.seen, true);
+        let rule = match read.bad {
+            Some(bad) => Some(bad),
+            None if read.text.is_empty() => Some(PostRule::EmptyField),
+            None if duplicate => Some(PostRule::DuplicateField),
+            None => {
+                slot.text = read.text;
+                None
+            }
+        };
+        if let Some(rule) = rule {
+            self.flag(rule);
+        }
+    }
+
+    /// Missing fields first, so an `<atom:title>` item reads as a missing
+    /// title (R-7), then the first rule broken, then R-10 and R-11 on values.
+    fn finish(self) -> Result<Post, PostRule> {
+        for (slot, field) in [
+            (&self.title, Field::Title),
+            (&self.link, Field::Link),
+            (&self.description, Field::Description),
+            (&self.pub_date, Field::PubDate),
+        ] {
+            if !slot.seen {
+                return Err(PostRule::MissingField(field));
+            }
+        }
+        if let Some(rule) = self.problem {
+            return Err(rule);
+        }
+        validate_post(
+            self.title.text,
+            self.description.text,
+            self.link.text,
+            &self.pub_date.text,
+        )
+    }
+}
+
+/// R-11, through the articles validator so the two never disagree: the post is
+/// wrapped in a one-post document and parsed by [`articles::parse`].
+fn validate_post(
+    title: String,
+    summary: String,
+    link: String,
+    pub_date: &str,
+) -> Result<Post, PostRule> {
+    let published = convert_pub_date(pub_date).ok_or(PostRule::PubDate)?;
+    let post = Post {
+        title,
+        summary,
+        link,
+        published,
+    };
+    // Any valid instant: the post's own rules do not read it.
+    let probe = document_of("1970-01-01T00:00:00.000Z", std::slice::from_ref(&post));
+    match articles::parse(&probe) {
+        Ok(_) => Ok(post),
+        Err(ArticlesError::Title { rule, .. }) => Err(PostRule::Title(rule)),
+        Err(ArticlesError::Summary { rule, .. }) => Err(PostRule::Summary(rule)),
+        Err(ArticlesError::Link { rule, .. }) => Err(PostRule::Link(rule)),
+        Err(ArticlesError::Published { .. }) => Err(PostRule::PubDate),
+        // The probe is built here: these cannot come from a post's fields.
+        // Refuse rather than accept a post the validator would not.
+        Err(
+            ArticlesError::Json
+            | ArticlesError::NotAnObject { .. }
+            | ArticlesError::FetchedAt(_)
+            | ArticlesError::PostCount { .. },
+        ) => Err(PostRule::Validator),
+    }
+}
+
+/// R-11: at most 64 bytes, RFC 2822, stored in UTC in the `fetched_at` grammar.
+fn convert_pub_date(raw: &str) -> Option<String> {
+    if raw.len() > MAX_PUB_DATE_BYTES {
+        return None;
+    }
+    let instant = OffsetDateTime::parse(raw, &Rfc2822).ok()?;
+    format_fetched_at(instant).ok()
+}
+
+fn document_of(fetched_at: &str, posts: &[Post]) -> String {
+    let posts: Vec<serde_json::Value> = posts
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "title": p.title,
+                "summary": p.summary,
+                "link": p.link,
+                "published": p.published,
+            })
+        })
+        .collect();
+    serde_json::json!({ "fetched_at": fetched_at, "posts": posts }).to_string()
+}
+
+/// R-12: keep the valid posts in order, record the skips, and confirm the
+/// whole document with the validator the refresher will run.
+fn assemble(scan: Scan, fetched_at: &str) -> Result<FeedOutcome, FeedRule> {
+    if scan.items_seen == 0 {
+        return Err(FeedRule::NoItems);
+    }
+    let mut posts = Vec::new();
+    let mut skipped = Vec::new();
+    for (index, result) in scan.first_20.into_iter().enumerate() {
+        match result {
+            Ok(post) => posts.push(post),
+            Err(rule) => skipped.push(SkippedItem { index, rule }),
+        }
+    }
+    if posts.is_empty() {
+        return Err(FeedRule::NoValidPost);
+    }
+    let document = document_of(fetched_at, &posts);
+    articles::parse(&document).map_err(|_| FeedRule::DocumentInvalid)?;
+    Ok(FeedOutcome { document, skipped })
 }
 
 #[cfg(test)]
@@ -715,7 +1243,10 @@ mod tests {
 
     #[test]
     fn r9_guid_text_is_read_under_r10_rules() {
-        rejects_post(&good_plus("<guid>a&#65;</guid>"), PostRule::NumericReference);
+        rejects_post(
+            &good_plus("<guid>a&#65;</guid>"),
+            PostRule::NumericReference,
+        );
         rejects_post(&good_plus("<guid>a&nbsp;</guid>"), PostRule::UnknownEntity);
         rejects_post(&good_plus("<guid>a<b/></guid>"), PostRule::ElementInField);
     }
@@ -937,15 +1468,24 @@ mod tests {
         rejects_post(&date_item(&long), PostRule::PubDate);
         rejects_post(&date_item("yesterday"), PostRule::PubDate);
         rejects_post(&date_item("2026-04-28T00:00:00Z"), PostRule::PubDate);
-        rejects_post(&date_item("Tue, 31 Feb 2026 00:00:00 GMT"), PostRule::PubDate);
+        rejects_post(
+            &date_item("Tue, 31 Feb 2026 00:00:00 GMT"),
+            PostRule::PubDate,
+        );
     }
 
     #[test]
     fn r11_pubdate_is_stored_in_utc_in_the_fetched_at_grammar() {
         for (raw, stored) in [
             ("Tue, 28 Apr 2026 00:00:00 GMT", "2026-04-28T00:00:00.000Z"),
-            ("Tue, 28 Apr 2026 02:00:00 +0200", "2026-04-28T00:00:00.000Z"),
-            ("Mon, 27 Apr 2026 19:30:15 -0430", "2026-04-28T00:00:15.000Z"),
+            (
+                "Tue, 28 Apr 2026 02:00:00 +0200",
+                "2026-04-28T00:00:00.000Z",
+            ),
+            (
+                "Mon, 27 Apr 2026 19:30:15 -0430",
+                "2026-04-28T00:00:15.000Z",
+            ),
         ] {
             let out = run(&feed(&date_item(raw))).expect("accepted");
             assert_eq!(doc(&out)["posts"][0]["published"], stored, "raw: {raw}");
@@ -999,7 +1539,9 @@ mod tests {
     fn r12_a_doctype_in_the_21st_item_fails_the_feed() {
         let twenty: String = (0..20).map(good).collect();
         fails(
-            &feed(&format!("{twenty}<item><title>T<!DOCTYPE x></title></item>")),
+            &feed(&format!(
+                "{twenty}<item><title>T<!DOCTYPE x></title></item>"
+            )),
             FeedRule::Doctype,
         );
     }
