@@ -880,7 +880,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn r30_a_disabled_list_and_a_list_with_no_source_are_named_and_do_not_make_the_summary_warn()
+    async fn r30_a_disabled_list_does_not_make_the_summary_warn_but_an_enabled_list_with_no_source_does()
      {
         let env = Env::new();
         let articles = FakeSource::answering(&articles_doc(T1));
@@ -898,7 +898,52 @@ mod tests {
         launch(env.inputs(None, sources(None, Some(&articles)))).await;
         settle().await;
         let line = log.one_line("live lists refresh");
-        assert!(line.contains("INFO"), "{line}");
+        // an enabled list with no source did not succeed: R-30 says warn
+        assert!(line.contains("WARN"), "{line}");
         assert!(line.contains(r#"projects="outcome=no_source"#), "{line}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r16_with_both_sources_hanging_health_answers_200_within_fifteen_seconds_through_start()
+    {
+        // Given both sources never answer
+        let env = Env::new();
+        let (p, a) = (FakeSource::never_answering(), FakeSource::never_answering());
+        let before = tokio::time::Instant::now();
+        // When the server starts and /api/health is requested
+        let running = launch(env.inputs(None, sources(Some(&p), Some(&a)))).await;
+        settle().await;
+        let health = running.server.get("/api/health").await;
+        // Then health is 200 and tokio's clock moved under 15 s
+        health.assert_status(StatusCode::OK);
+        assert!(
+            before.elapsed() < Duration::from_secs(15),
+            "{:?}",
+            before.elapsed()
+        );
+        assert_eq!((p.calls(), a.calls()), (1, 1), "both fetches are in flight");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r30_each_list_reports_its_own_elapsed_time_not_the_whole_refreshs() {
+        // Given a projects source that takes 10 s and an articles source 30 s
+        let env = Env::new();
+        let projects = FakeSource::answering_after(&projects_doc(T1), Duration::from_secs(10));
+        let articles = FakeSource::answering_after(&articles_doc(T1), Duration::from_secs(30));
+        let (log, _guard) = LogCapture::install();
+        launch(env.inputs(None, sources(Some(&projects), Some(&articles)))).await;
+        settle().await;
+        tokio::time::advance(Duration::from_secs(30)).await;
+        settle().await;
+        // Then each list's elapsed_ms is its own
+        let line = log.one_line("live lists refresh");
+        assert!(
+            line.contains("count=3 skipped=none elapsed_ms=10000"),
+            "{line}"
+        );
+        assert!(
+            line.contains("count=1 skipped=none elapsed_ms=30000"),
+            "{line}"
+        );
     }
 }

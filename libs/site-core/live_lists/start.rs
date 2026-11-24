@@ -45,7 +45,29 @@ use crate::state::{AppState, DbState};
 const GLOBAL_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
 /// Everything `start` is given. Production fills it with
-/// [`StartInputs::production`]; tests fill the same fields with fakes.
+/// [`StartInputs::production`]. The sources and the store are not fields a
+/// caller outside this crate can set: `start` builds the production ones
+/// itself (R-2: no production override of a source), and only this crate's
+/// tests inject fakes.
+///
+/// ```
+/// # use site_core::config::Config;
+/// # use site_core::live_lists::start::StartInputs;
+/// # fn config() -> Config { Config { port: 0, database_url: String::new(), admin_password: String::new(), anthropic_api_key: None, trusted_ip_header: None, static_dir: String::new(), page_hit_salt: String::new(), edge_auth_token: String::new() } }
+/// let inputs = StartInputs::production(config(), None, None);
+/// let _ = inputs.cors_origin; // a public field is readable
+/// ```
+///
+/// Reaching the sources from outside the crate does not compile (the control
+/// above is the same program reading a public field):
+///
+/// ```compile_fail
+/// # use site_core::config::Config;
+/// # use site_core::live_lists::start::StartInputs;
+/// # fn config() -> Config { Config { port: 0, database_url: String::new(), admin_password: String::new(), anthropic_api_key: None, trusted_ip_header: None, static_dir: String::new(), page_hit_salt: String::new(), edge_auth_token: String::new() } }
+/// let inputs = StartInputs::production(config(), None, None);
+/// let _ = &inputs.sources; // the field is not reachable, so it cannot be set
+/// ```
 pub struct StartInputs {
     pub config: Config,
     /// `CORS_ORIGIN`, as read; `None` when unset.
@@ -90,6 +112,9 @@ pub enum StartError {
     PasswordHash(crate::error::AppError),
     StartedAt(FormatError),
     Store(rusqlite::Error),
+    /// `DATABASE_URL` names an in-memory database. The refresher's store is a
+    /// second connection, which would see an empty database of its own.
+    InMemoryDatabase,
     Serve(io::Error),
 }
 
@@ -568,12 +593,8 @@ mod tests {
         assert_eq!(env.stored(ListName::Articles), None);
         assert!(env.stored(ListName::Projects).is_some());
         assert!(log.one_line(START_LINE).contains("disabled={articles}"));
-        // a clean value raises no switch error, and the start line is `info`
-        assert!(
-            log.lines_containing("LIVE_LISTS_DISABLED").is_empty(),
-            "{}",
-            log.text()
-        );
+        // a clean value raises no error line at all, and the start line is `info`
+        assert!(log.lines_containing("ERROR").is_empty(), "{}", log.text());
         assert!(log.one_line(START_LINE).contains("INFO"));
     }
 
@@ -706,24 +727,77 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_start_over_a_populated_database_keeps_unrelated_tables() {
-        // migration 008 runs against a database the earlier migrations filled
+    async fn a_start_logs_no_error_line_when_nothing_is_wrong() {
         let env = Env::new();
-        env.db()
-            .execute(
-                "INSERT INTO site_config (key, value) VALUES ('probe.key', 'probe-value')",
-                [],
-            )
-            .unwrap();
+        let (log, _guard) = LogCapture::install();
         launch(env.inputs(None, Sources::default())).await;
-        let value: String = env
-            .db()
-            .query_row(
-                "SELECT value FROM site_config WHERE key = 'probe.key'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(value, "probe-value");
+        assert!(log.lines_containing("ERROR").is_empty(), "{}", log.text());
+    }
+
+    async fn load_line_for(row: &str) -> String {
+        let env = Env::new();
+        env.seed(ListName::Projects, row);
+        let (log, _guard) = LogCapture::install();
+        launch(env.inputs(None, Sources::default())).await;
+        log.lines_containing("live list has no data yet")
+            .into_iter()
+            .find(|l| l.contains(r#"list="projects""#))
+            .unwrap_or_else(|| panic!("no projects line in {}", log.text()))
+    }
+
+    #[tokio::test]
+    async fn an_invalid_row_loading_as_no_data_logs_at_warn() {
+        let line = load_line_for("not json").await;
+        assert!(
+            line.contains("WARN") && line.contains(r#"reason="invalid""#),
+            "{line}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_row_ahead_of_the_clock_loading_as_no_data_logs_at_warn() {
+        let env = Env::new();
+        let beyond = ts::format(env.clock.now() + MAX_AGE_AHEAD + Duration::milliseconds(1));
+        let line = load_line_for(&projects_doc(&beyond)).await;
+        assert!(
+            line.contains("WARN") && line.contains(r#"reason="ahead_of_clock""#),
+            "{line}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_row_is_ordinary_and_logs_at_info() {
+        let env = Env::new();
+        let (log, _guard) = LogCapture::install();
+        launch(env.inputs(None, Sources::default())).await;
+        let line = log
+            .lines_containing("live list has no data yet")
+            .into_iter()
+            .find(|l| l.contains(r#"list="projects""#))
+            .expect("a projects line");
+        assert!(
+            line.contains("INFO") && line.contains(r#"reason="absent""#),
+            "{line}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_in_memory_database_url_refuses_the_start_before_opening_anything() {
+        for url in [
+            ":memory:",
+            "",
+            "file::memory:",
+            "file:x?mode=memory&cache=shared",
+        ] {
+            let env = Env::new();
+            let mut inputs = env.inputs(None, Sources::default());
+            inputs.config.database_url = url.to_string();
+            let result = try_launch(inputs).await;
+            assert!(
+                matches!(result, Err(StartError::InMemoryDatabase)),
+                "{url:?}: {:?}",
+                result.err()
+            );
+        }
     }
 }
