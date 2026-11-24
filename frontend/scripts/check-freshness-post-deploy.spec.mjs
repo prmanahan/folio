@@ -338,6 +338,71 @@ describe('the log on red', () => {
 		const b = body(T0 - 5000, T0 - 5000, T0 - 1000);
 		const r = await run(() => ok(b));
 		expect(r.code).toBe(1);
-		expect(logs.text()).toContain(b);
+		expect(logs.text()).toContain(JSON.stringify(b));
+	});
+});
+
+describe('review fixes: what a red prints', () => {
+	const lines = () => logs.text().split('\n');
+
+	it('a failed fetch prints the cause chain, not only "fetch failed"', async () => {
+		const r = await run(() => {
+			throw new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED') });
+		});
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('connect ECONNREFUSED');
+	});
+
+	it('a timeout is aborted with a named reason, and the log carries it', async () => {
+		const s = await start((_i, _u, init) => hang(init));
+		await vi.advanceTimersByTimeAsync(WINDOW_MS + 2 * READ_TIMEOUT_MS);
+		await s.mod.done;
+		expect(s.calls[0].init.signal.reason).toBeInstanceOf(Error);
+		expect(s.calls[0].init.signal.reason.message).toBe('read timed out after 30 s');
+		expect(logs.text()).toContain('read timed out after 30 s');
+	});
+
+	it('an empty-body 301 prints the reason, the status and the Location, not an empty line', async () => {
+		const r = await run(() => new Response(null, { status: 301, headers: { location: 'https://elsewhere.test/x' } }));
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('RED: status 301');
+		expect(logs.text()).toContain('status: 301');
+		expect(logs.text()).toContain(`location: ${JSON.stringify('https://elsewhere.test/x')}`);
+	});
+
+	it('an empty-body 503 prints its reason and status', async () => {
+		const r = await run(() => new Response(null, { status: 503 }));
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('RED: status 503');
+		expect(logs.text()).toContain('status: 503');
+	});
+
+	it('a body carrying a workflow command produces no output line starting with ::', async () => {
+		const r = await run(() => new Response('x\n::error::injected\n::set-output name=a::b', { status: 502 }));
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('error::injected');
+		for (const l of lines()) expect(l.startsWith('::'), l).toBe(false);
+	});
+
+	it('an error text carrying a workflow command produces no :: line', async () => {
+		const r = await run(() => {
+			throw new Error('bad\n::error::from-error');
+		});
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('from-error');
+		for (const l of lines()) expect(l.startsWith('::'), l).toBe(false);
+	});
+
+	it('a Location carrying a workflow command produces no :: line', async () => {
+		const r = await run(() => new Response(null, { status: 302, headers: { location: '/x%0A::error::loc' } }));
+		expect(r.code).toBe(1);
+		for (const l of lines()) expect(l.startsWith('::'), l).toBe(false);
+	});
+
+	it('a printed body is cut to 2048 characters', async () => {
+		const r = await run(() => new Response('B'.repeat(5000), { status: 502 }));
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('B'.repeat(2048));
+		expect(logs.text()).not.toContain('B'.repeat(2049));
 	});
 });

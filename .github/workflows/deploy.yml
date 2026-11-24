@@ -130,7 +130,8 @@ jobs:
         run: flyctl deploy --remote-only
 
       - name: Post-deploy health check
-        run: curl --retry 5 --retry-delay 5 --max-time 30 --fail https://peter.manahan.io/api/health
+        # The body is discarded: a body from the public site could carry a `::` workflow command.
+        run: curl -sS -o /dev/null -w 'health status %{http_code}\n' --retry 5 --retry-delay 5 --max-time 30 --fail https://peter.manahan.io/api/health
 
       # Task #3558: the public hostname (through Cloudflare) must keep
       # serving normally, while the raw Fly origin — page and static

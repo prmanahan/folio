@@ -266,14 +266,14 @@ describe('the log on red', () => {
 	it('holds the response body when the body breaks the shape', async () => {
 		const r = await run(second(() => ok('{"projects":"2026"}')));
 		expect(r.code).toBe(1);
-		expect(logs.text()).toContain('{"projects":"2026"}');
+		expect(logs.text()).toContain(JSON.stringify('{"projects":"2026"}'));
 	});
 
 	it('holds the response body when a time is outside the window', async () => {
 		const b = body(T0 - H48_MS - 10_000_000, T0, T0 - 1);
 		const r = await run(second(() => ok(b)));
 		expect(r.code).toBe(1);
-		expect(logs.text()).toContain(b);
+		expect(logs.text()).toContain(JSON.stringify(b));
 	});
 
 	it('holds the error for a thrown fetch', async () => {
@@ -282,5 +282,64 @@ describe('the log on red', () => {
 		}));
 		expect(r.code).toBe(1);
 		expect(logs.text()).toContain('ECONNRESET-marker');
+	});
+});
+
+describe('review fixes: what a red prints', () => {
+	const lines = () => logs.text().split('\n');
+
+	it('a failed fetch prints the cause chain, not only "fetch failed"', async () => {
+		const r = await run(second(() => {
+			throw new TypeError('fetch failed', { cause: new Error('connect ECONNREFUSED') });
+		}));
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('connect ECONNREFUSED');
+	});
+
+	it('a timeout is aborted with a named reason, and the log carries it', async () => {
+		const dbl = fetchDouble((i, _u, init) => (i === 0 ? ok(body(T0, T0, T0)) : hang(init)));
+		const mod = await load(SCRIPT, dbl.fn);
+		await vi.advanceTimersByTimeAsync(WAIT_MS + READ_TIMEOUT_MS);
+		await mod.done;
+		expect(dbl.calls[1].init.signal.reason).toBeInstanceOf(Error);
+		expect(dbl.calls[1].init.signal.reason.message).toBe('read timed out after 30 s');
+		expect(logs.text()).toContain('read timed out after 30 s');
+	});
+
+	it('an empty-body 301 prints the reason, the status and the Location', async () => {
+		const r = await run(second(() => new Response(null, { status: 301, headers: { location: 'https://elsewhere.test/x' } })));
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('RED: status 301');
+		expect(logs.text()).toContain('status: 301');
+		expect(logs.text()).toContain(`location: ${JSON.stringify('https://elsewhere.test/x')}`);
+	});
+
+	it('a body carrying a workflow command produces no output line starting with ::', async () => {
+		const r = await run(second(() => new Response('x\n::error::injected\n::set-output name=a::b', { status: 502 })));
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('error::injected');
+		for (const l of lines()) expect(l.startsWith('::'), l).toBe(false);
+	});
+
+	it('an error text and a Location carrying a workflow command produce no :: line', async () => {
+		const r1 = await run(second(() => {
+			throw new Error('bad\n::error::from-error');
+		}));
+		expect(r1.code).toBe(1);
+		expect(logs.text()).toContain('from-error');
+		for (const l of lines()) expect(l.startsWith('::'), l).toBe(false);
+	});
+
+	it('a Location carrying a workflow command produces no :: line', async () => {
+		const r = await run(second(() => new Response(null, { status: 302, headers: { location: '/x%0A::error::loc' } })));
+		expect(r.code).toBe(1);
+		for (const l of lines()) expect(l.startsWith('::'), l).toBe(false);
+	});
+
+	it('a printed body is cut to 2048 characters', async () => {
+		const r = await run(second(() => new Response('B'.repeat(5000), { status: 502 })));
+		expect(r.code).toBe(1);
+		expect(logs.text()).toContain('B'.repeat(2048));
+		expect(logs.text()).not.toContain('B'.repeat(2049));
 	});
 });
