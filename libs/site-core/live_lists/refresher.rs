@@ -42,7 +42,7 @@ pub struct RequestNote {
 }
 
 /// What one fetch of one list produced.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchReport {
     /// The list's complete document as JSON text, `fetched_at` included, or
     /// why there is none. The refresher validates it; a source need not.
@@ -117,4 +117,509 @@ impl Refresher {
 
     /// Start the refresher without awaiting it.
     pub fn spawn(self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use axum::http::StatusCode;
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::live_lists::ListName;
+    use crate::live_lists::harness::{Env, LogCapture, Running, launch, settle};
+    use crate::live_lists::test_support::{
+        self as ts, FakeSource, PanickingStore, T0, articles_doc, projects_doc, projects_doc_with,
+    };
+
+    const PROJECTS: &str = "/api/lists/projects";
+    const FRESHNESS: &str = "/api/lists/freshness";
+    const T1: &str = "2026-11-19T18:00:00.000Z";
+    const T2: &str = "2026-11-20T00:00:00.000Z";
+
+    fn sources(p: Option<&Arc<FakeSource>>, a: Option<&Arc<FakeSource>>) -> Sources {
+        Sources {
+            projects: p.map(|s| s.clone() as Arc<dyn ListSource>),
+            articles: a.map(|s| s.clone() as Arc<dyn ListSource>),
+        }
+    }
+
+    async fn freshness(running: &Running, env: &Env) -> Value {
+        running.get_json(env, FRESHNESS, StatusCode::OK).await
+    }
+
+    // ---- R-5 / R-16: the refresh runs off the startup path ----
+
+    #[tokio::test(start_paused = true)]
+    async fn r5_against_a_source_that_never_answers_the_first_request_is_served_before_the_first_refresh_completes()
+     {
+        // Given a projects source that never answers
+        let env = Env::new();
+        let silent = FakeSource::never_answering();
+        // When the server starts
+        let running = launch(env.inputs(None, sources(Some(&silent), None))).await;
+        // Then serving began without the paused clock moving: an awaited
+        // refresh would have sat on the 120 s bound
+        assert!(
+            running.tokio_time_before_serving < Duration::from_secs(1),
+            "{:?}",
+            running.tokio_time_before_serving
+        );
+        // and the first request is answered (no data yet) while the fetch is in flight
+        running
+            .get(&env, PROJECTS)
+            .await
+            .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        settle().await;
+        assert_eq!(silent.calls(), 1, "the refresher did start its fetch");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r4_a_list_whose_fetch_outlasts_the_refresh_bound_fails_and_keeps_its_held_copy() {
+        // Given a held copy and a source that never answers
+        let env = Env::new();
+        env.seed(ListName::Projects, &projects_doc(T0));
+        let silent = FakeSource::never_answering();
+        let (log, _guard) = LogCapture::install();
+        let running = launch(env.inputs(None, sources(Some(&silent), None))).await;
+        settle().await;
+        // When the refresh bound passes
+        tokio::time::advance(REFRESH_BOUND).await;
+        settle().await;
+        // Then the held copy and its time are unchanged, and the failure is
+        // logged with its reason code
+        assert_eq!(running.get(&env, PROJECTS).await.text(), projects_doc(T0));
+        assert_eq!(freshness(&running, &env).await["projects"], json!(T0));
+        let line = log.one_line("live list refresh failed");
+        assert!(line.contains("WARN"), "{line}");
+        assert!(line.contains(r#"list="projects""#), "{line}");
+        assert!(line.contains(r#"reason="refresh_bound_passed""#), "{line}");
+    }
+
+    // ---- R-15: validate, persist in one transaction, then swap ----
+
+    #[tokio::test(start_paused = true)]
+    async fn r15_a_successful_fetch_is_persisted_and_swapped_and_the_stored_document_equals_the_held_one()
+     {
+        let env = Env::new();
+        env.seed(ListName::Projects, &projects_doc(T0));
+        let fresh = projects_doc(T1);
+        let source = FakeSource::answering(&fresh);
+        let running = launch(env.inputs(None, sources(Some(&source), None))).await;
+        settle().await;
+        // The held copy is the fetched document, and so is the stored row
+        assert_eq!(running.get(&env, PROJECTS).await.text(), fresh);
+        assert_eq!(env.stored(ListName::Projects), Some(fresh));
+        // and the refresh time advanced to that document's time
+        assert_eq!(freshness(&running, &env).await["projects"], json!(T1));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r15_a_forced_persist_failure_leaves_the_held_copy_and_its_time_and_logs_a_failed_fetch()
+     {
+        // Given a held copy and a database that refuses every write to live_lists
+        let env = Env::new();
+        let held = projects_doc(T0);
+        env.seed(ListName::Projects, &held);
+        env.db()
+            .execute_batch(
+                "CREATE TRIGGER refuse_update BEFORE UPDATE ON live_lists \
+                 BEGIN SELECT RAISE(ABORT, 'forced'); END; \
+                 CREATE TRIGGER refuse_insert BEFORE INSERT ON live_lists \
+                 BEGIN SELECT RAISE(ABORT, 'forced'); END;",
+            )
+            .unwrap();
+        let source = FakeSource::answering(&projects_doc(T1));
+        let (log, _guard) = LogCapture::install();
+        let running = launch(env.inputs(None, sources(Some(&source), None))).await;
+        settle().await;
+        // Then the fetch was attempted, yet the held copy, its time and the
+        // stored row are all unchanged
+        assert_eq!(source.calls(), 1);
+        assert_eq!(running.get(&env, PROJECTS).await.text(), held);
+        assert_eq!(freshness(&running, &env).await["projects"], json!(T0));
+        assert_eq!(env.stored(ListName::Projects), Some(held));
+        // and a failed fetch is logged with the persist reason code
+        let line = log.one_line("live list refresh failed");
+        assert!(line.contains(r#"list="projects""#), "{line}");
+        assert!(line.contains(r#"reason="persist_failed""#), "{line}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r15_a_fetched_document_the_validator_refuses_is_neither_persisted_nor_swapped() {
+        // Scenario: a fetch returns one repo whose description contains U+202E
+        let env = Env::new();
+        let held = projects_doc(T0);
+        env.seed(ListName::Projects, &held);
+        let source = FakeSource::answering(&projects_doc_with(T1, "bad \u{202e} text"));
+        let (log, _guard) = LogCapture::install();
+        let running = launch(env.inputs(None, sources(Some(&source), None))).await;
+        settle().await;
+        assert_eq!(running.get(&env, PROJECTS).await.text(), held);
+        assert_eq!(freshness(&running, &env).await["projects"], json!(T0));
+        assert_eq!(env.stored(ListName::Projects), Some(held));
+        let line = log.one_line("live list refresh failed");
+        assert!(
+            line.contains("WARN") && line.contains(r#"list="projects""#),
+            "{line}"
+        );
+        assert!(
+            line.contains(r#"reason="projects_document_rejected""#),
+            "{line}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r15_a_source_that_fails_leaves_the_held_copy_and_its_time() {
+        let env = Env::new();
+        env.seed(ListName::Articles, &articles_doc(T0));
+        let source = FakeSource::failing(ReasonCode::RefreshBoundPassed);
+        let running = launch(env.inputs(None, sources(None, Some(&source)))).await;
+        settle().await;
+        assert_eq!(source.calls(), 1);
+        assert_eq!(freshness(&running, &env).await["articles"], json!(T0));
+        assert_eq!(env.stored(ListName::Articles), Some(articles_doc(T0)));
+    }
+
+    // ---- R-17: cadence, independence, no handler fetch, panic isolation ----
+
+    #[tokio::test(start_paused = true)]
+    async fn r17_the_interval_fires_once_at_exactly_six_hours_and_serves_the_changed_content() {
+        // Given a server whose start refresh has run
+        let env = Env::new();
+        let source = FakeSource::answering(&projects_doc_with(T1, "first"));
+        let running = launch(env.inputs(None, sources(Some(&source), None))).await;
+        settle().await;
+        assert_eq!(source.calls(), 1, "the start refresh");
+        // When the clock advances 6 h minus 1 s, no second fetch happens
+        tokio::time::advance(REFRESH_INTERVAL - Duration::from_secs(1)).await;
+        settle().await;
+        assert_eq!(source.calls(), 1);
+        // and a description changed at the source
+        let changed = projects_doc_with(T2, "changed at the source");
+        source.answer_with(&changed);
+        // When the last second passes, exactly one more fetch happens
+        tokio::time::advance(Duration::from_secs(1)).await;
+        settle().await;
+        assert_eq!(source.calls(), 2);
+        // Then the server serves the new content without a restart
+        assert_eq!(running.get(&env, PROJECTS).await.text(), changed);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r17_a_failing_projects_source_beside_a_good_articles_source_advances_only_articles() {
+        let env = Env::new();
+        env.seed(ListName::Projects, &projects_doc(T0));
+        env.seed(ListName::Articles, &articles_doc(T0));
+        let projects = FakeSource::failing(ReasonCode::RefreshBoundPassed);
+        let articles = FakeSource::answering(&articles_doc(T1));
+        let running = launch(env.inputs(None, sources(Some(&projects), Some(&articles)))).await;
+        settle().await;
+        let fresh = freshness(&running, &env).await;
+        assert_eq!(fresh["projects"], json!(T0));
+        assert_eq!(fresh["articles"], json!(T1));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r17_requests_to_health_the_lists_routes_the_redirect_and_a_fallback_cause_no_fetch() {
+        let env = Env::new();
+        let projects = FakeSource::answering(&projects_doc(T1));
+        let articles = FakeSource::answering(&articles_doc(T1));
+        let running = launch(env.inputs(None, sources(Some(&projects), Some(&articles)))).await;
+        settle().await;
+        let before = (projects.calls(), articles.calls());
+        assert_eq!(before, (1, 1), "the start refresh");
+        // When each kind of request is made
+        running
+            .server
+            .get("/api/health")
+            .await
+            .assert_status(StatusCode::OK);
+        running
+            .get(&env, PROJECTS)
+            .await
+            .assert_status(StatusCode::OK);
+        running
+            .get(&env, FRESHNESS)
+            .await
+            .assert_status(StatusCode::OK);
+        running
+            .get(&env, "/articles")
+            .await
+            .assert_status(StatusCode::MOVED_PERMANENTLY);
+        running.get(&env, "/no-such-page").await;
+        settle().await;
+        // Then no source was asked again
+        assert_eq!((projects.calls(), articles.calls()), before);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r17_after_a_forced_panic_in_the_persist_step_health_answers_200_and_the_readers_serve_the_held_copy()
+     {
+        // Given a held copy and a store whose persist panics
+        let env = Env::new();
+        let held = projects_doc(T0);
+        env.seed(ListName::Projects, &held);
+        let source = FakeSource::answering(&projects_doc(T1));
+        let (log, _guard) = LogCapture::install();
+        let mut inputs = env.inputs(None, sources(Some(&source), None));
+        inputs.store = Some(Box::new(PanickingStore));
+        let running = launch(inputs).await;
+        // When the refresher reaches the persist step
+        settle().await;
+        assert_eq!(source.calls(), 1);
+        // Then health answers 200, the readers serve the held copy,
+        let health = running.server.get("/api/health").await;
+        health.assert_status(StatusCode::OK);
+        assert_eq!(running.get(&env, PROJECTS).await.text(), held);
+        assert_eq!(freshness(&running, &env).await["projects"], json!(T0));
+        // and an `error` line records the refresher's end
+        let line = log.one_line("live lists refresher ended");
+        assert!(line.contains("ERROR"), "{line}");
+    }
+
+    // ---- R-19: a disabled list is never fetched, and its row goes first ----
+
+    #[tokio::test(start_paused = true)]
+    async fn r19_a_disabled_list_is_never_fetched_at_start_or_on_a_tick() {
+        let env = Env::new();
+        let projects = FakeSource::answering(&projects_doc(T1));
+        let articles = FakeSource::answering(&articles_doc(T1));
+        let running =
+            launch(env.inputs(Some("projects"), sources(Some(&projects), Some(&articles)))).await;
+        settle().await;
+        tokio::time::advance(REFRESH_INTERVAL).await;
+        settle().await;
+        assert_eq!(projects.calls(), 0);
+        assert_eq!(articles.calls(), 2, "start and one tick");
+        assert_eq!(env.stored(ListName::Projects), None);
+        running
+            .get(&env, PROJECTS)
+            .await
+            .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r19_a_disabled_lists_row_is_gone_before_the_refreshers_first_write() {
+        // Given stored rows for both lists and articles disabled
+        let env = Env::new();
+        env.seed(ListName::Projects, &projects_doc(T0));
+        env.seed(ListName::Articles, &articles_doc(T0));
+        // and a projects source that looks at the database as its fetch begins,
+        // which is before the refresher can have written anything
+        let seen: Arc<Mutex<Vec<i64>>> = Arc::default();
+        let (db_path, record) = (env.db_path(), seen.clone());
+        let source = FakeSource::probed(&projects_doc(T1), move || {
+            let conn = rusqlite::Connection::open(&db_path).expect("open db");
+            let rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM live_lists WHERE name = 'articles'",
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("count rows");
+            record.lock().expect("probe lock").push(rows);
+        });
+        // When the server starts
+        launch(env.inputs(Some("articles"), sources(Some(&source), None))).await;
+        settle().await;
+        // Then the probe ran once and saw no articles row
+        assert_eq!(*seen.lock().unwrap(), vec![0]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r19_unsetting_the_variable_and_restarting_lets_the_start_refresh_fill_the_list() {
+        // Given articles were disabled and the server started once
+        let env = Env::new();
+        env.seed(ListName::Articles, &articles_doc(T0));
+        let source = FakeSource::answering(&articles_doc(T1));
+        let first = launch(env.inputs(Some("articles"), sources(None, Some(&source)))).await;
+        settle().await;
+        assert_eq!(source.calls(), 0);
+        assert_eq!(freshness(&first, &env).await["articles"], Value::Null);
+        // When the variable is unset and the server restarts over the same file
+        let second = launch(env.inputs(None, sources(None, Some(&source)))).await;
+        settle().await;
+        // Then the start refresh filled articles, later than started_at
+        let fresh = freshness(&second, &env).await;
+        assert_eq!(fresh["articles"], json!(T1));
+        assert!(
+            ts::instant(fresh["articles"].as_str().unwrap())
+                > ts::instant(fresh["started_at"].as_str().unwrap())
+        );
+    }
+
+    // ---- R-16: a restart serves what was held, whatever the sources do ----
+
+    #[tokio::test(start_paused = true)]
+    async fn r16_after_a_restart_with_both_sources_failing_the_first_request_gets_the_held_copies_and_times()
+     {
+        // Given a first run that fetched and persisted both lists
+        let env = Env::new();
+        let (p, a) = (projects_doc(T1), articles_doc(T1));
+        let first_p = FakeSource::answering(&p);
+        let first_a = FakeSource::answering(&a);
+        let first = launch(env.inputs(None, sources(Some(&first_p), Some(&first_a)))).await;
+        settle().await;
+        assert_eq!(freshness(&first, &env).await["articles"], json!(T1));
+        drop(first);
+        // When the server restarts and both sources fail
+        let down_p = FakeSource::failing(ReasonCode::RefreshBoundPassed);
+        let down_a = FakeSource::never_answering();
+        let second = launch(env.inputs(None, sources(Some(&down_p), Some(&down_a)))).await;
+        // Then the first request, before any refresh settles, returns the copies and times
+        assert_eq!(second.get(&env, PROJECTS).await.text(), p);
+        let fresh = freshness(&second, &env).await;
+        assert_eq!(
+            (&fresh["projects"], &fresh["articles"]),
+            (&json!(T1), &json!(T1))
+        );
+    }
+
+    // ---- R-30: the summary line ----
+
+    #[tokio::test(start_paused = true)]
+    async fn r30_a_refresh_where_every_enabled_list_succeeded_logs_one_info_summary_with_its_fields()
+     {
+        let env = Env::new();
+        let projects = FakeSource::reporting(FetchReport {
+            document: Ok(projects_doc(T1)),
+            skipped: vec![],
+            requests: vec![
+                RequestNote {
+                    status: 200,
+                    ratelimit_remaining: Some(58),
+                },
+                RequestNote {
+                    status: 200,
+                    ratelimit_remaining: Some(57),
+                },
+            ],
+        });
+        let articles = FakeSource::reporting(FetchReport {
+            document: Ok(articles_doc(T1)),
+            skipped: vec![SkippedPost {
+                index: 2,
+                reason: ReasonCode::ArticlesDocumentRejected,
+            }],
+            requests: vec![RequestNote {
+                status: 200,
+                ratelimit_remaining: None,
+            }],
+        });
+        let (log, _guard) = LogCapture::install();
+        launch(env.inputs(None, sources(Some(&projects), Some(&articles)))).await;
+        settle().await;
+        let line = log.one_line("live lists refresh");
+        assert!(line.contains("INFO"), "{line}");
+        assert!(line.contains("trigger=start"), "{line}");
+        assert!(
+            line.contains(r#"projects="outcome=advanced count=3 skipped=none elapsed_ms=0""#),
+            "{line}"
+        );
+        assert!(
+            line.contains(
+                r#"articles="outcome=advanced count=1 skipped=2:articles_document_rejected elapsed_ms=0""#
+            ),
+            "{line}"
+        );
+        assert!(
+            line.contains(r#"requests="projects:200,projects:200,articles:200""#),
+            "{line}"
+        );
+        // a remaining count only where the header parsed as an integer
+        assert!(
+            line.contains(r#"ratelimit_remaining="projects:58,projects:57""#),
+            "{line}"
+        );
+        // and each skipped post logs its index and reason code only
+        let skip = log.one_line("post skipped");
+        assert!(skip.contains("WARN"), "{skip}");
+        assert!(
+            skip.contains(r#"list="articles""#) && skip.contains("index=2"),
+            "{skip}"
+        );
+        assert!(
+            skip.contains(r#"reason="articles_document_rejected""#),
+            "{skip}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r30_a_refresh_where_a_list_failed_logs_the_summary_at_warn_with_the_reason() {
+        let env = Env::new();
+        let projects = FakeSource::failing(ReasonCode::RefreshBoundPassed);
+        let articles = FakeSource::answering(&articles_doc(T1));
+        let (log, _guard) = LogCapture::install();
+        launch(env.inputs(None, sources(Some(&projects), Some(&articles)))).await;
+        settle().await;
+        let line = log.one_line("live lists refresh");
+        assert!(line.contains("WARN"), "{line}");
+        assert!(
+            line.contains(r#"projects="outcome=failed reason=refresh_bound_passed count=- skipped=none elapsed_ms=0""#),
+            "{line}"
+        );
+        assert!(line.contains("outcome=advanced count=1"), "{line}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r30_a_persist_failure_is_named_in_the_summary_by_its_reason_code() {
+        let env = Env::new();
+        env.db()
+            .execute_batch(
+                "CREATE TRIGGER refuse_insert BEFORE INSERT ON live_lists \
+                 BEGIN SELECT RAISE(ABORT, 'forced'); END;",
+            )
+            .unwrap();
+        let projects = FakeSource::answering(&projects_doc(T1));
+        let (log, _guard) = LogCapture::install();
+        launch(env.inputs(None, sources(Some(&projects), None))).await;
+        settle().await;
+        let line = log.one_line("live lists refresh");
+        assert!(line.contains("WARN"), "{line}");
+        assert!(
+            line.contains("outcome=failed reason=persist_failed"),
+            "{line}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r30_every_refresh_writes_its_own_summary_line_and_a_tick_says_tick() {
+        let env = Env::new();
+        let projects = FakeSource::answering(&projects_doc(T1));
+        let (log, _guard) = LogCapture::install();
+        launch(env.inputs(None, sources(Some(&projects), None))).await;
+        settle().await;
+        tokio::time::advance(REFRESH_INTERVAL).await;
+        settle().await;
+        let lines = log.lines_containing("live lists refresh");
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("trigger=start"), "{}", lines[0]);
+        assert!(lines[1].contains("trigger=tick"), "{}", lines[1]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn r30_a_disabled_list_and_a_list_with_no_source_are_named_and_do_not_make_the_summary_warn()
+     {
+        let env = Env::new();
+        let articles = FakeSource::answering(&articles_doc(T1));
+        let (log, _guard) = LogCapture::install();
+        // projects disabled by the switch; no source registered would be the
+        // same for articles, so register only articles
+        launch(env.inputs(Some("projects"), sources(None, Some(&articles)))).await;
+        settle().await;
+        let line = log.one_line("live lists refresh");
+        assert!(line.contains("INFO"), "{line}");
+        assert!(line.contains(r#"projects="outcome=disabled"#), "{line}");
+        // and with nothing disabled but no projects source registered
+        let env = Env::new();
+        let (log, _guard2) = LogCapture::install();
+        launch(env.inputs(None, sources(None, Some(&articles)))).await;
+        settle().await;
+        let line = log.one_line("live lists refresh");
+        assert!(line.contains("INFO"), "{line}");
+        assert!(line.contains(r#"projects="outcome=no_source"#), "{line}");
+    }
 }

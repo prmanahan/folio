@@ -109,3 +109,104 @@ impl Drop for TempDir {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+// ---- fakes for the refresher's seams ----
+
+use std::sync::atomic::AtomicUsize;
+
+use futures::future::BoxFuture;
+
+use super::ListName;
+use super::ReasonCode;
+use super::refresher::{FetchReport, ListSource};
+use super::store::{ListStore, PersistError};
+
+/// What a [`FakeSource`] does when asked to fetch.
+#[derive(Clone)]
+pub(crate) enum Behaviour {
+    /// Answer with this report.
+    Report(FetchReport),
+    /// Never answer.
+    Never,
+}
+
+/// A source the test steers: it counts fetches, runs an optional probe at
+/// entry, and answers as told.
+pub(crate) struct FakeSource {
+    calls: AtomicUsize,
+    behaviour: Mutex<Behaviour>,
+    probe: Option<Box<dyn Fn() + Send + Sync>>,
+}
+
+impl FakeSource {
+    pub(crate) fn answering(document: &str) -> Arc<Self> {
+        Self::with(
+            Behaviour::Report(FetchReport::document(document.to_string())),
+            None,
+        )
+    }
+
+    pub(crate) fn failing(reason: ReasonCode) -> Arc<Self> {
+        Self::with(Behaviour::Report(FetchReport::failed(reason)), None)
+    }
+
+    pub(crate) fn never_answering() -> Arc<Self> {
+        Self::with(Behaviour::Never, None)
+    }
+
+    pub(crate) fn reporting(report: FetchReport) -> Arc<Self> {
+        Self::with(Behaviour::Report(report), None)
+    }
+
+    /// Answers with `document`, after running `probe` as the fetch begins.
+    pub(crate) fn probed(document: &str, probe: impl Fn() + Send + Sync + 'static) -> Arc<Self> {
+        Self::with(
+            Behaviour::Report(FetchReport::document(document.to_string())),
+            Some(Box::new(probe)),
+        )
+    }
+
+    fn with(behaviour: Behaviour, probe: Option<Box<dyn Fn() + Send + Sync>>) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            behaviour: Mutex::new(behaviour),
+            probe,
+        })
+    }
+
+    pub(crate) fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    /// Change what the next fetch answers (the description changed at the source).
+    pub(crate) fn answer_with(&self, document: &str) {
+        *self.behaviour.lock().expect("behaviour lock") =
+            Behaviour::Report(FetchReport::document(document.to_string()));
+    }
+}
+
+impl ListSource for FakeSource {
+    fn fetch(&self, _now: OffsetDateTime) -> BoxFuture<'_, FetchReport> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(probe) = &self.probe {
+            probe();
+        }
+        let behaviour = self.behaviour.lock().expect("behaviour lock").clone();
+        Box::pin(async move {
+            match behaviour {
+                Behaviour::Report(report) => report,
+                Behaviour::Never => std::future::pending().await,
+            }
+        })
+    }
+}
+
+/// A store whose persist panics: the forced panic in R-17's persist step,
+/// carried by the injected store.
+pub(crate) struct PanickingStore;
+
+impl ListStore for PanickingStore {
+    fn persist(&mut self, _list: ListName, _document: &str) -> Result<(), PersistError> {
+        panic!("forced panic in the persist step");
+    }
+}
