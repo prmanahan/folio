@@ -53,6 +53,14 @@ fn validate_edge_auth_token(token: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A required variable, read from `result` (the outcome of `env::var(name)`).
+/// Fails loud when absent. Panics carry fixed text only: `VarError::NotUnicode`
+/// holds the raw value, and its `Debug` would print a secret's bytes, before
+/// the payload-free panic hook is installed.
+fn required_from(name: &str, result: Result<String, env::VarError>) -> String {
+    result.expect(&format!("{name} env var is required"))
+}
+
 impl Config {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
@@ -70,8 +78,7 @@ impl Config {
             );
         }
 
-        let edge_auth_token =
-            env::var("EDGE_AUTH_TOKEN").expect("EDGE_AUTH_TOKEN env var is required");
+        let edge_auth_token = required_from("EDGE_AUTH_TOKEN", env::var("EDGE_AUTH_TOKEN"));
         if let Err(reason) = validate_edge_auth_token(&edge_auth_token) {
             panic!("EDGE_AUTH_TOKEN is invalid: {reason}");
         }
@@ -82,7 +89,7 @@ impl Config {
                 .parse()
                 .expect("PORT must be a number"),
             database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "data/site.db".to_string()),
-            admin_password: env::var("ADMIN_PASSWORD").expect("ADMIN_PASSWORD env var is required"),
+            admin_password: required_from("ADMIN_PASSWORD", env::var("ADMIN_PASSWORD")),
             anthropic_api_key: env::var("ANTHROPIC_API_KEY").ok(),
             trusted_ip_header,
             static_dir: env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string()),
@@ -95,6 +102,56 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The text a panic carried, whichever payload type it used.
+    fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(s) => *s,
+            Err(p) => p
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// A value that is not valid Unicode, built per run: its bytes stand in
+    /// for a secret that must never reach a log.
+    #[cfg(unix)]
+    fn non_unicode_secret() -> (std::ffi::OsString, String) {
+        use std::os::unix::ffi::OsStringExt;
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let mut bytes = nonce.clone().into_bytes();
+        bytes.push(0xff); // never valid UTF-8
+        (std::ffi::OsString::from_vec(bytes), nonce)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_unicode_required_value_never_appears_in_the_panic_message() {
+        for name in ["ADMIN_PASSWORD", "EDGE_AUTH_TOKEN"] {
+            // Given a value that is not valid Unicode
+            let (value, nonce) = non_unicode_secret();
+            // When the required read fails on it
+            let caught = std::panic::catch_unwind(|| {
+                required_from(name, Err(env::VarError::NotUnicode(value)))
+            });
+            // Then it panics, and the message carries none of the value
+            let text = panic_text(caught.expect_err("a non-Unicode value must fail loud"));
+            assert!(!text.contains(&nonce), "{name}: the value leaked: {text}");
+            assert!(text.contains(name), "{name}: {text}");
+        }
+    }
+
+    #[test]
+    fn an_absent_required_value_keeps_its_message() {
+        let caught = std::panic::catch_unwind(|| {
+            required_from("ADMIN_PASSWORD", Err(env::VarError::NotPresent))
+        });
+        assert_eq!(
+            panic_text(caught.expect_err("absent must fail loud")),
+            "ADMIN_PASSWORD env var is required: NotPresent"
+        );
+    }
 
     fn valid_token() -> String {
         format!(
