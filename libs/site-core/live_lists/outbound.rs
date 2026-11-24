@@ -88,6 +88,11 @@ impl Target {
         Url::parse(&text).expect("a fixed URL")
     }
 
+    /// Whether the target is a GitHub page, the only kind whose `Link` is read.
+    fn paginates(self) -> bool {
+        matches!(self, Target::GithubOrg(_) | Target::GithubUser(_))
+    }
+
     fn accept(self) -> &'static str {
         match self {
             Target::GithubOrg(_) | Target::GithubUser(_) => "application/vnd.github+json",
@@ -181,6 +186,45 @@ impl Resolve for MapResolver {
     }
 }
 
+/// The environment variables rustls-native-certs, under the platform
+/// verifier, reads trust roots from.
+const TRUST_ROOT_VARIABLES: [&str; 2] = ["SSL_CERT_FILE", "SSL_CERT_DIR"];
+
+/// The one policy, shared by the production and test clients. They differ
+/// only in what they add to it: the resolver, and for tests a trust root.
+fn policy() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        // R-2: the proxy environment is never read.
+        .no_proxy()
+        // R-2: a 3xx is a failed fetch and its `Location` is never requested.
+        .redirect(reqwest::redirect::Policy::none())
+        .https_only(true)
+        // R-3: HTTP/1.1, so `Host` is a header. A body is never decompressed:
+        // no decompression feature is compiled in, and these refuse one that
+        // another dependency enables later. `Accept-Encoding: identity` is
+        // sent per request.
+        .http1_only()
+        .no_gzip()
+        .no_brotli()
+        .no_zstd()
+        .no_deflate()
+        .user_agent(USER_AGENT)
+        // R-4
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(TOTAL_TIMEOUT)
+}
+
+/// `a: b: c`, an error and its sources.
+fn cause_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut next = error.source();
+    while let Some(cause) = next {
+        parts.push(cause.to_string());
+        next = cause.source();
+    }
+    parts.join(": ")
+}
+
 /// The one client. Cheap to clone; clones share a connection pool.
 #[derive(Clone)]
 pub struct OutboundClient {
@@ -192,62 +236,71 @@ impl OutboundClient {
     /// root, resolver or proxy (R-2): the system roots, the system resolver
     /// and no proxy are the only choices.
     ///
+    /// The platform verifier on Linux also loads trust roots named by
+    /// `SSL_CERT_FILE` and `SSL_CERT_DIR`, which would let the environment
+    /// add a root. Either variable being set therefore fails the build, so
+    /// the signed gap "TLS test hook by review" stays the only way in.
+    ///
     /// # Errors
-    /// [`BuildError`] when the TLS stack cannot be initialised.
+    /// [`BuildError`] when either trust-root variable is set, or the TLS
+    /// stack cannot be initialised. The cause is logged at `error`.
     pub fn new() -> Result<Self, BuildError> {
-        Self::build(Arc::new(SystemResolver), Vec::new())
+        for name in TRUST_ROOT_VARIABLES {
+            if std::env::var_os(name).is_some() {
+                tracing::error!(
+                    variable = name,
+                    "the outbound client refuses to build while a trust-root variable is set"
+                );
+                return Err(BuildError);
+            }
+        }
+        Self::finish(policy().dns_resolver(Arc::new(SystemResolver)))
     }
 
-    /// The test client: the production policy, with `net`'s trust roots added
-    /// and its name map as the only resolver (R-5). Gated by `#[cfg(test)]`,
-    /// so only a source change can put a trust root or resolver seam into the
-    /// shipped client.
+    /// The test client: the production policy, with `roots` added to the
+    /// trust store and the name map as the only resolver (R-5). Gated by
+    /// `#[cfg(test)]`, so only a source change can put a trust root or
+    /// resolver seam into the shipped client.
     #[cfg(test)]
     pub(crate) fn for_test(net: super::tls_harness::TestNet) -> Self {
-        let roots = net
-            .roots
-            .iter()
-            .map(|der| reqwest::Certificate::from_der(der).expect("a DER root"))
-            .collect();
-        Self::build(Arc::new(MapResolver(net.names)), roots).expect("the test client builds")
+        let mut builder = policy().dns_resolver(Arc::new(MapResolver(net.names)));
+        for der in &net.roots {
+            builder = builder
+                .add_root_certificate(reqwest::Certificate::from_der(der).expect("a DER root"));
+        }
+        Self::finish(builder).expect("the test client builds")
     }
 
-    /// The one policy. `new` and `for_test` differ only in the resolver and
-    /// the extra roots they pass.
-    fn build(
-        resolver: Arc<dyn Resolve>,
-        extra_roots: Vec<reqwest::Certificate>,
-    ) -> Result<Self, BuildError> {
-        let mut builder = reqwest::Client::builder()
-            // R-2: the proxy environment is never read.
-            .no_proxy()
-            // R-2: a 3xx is a failed fetch and its `Location` is never requested.
-            .redirect(reqwest::redirect::Policy::none())
-            .https_only(true)
-            // R-3: HTTP/1.1, so `Host` is a header; no decompression feature is
-            // compiled in, and `Accept-Encoding: identity` is sent per request.
-            .http1_only()
-            .user_agent(USER_AGENT)
-            // R-4
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(TOTAL_TIMEOUT)
-            .dns_resolver(resolver);
-        for root in extra_roots {
-            builder = builder.add_root_certificate(root);
+    fn finish(builder: reqwest::ClientBuilder) -> Result<Self, BuildError> {
+        match builder.build() {
+            Ok(inner) => Ok(Self { inner }),
+            Err(error) => {
+                // The builder's causes are about this process (TLS setup, root
+                // loading), never a response, so the chain is safe to log.
+                tracing::error!(
+                    causes = %cause_chain(&error),
+                    "the outbound client could not be built"
+                );
+                Err(BuildError)
+            }
         }
-        let inner = builder.build().map_err(|_cause| BuildError)?;
-        Ok(Self { inner })
     }
 
     /// Fetch one of R-1's URLs.
     pub(crate) async fn fetch(&self, target: Target) -> Result<Fetched, FetchFailure> {
-        self.fetch_url(&target.url(), target.accept()).await
+        self.fetch_url(&target.url(), target.accept(), target.paginates())
+            .await
     }
 
     /// Fetch `url`. Private: the one way in from outside this module is
     /// [`OutboundClient::fetch`], so R-1's request set is closed. Tests reach
     /// it for R-2's `http://` and unmapped-name cases.
-    async fn fetch_url(&self, url: &Url, accept: &str) -> Result<Fetched, FetchFailure> {
+    async fn fetch_url(
+        &self,
+        url: &Url,
+        accept: &str,
+        read_link: bool,
+    ) -> Result<Fetched, FetchFailure> {
         let failed = |reason, note| FetchFailure { reason, note };
         if url.scheme() != "https" {
             return Err(failed(ReasonCode::SchemeRefused, None));
@@ -293,8 +346,14 @@ impl OutboundClient {
         // R-1: pagination reads `rel="next"` from here. A `Link` value that is
         // not plain text is ambiguous, so the fetch fails rather than ending
         // the list early.
+        // The feed never paginates, so its `Link` is not read at all.
         let mut link_values = Vec::new();
-        for value in response.headers().get_all(LINK) {
+        for value in response
+            .headers()
+            .get_all(LINK)
+            .iter()
+            .filter(|_| read_link)
+        {
             match value.to_str() {
                 Ok(text) => link_values.push(text.to_string()),
                 Err(_unreadable) => return Err(failed(ReasonCode::TransportFailed, Some(note))),
@@ -525,7 +584,11 @@ stderr: {}",
         let client = OutboundClient::for_test(TestNet::new(&pki, &[(GITHUB, plain.addr())]));
         // When an http:// URL is requested
         let result = client
-            .fetch_url(&url("http://api.github.com/orgs/mnemra/repos"), "*/*")
+            .fetch_url(
+                &url("http://api.github.com/orgs/mnemra/repos"),
+                "*/*",
+                false,
+            )
             .await;
         // Then it fails with the scheme-refusal reason and nothing connected
         assert_eq!(reason(result), Some(ReasonCode::SchemeRefused));
@@ -968,7 +1031,7 @@ stderr: {}",
         // When that name is requested
         let result = rig
             .client
-            .fetch_url(&url("https://unmapped.example/"), "*/*")
+            .fetch_url(&url("https://unmapped.example/"), "*/*", false)
             .await;
         // Then resolution fails and nothing connected
         assert_eq!(reason(result), Some(ReasonCode::NameResolutionFailed));
