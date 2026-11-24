@@ -8,6 +8,7 @@
 
 pub mod articles;
 pub mod clock;
+pub mod feed;
 pub mod github;
 pub mod held;
 pub mod outbound;
