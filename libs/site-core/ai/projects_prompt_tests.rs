@@ -23,8 +23,8 @@
 use rusqlite::Connection;
 
 use crate::ai::context::{build_fit_prompt, build_system_prompt};
-use crate::live_lists::held::{Held, Snapshot};
 use crate::live_lists::LiveLists;
+use crate::live_lists::held::{Held, Snapshot};
 use crate::projects_list::ProjectsList;
 use std::sync::Arc;
 
