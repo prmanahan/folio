@@ -29,6 +29,19 @@ pub const REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// fetch for that refresh.
 pub const REFRESH_BOUND: Duration = Duration::from_secs(120);
 
+#[cfg(test)]
+thread_local! {
+    static BOUND_FOR_TEST: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+}
+
+/// Make this thread's refreshes use `bound` as the refresh bound. Test-only,
+/// per thread, so no test affects another; the refresher task of a
+/// current-thread test runtime runs on the test's thread.
+#[cfg(test)]
+pub(crate) fn set_bound_for_test(bound: Duration) {
+    BOUND_FOR_TEST.with(|b| b.set(Some(bound)));
+}
+
 /// A post a source rejected, by its item index and reason code only (R-30).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SkippedPost {

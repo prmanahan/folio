@@ -100,7 +100,11 @@ impl GithubProjectsSource {
                 Ok(Value::Array(items)) => elements.extend(items),
                 Ok(_) | Err(_) => return Err(ReasonCode::ProjectsBodyNotArray),
             }
-            if !fetched.link.as_deref().is_some_and(has_rel_next) {
+            let next = fetched
+                .link
+                .as_deref()
+                .map_or(LinkNext::NoNext, has_rel_next);
+            if next != LinkNext::Next {
                 return Ok(elements);
             }
             // The next page's URL is the fixed one plus `&page=N`, never the
@@ -194,7 +198,24 @@ fn repos_of(owner: &str, elements: &[Value]) -> Result<Vec<Value>, ReasonCode> {
 /// Whether a `Link` header value carries a link whose `rel` names `next`
 /// (R-1). The URL inside the angle brackets is never read, and a `rel` inside
 /// one is not a relation. An unterminated target is no link.
-pub(crate) fn has_rel_next(link: &str) -> bool {
+pub(crate) fn has_rel_next(link: &str) -> LinkNext {
+    if next_relation(link) {
+        LinkNext::Next
+    } else {
+        LinkNext::NoNext
+    }
+}
+
+/// What a `Link` header says about the next page (R-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkNext {
+    Next,
+    NoNext,
+    /// The header cannot be read unambiguously: whether a next page exists is unknown.
+    Malformed,
+}
+
+fn next_relation(link: &str) -> bool {
     let mut rest = link;
     while let Some(open) = rest.find('<') {
         let after = &rest[open + 1..];
@@ -244,6 +265,9 @@ mod tests {
     use std::sync::Arc;
 
     const GITHUB: &str = "api.github.com";
+    /// The held copy's time: earlier than the clock's `T0`, so an unchanged
+    /// time cannot be mistaken for one that advanced.
+    const HELD_AT: &str = "2026-11-19T06:00:00.000Z";
     const ORG: &str = "/orgs/mnemra/repos?type=public&per_page=100";
     const USER: &str = "/users/prmanahan/repos?type=owner&per_page=100";
     const API_RESPONSES: &str =
@@ -381,8 +405,9 @@ mod tests {
     }
 
     #[test]
-    fn r1_has_rel_next_is_true_exactly_when_a_link_value_has_a_next_relation() {
-        // Property over generated Link headers, seeded so a failure repeats.
+    fn r1_has_rel_next_reads_next_exactly_when_a_link_value_has_a_next_relation() {
+        // Property over generated, well-formed Link headers, seeded so a
+        // failure repeats. Quoted strings may hold `,` `;` `<` and `>`.
         let urls = [
             "https://api.github.com/orgs/mnemra/repos?page=2",
             "https://evil.example/a,b;c",
@@ -401,6 +426,13 @@ mod tests {
             "prev next",
             "last Next",
         ];
+        let titles = [
+            "",
+            r#"; title="a, b""#,
+            r#"; title="x; rel=next""#,
+            r#"; title="<https://y/>; rel=next""#,
+            r#"; title="say \"hi\", then <go>""#,
+        ];
         let mut seed: u64 = 0x5eed_0004_8530_0001;
         let mut rnd = move |n: usize| {
             seed = seed
@@ -415,37 +447,112 @@ mod tests {
             for _ in 0..count {
                 let (url, rel) = (urls[rnd(urls.len())], rels[rnd(rels.len())]);
                 want |= rel.split(' ').any(|t| t.eq_ignore_ascii_case("next"));
-                let quoted = if rnd(2) == 0 {
+                // an unquoted value is a single token
+                let rel_value = if rel.contains(' ') || rnd(2) == 0 {
                     format!(r#""{rel}""#)
                 } else {
                     rel.to_string()
                 };
-                // an unquoted value is a single token
-                let quoted = if rel.contains(' ') {
-                    format!(r#""{rel}""#)
-                } else {
-                    quoted
-                };
-                let title = if rnd(3) == 0 { r#"; title="a, b""# } else { "" };
-                entries.push(format!("<{url}>; rel={quoted}{title}"));
+                let title = titles[rnd(titles.len())];
+                entries.push(format!("<{url}>; rel={rel_value}{title}"));
             }
             let header = entries.join(", ");
-            assert_eq!(has_rel_next(&header), want, "case {case}: {header}");
+            let expected = if want {
+                LinkNext::Next
+            } else {
+                LinkNext::NoNext
+            };
+            assert_eq!(has_rel_next(&header), expected, "case {case}: {header}");
+        }
+    }
+
+    #[test]
+    fn r1_a_header_cut_inside_a_link_target_is_malformed() {
+        // Property: any prefix of a well-formed header that ends after a `<`
+        // and before its `>` has an unterminated target.
+        let header = r#"<https://api.github.com/orgs/mnemra/repos?page=2>; rel="next", <https://api.github.com/orgs/mnemra/repos?page=9>; rel="last""#;
+        for (open, _) in header.match_indices('<') {
+            let close = open + header[open..].find('>').expect("a closing bracket");
+            for cut in open + 1..close {
+                assert_eq!(
+                    has_rel_next(&header[..cut]),
+                    LinkNext::Malformed,
+                    "cut at {cut}: {}",
+                    &header[..cut]
+                );
+            }
         }
     }
 
     #[test]
     fn r1_has_rel_next_on_worked_values() {
-        assert!(has_rel_next(
-            r#"<https://a/b?page=2>; rel="next", <https://a/b?page=9>; rel="last""#
-        ));
-        assert!(!has_rel_next(r#"<https://a/b?page=1>; rel="prev""#));
-        assert!(!has_rel_next(""));
-        assert!(!has_rel_next("rel=\"next\""));
-        assert!(
-            !has_rel_next(r#"<https://a/b; rel="next""#),
-            "an unterminated target is no link"
-        );
+        let next = LinkNext::Next;
+        let no_next = LinkNext::NoNext;
+        let malformed = LinkNext::Malformed;
+        for (header, want) in [
+            (
+                r#"<https://a/b?page=2>; rel="next", <https://a/b?page=9>; rel="last""#,
+                next,
+            ),
+            (r#"<https://a/b?page=1>; rel="prev""#, no_next),
+            ("", no_next),
+            ("  ", no_next),
+            (r#"<https://a/>; rel="next","#, next),
+            (r#"<https://a/>; title="x, <y>"; rel="next""#, next),
+            (r#"<https://a/>; title="a<b>; rel=next""#, no_next),
+            ("<https://a/>; rel", no_next),
+            // unreadable: whether a next page exists is unknown
+            (r#"rel="next""#, malformed),
+            (r#"<https://a/b; rel="next""#, malformed),
+            (r#"<https://a/b>; rel="next"#, malformed),
+            (r#"<https://a/b>; title="a\"#, malformed),
+            (r#"<https://a/b> junk; rel="next""#, malformed),
+            (r#"<https://a/b>; rel="next", junk"#, malformed),
+        ] {
+            assert_eq!(has_rel_next(header), want, "{header:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn r1_a_next_link_naming_another_path_or_host_still_requests_only_page_2() {
+        // The URL in the header is never requested: the next request is the
+        // fixed URL plus &page=2, whatever the header names.
+        for link in [
+            r#"<https://api.github.com/other/path?page=7>; rel="next""#,
+            r#"<https://evil.example/orgs/mnemra/repos?page=9>; rel="next""#,
+            r#"<https://api.github.com/orgs/mnemra/repos?type=all&page=3>; rel="next""#,
+        ] {
+            let mut routes = simple_routes();
+            routes[0].1 = routes[0].1.clone().with_header("Link", link);
+            routes.push((
+                page_target(ORG, 2),
+                ok(&json!([repo("mnemra", "zeta", json!("z"))])),
+            ));
+            let gh = gh(routes).await;
+            let report = run(&gh).await;
+            assert!(report.document.is_ok(), "{link}");
+            assert_eq!(
+                targets(&gh),
+                vec![ORG.to_string(), page_target(ORG, 2), USER.to_string()],
+                "{link}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn r1_a_malformed_link_fails_the_fetch_and_requests_no_further_page() {
+        for link in [
+            r#"<https://x/"#,
+            r#"rel="next""#,
+            r#"<https://x/>; rel="next"#,
+        ] {
+            let mut routes = simple_routes();
+            routes[0].1 = routes[0].1.clone().with_header("Link", link);
+            let gh = gh(routes).await;
+            let report = run(&gh).await;
+            assert_eq!(report.document, Err(ReasonCode::LinkMalformed), "{link}");
+            assert_eq!(targets(&gh), vec![ORG.to_string()], "{link}");
+        }
     }
 
     // ---- R-4: the page cap ----
@@ -687,6 +794,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn r6_a_valid_surrogate_pair_is_accepted_raw_and_as_escapes() {
+        // The positive control for the lone-surrogate refusals: `a😀b` sent as
+        // raw UTF-8 bytes, and as the \ud83d\ude00 escape pair, is accepted and
+        // comes out as a, U+1F600, b.
+        for (what, body) in [
+            (
+                "raw",
+                "[{\"name\":\"x\",\"private\":false,\"fork\":false,\"archived\":false,\"owner\":{\"login\":\"mnemra\"},\"description\":\"a\u{1f600}b\"}]",
+            ),
+            (
+                "escaped",
+                r#"[{"name":"x","private":false,"fork":false,"archived":false,"owner":{"login":"mnemra"},"description":"a\ud83d\ude00b"}]"#,
+            ),
+        ] {
+            let mut routes = simple_routes();
+            routes[0] = (ORG.into(), Reply::ok(body.as_bytes().to_vec()));
+            let (doc, _gh) = rejected(routes).await;
+            let doc: Value =
+                serde_json::from_str(&doc.unwrap_or_else(|r| panic!("{what}: {r:?}"))).unwrap();
+            let description = doc["groups"][0]["repos"][0]["description"]
+                .as_str()
+                .unwrap();
+            assert_eq!(
+                description.chars().collect::<Vec<_>>(),
+                ['a', '\u{1f600}', 'b'],
+                "{what}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn r6_an_owner_with_zero_repos_after_exclusions_fails() {
         let excluded = |name: &str, fork: bool, archived: bool| {
             let mut r = repo("mnemra", name, json!("d"));
@@ -804,7 +942,12 @@ mod tests {
                 .map(|n| repo("mnemra", n, json!("d")))
                 .collect();
             let (doc, _gh) = rejected(org_with(json!(elements))).await;
-            let doc: Value = serde_json::from_str(&doc.expect("accepted")).unwrap();
+            let text = doc.expect("accepted");
+            assert!(
+                crate::projects_list::parse(&text).is_ok(),
+                "case {case}: the validator refused the document"
+            );
+            let doc: Value = serde_json::from_str(&text).unwrap();
             let got: Vec<String> = doc["groups"][0]["repos"]
                 .as_array()
                 .unwrap()
@@ -893,7 +1036,7 @@ mod tests {
         for (what, routes, reason) in conditions {
             // Given a held projects copy
             let env = Env::new();
-            let held = projects_doc(T0);
+            let held = projects_doc(HELD_AT);
             env.seed(ListName::Projects, &held);
             // When the refresh runs against the bad response
             let (running, log, _guard, _gh) = started(&env, gh(routes).await).await;
@@ -906,7 +1049,7 @@ mod tests {
             let fresh = running
                 .get_json(&env, "/api/lists/freshness", StatusCode::OK)
                 .await;
-            assert_eq!(fresh["projects"], json!(T0), "{what}");
+            assert_eq!(fresh["projects"], json!(HELD_AT), "{what}");
             assert_eq!(env.stored(ListName::Projects), Some(held), "{what}");
             // and a warn line names projects and the reason code
             let line = log.one_line("live list refresh failed");
@@ -924,10 +1067,7 @@ mod tests {
     #[tokio::test]
     async fn r6_a_good_fetch_is_served_live_and_advances_the_projects_time() {
         let env = Env::new();
-        env.seed(
-            ListName::Projects,
-            &projects_doc("2026-11-19T06:00:00.000Z"),
-        );
+        env.seed(ListName::Projects, &projects_doc(HELD_AT));
         let routes = vec![
             (
                 ORG.into(),
@@ -959,5 +1099,43 @@ mod tests {
         assert!(line.contains("projects:58"), "{line}");
         assert!(!line.contains("lots"), "{line}");
         assert!(line.contains("INFO"), "{line}");
+    }
+
+    // ---- R-4: the refresh bound, through the production client ----
+
+    #[tokio::test]
+    async fn r4_a_list_still_in_flight_at_the_refresh_bound_fails_and_the_finished_list_is_kept() {
+        use crate::live_lists::refresher::set_bound_for_test;
+        // Given a short bound, a held projects copy, and GitHub answering
+        // page 1 at once and then never answering page 2
+        set_bound_for_test(Duration::from_millis(400));
+        let env = Env::new();
+        env.seed(ListName::Projects, &projects_doc(HELD_AT));
+        env.seed(ListName::Articles, &articles_doc(HELD_AT));
+        let mut stalled = Reply::ok(body(&json!([])));
+        stalled.head_delay = Duration::from_secs(3600);
+        let routes = vec![
+            (
+                ORG.into(),
+                ok(&json!([repo("mnemra", "alpha", json!("a"))]))
+                    .with_header("Link", r#"<https://x/>; rel="next""#),
+            ),
+            (page_target(ORG, 2), stalled),
+        ];
+        let (running, log, _guard, _gh) = started(&env, gh(routes).await).await;
+        // Then the articles list, which finished, advanced; the projects list
+        // failed at the bound and kept its copy and time
+        let fresh = running
+            .get_json(&env, "/api/lists/freshness", StatusCode::OK)
+            .await;
+        assert_eq!(fresh["articles"], json!(T0));
+        assert_eq!(fresh["projects"], json!(HELD_AT));
+        let line = log.one_line("live list refresh failed");
+        assert!(line.contains(r#"reason="refresh_bound_passed""#), "{line}");
+        assert!(line.contains(r#"list="projects""#), "{line}");
+        // and the page already fetched is in the summary: a cancelled fetch
+        // does not lose the requests it completed (R-30)
+        let summary = log.one_line("live lists refresh");
+        assert!(summary.contains("projects:200"), "{summary}");
     }
 }
