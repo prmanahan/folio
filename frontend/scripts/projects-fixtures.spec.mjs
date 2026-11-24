@@ -3,8 +3,8 @@
 // R-9 (spec docs/specs/2026-11-11-projects-from-github.md, plan T1 and D10):
 // every repo name in every committed fixture of both kinds under the D10 root
 // (frontend/scripts/projects-fixtures/) matches ^fixture-. Reads only the
-// committed fixtures; the script under test is not involved, so this test is
-// green from the moment the fixtures exist. Its guard against a vacuous pass
+// committed fixtures and no product code, so this test is green from the
+// moment the fixtures exist. Its guard against a vacuous pass
 // is the "kinds found" assertions and the seeded-violation control.
 //
 // Fixture kinds, by file-name prefix: `api-*.json` (GitHub API responses,

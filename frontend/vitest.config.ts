@@ -13,8 +13,8 @@ export default defineConfig({
 		},
 	},
 	test: {
-		// `scripts/*.spec.mjs` collects the fetch script's tests (R-16). It must
-		// not collect `scripts/check-csp.test.mjs`, a node:test file run by
+		// `scripts/*.spec.mjs` collects the freshness checks' specs and the fixtures
+		// spec (R-31, R-9). It must not collect `scripts/check-csp.test.mjs`, a node:test file run by
 		// `npm run test:csp`.
 		include: ['src/**/*.{test,spec}.{js,ts}', 'scripts/*.spec.mjs'],
 		globals: true,

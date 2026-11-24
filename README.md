@@ -44,7 +44,7 @@ The server needs a built frontend in `frontend/build`. Build it once:
 cd frontend && npm run build
 ```
 
-The projects and articles lists are not part of the build. The server fetches them itself when it starts and keeps them fresh; until a list has arrived (or if the network is closed), `/projects` shows its "temporarily unavailable" line.
+The projects and articles lists are not part of the build. The server fetches them itself when it starts and keeps them fresh; it serves whatever valid lists the database already holds, so on a fresh database `/projects` shows its "temporarily unavailable" line until a list has arrived (or if the network is closed).
 
 In one terminal, run the backend:
 
