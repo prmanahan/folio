@@ -423,3 +423,146 @@ fn r10_description_must_be_a_string_present_and_not_null() {
         }
     }
 }
+
+// ---- remaining rules the retired check-projects suite drove (T14 review) ----
+
+fn json_reason(text: &str) -> String {
+    match parse(text) {
+        Err(ListError::Json(e)) => e.to_string(),
+        other => panic!("expected ListError::Json, got {other:?}"),
+    }
+}
+
+const R_A: &str = r#"{"name":"fixture-a","description":"x"}"#;
+const R_C: &str = r#"{"name":"fixture-c","description":"c"}"#;
+
+#[test]
+fn r10_malformed_json_is_a_json_error() {
+    // Control: the same shape, well-formed, parses.
+    let whole = doc(R_A, R_C);
+    assert!(parse(&whole).is_ok());
+    // Empty file: serde reports EOF.
+    assert!(json_reason("").contains("EOF while parsing"));
+    // Truncated mid-document, and not JSON at all.
+    for cut in [1, 10, whole.len() / 2, whole.len() - 1] {
+        let reason = json_reason(&whole[..cut]);
+        assert!(reason.contains("EOF while parsing"), "cut {cut}: {reason}");
+    }
+    assert!(json_reason("{not json").contains("key must be a string"));
+}
+
+#[test]
+fn r10_fetched_at_must_be_a_present_string() {
+    let ok = doc(R_A, R_C);
+    assert!(parse(&ok).is_ok());
+    let missing = ok.replacen(&format!(r#""fetched_at":"{TS}","#), "", 1);
+    assert!(json_reason(&missing).contains("missing field `fetched_at`"));
+    let number = ok.replacen(&format!(r#""{TS}""#), "1731499200", 1);
+    assert!(json_reason(&number).contains("invalid type: integer"));
+}
+
+#[test]
+fn r10_groups_must_be_a_two_entry_array_in_owner_order() {
+    let g = |owner: &str, r: &str| format!(r#"{{"owner":"{owner}","repos":[{r}]}}"#);
+    let with_groups = |groups: &str| format!(r#"{{"fetched_at":"{TS}","groups":{groups}}}"#);
+    // Control
+    let ok = with_groups(&format!("[{},{}]", g("mnemra", R_A), g("prmanahan", R_C)));
+    assert!(parse(&ok).is_ok());
+    // missing
+    let missing = format!(r#"{{"fetched_at":"{TS}"}}"#);
+    assert!(json_reason(&missing).contains("missing field `groups`"));
+    // an object, not an array
+    assert!(json_reason(&with_groups("{}")).contains("invalid type: map"));
+    // empty and three entries
+    assert!(matches!(
+        parse(&with_groups("[]")),
+        Err(ListError::GroupCount { found: 0 })
+    ));
+    let three = with_groups(&format!(
+        "[{},{},{}]",
+        g("mnemra", R_A),
+        g("prmanahan", R_C),
+        g("mnemra", R_A)
+    ));
+    assert!(matches!(
+        parse(&three),
+        Err(ListError::GroupCount { found: 3 })
+    ));
+    // duplicate owner: the second entry is the wrong one
+    let dup = with_groups(&format!("[{},{}]", g("mnemra", R_A), g("mnemra", R_C)));
+    match parse(&dup) {
+        Err(ListError::GroupOwner { index: 1, found }) => assert_eq!(found, "mnemra"),
+        other => panic!("expected GroupOwner at index 1, got {other:?}"),
+    }
+    // wrong case, and outside the enumeration, at index 0
+    for bad in ["Mnemra", "someone-else"] {
+        let text = with_groups(&format!("[{},{}]", g(bad, R_A), g("prmanahan", R_C)));
+        match parse(&text) {
+            Err(ListError::GroupOwner { index: 0, found }) => assert_eq!(found, bad),
+            other => panic!("{bad}: expected GroupOwner at index 0, got {other:?}"),
+        }
+    }
+    // owner missing
+    let no_owner = with_groups(&format!(r#"[{{"repos":[{R_A}]}},{}]"#, g("prmanahan", R_C)));
+    assert!(json_reason(&no_owner).contains("missing field `owner`"));
+}
+
+#[test]
+fn r10_repos_must_be_an_array_and_name_a_present_string() {
+    assert!(parse(&doc(R_A, R_C)).is_ok());
+    let not_array = format!(
+        r#"{{"fetched_at":"{TS}","groups":[{{"owner":"mnemra","repos":{R_A}}},{{"owner":"prmanahan","repos":[{R_C}]}}]}}"#
+    );
+    assert!(json_reason(&not_array).contains("invalid type: map"));
+    let no_name = doc(r#"{"description":"x"}"#, R_C);
+    assert!(json_reason(&no_name).contains("missing field `name`"));
+    let name_number = doc(r#"{"name":7,"description":"x"}"#, R_C);
+    assert!(json_reason(&name_number).contains("invalid type: integer"));
+}
+
+#[test]
+fn r10_a_tuple_shaped_entry_after_an_object_is_not_an_object() {
+    // Control: the all-object doc parses.
+    assert!(parse(&doc(R_A, R_C)).is_ok());
+    // A tuple-shaped repo at index 1 (never first), in each group.
+    let tuple_repo = r#"["fixture-b","x"]"#;
+    assert!(matches!(
+        parse(&doc(&format!("{R_A},{tuple_repo}"), R_C)),
+        Err(ListError::NotAnObject { at: "repo" })
+    ));
+    assert!(matches!(
+        parse(&doc(R_A, &format!("{R_C},{tuple_repo}"))),
+        Err(ListError::NotAnObject { at: "repo" })
+    ));
+    // A tuple-shaped group at index 1.
+    let text = format!(
+        r#"{{"fetched_at":"{TS}","groups":[{{"owner":"mnemra","repos":[{R_A}]}},["prmanahan",[{R_C}]]]}}"#
+    );
+    assert!(matches!(
+        parse(&text),
+        Err(ListError::NotAnObject { at: "group" })
+    ));
+}
+
+#[test]
+fn r10_description_escapes_are_accepted_and_astral_counts_code_points() {
+    let escaped = doc(
+        r#"{"name":"fixture-a","description":"say \"hi\" \\ path"}"#,
+        R_C,
+    );
+    let list = parse(&escaped).unwrap();
+    assert_eq!(
+        list.groups()[0].repos()[0].description(),
+        r#"say "hi" \ path"#
+    );
+    // 350 astral code points pass; 351 fail, counted in code points, not bytes.
+    let astral = |n: usize| doc(&repo("fixture-a", &"\u{1F600}".repeat(n)), R_C);
+    assert!(parse(&astral(350)).is_ok());
+    assert!(matches!(
+        parse(&astral(351)),
+        Err(ListError::DescriptionTooLong {
+            code_points: 351,
+            ..
+        })
+    ));
+}
