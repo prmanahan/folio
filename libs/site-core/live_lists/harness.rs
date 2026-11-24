@@ -17,7 +17,7 @@ use time::OffsetDateTime;
 use super::ListName;
 use super::refresher::Sources;
 use super::start::{StartError, StartInputs, start};
-use super::test_support::{FakeClock, T0, TempDir, projects_doc};
+use super::test_support::{FakeClock, T0, TempDir};
 use crate::config::Config;
 
 /// Collects what `tracing` writes while it is installed. Thread-local, so a
@@ -71,8 +71,8 @@ impl std::io::Write for LogCapture {
 }
 
 /// Files and settings for one start: a static dir holding an `index.html`
-/// with a CSP meta tag and a valid `projects.json` (the refusal stays until
-/// T11), and a database file. Per-test, removed on drop.
+/// with a CSP meta tag and no list file (R-29), and a database file.
+/// Per-test, removed on drop.
 pub(crate) struct Env {
     dir: TempDir,
     pub(crate) clock: Arc<FakeClock>,
@@ -93,8 +93,6 @@ impl Env {
         // A usable header policy, so a start logs no CSP error of its own.
         std::fs::write(static_dir.join("csp-header.txt"), "default-src 'self'")
             .expect("write csp-header.txt");
-        std::fs::write(static_dir.join("projects.json"), projects_doc(T0))
-            .expect("write projects.json");
         // Generated per run: no credential literal in the source.
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         Self {
@@ -362,7 +360,7 @@ impl AiProbe {
     pub(crate) fn client(&self) -> rig_core::providers::anthropic::Client {
         rig_core::providers::anthropic::Client::builder()
             .api_key(format!("probe-{}", uuid::Uuid::new_v4().simple()))
-            .base_url(&self.server.url())
+            .base_url(self.server.url())
             .build()
             .expect("a client for the local double")
     }

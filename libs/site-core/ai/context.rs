@@ -1,10 +1,10 @@
 use rusqlite::Connection;
 
 use crate::error::AppError;
-use crate::live_lists::held::Snapshot;
-use crate::models::{
-    article, education, experience, faq, gaps, instructions, profile, skill, values,
-};
+use crate::live_lists::articles::ArticlesList;
+use crate::live_lists::held::{Held, Snapshot};
+use crate::models::{education, experience, faq, gaps, instructions, profile, skill, values};
+use crate::projects_list::ProjectsList;
 
 use super::opaque_internal;
 use super::prompt_templates::*;
@@ -26,8 +26,8 @@ use super::prompts::FIT_WRAPPER_TEMPLATE;
 /// 11. Education
 /// 12. Values & culture fit
 /// 13. FAQ (verbatim-first)
-/// 14. Projects (the loaded list, never the table)
-/// 15. Articles (published only)
+/// 14. Projects (the held copy, never the table; no section with no data yet)
+/// 15. Articles (the held copy, never the table; no section with no data yet)
 /// 16. Compensation deflection
 /// 17. Response guidelines
 ///
@@ -42,7 +42,6 @@ fn build_base_prompt(conn: &Connection, snapshot: &Snapshot) -> Result<String, r
     let gaps_list = gaps::list_all(conn)?;
     let vals = values::get(conn)?;
     let faqs = faq::list_all(conn)?;
-    let articles = article::list_all(conn)?;
 
     let mut prompt = String::new();
 
@@ -291,16 +290,29 @@ fn build_base_prompt(conn: &Connection, snapshot: &Snapshot) -> Result<String, r
         prompt.push_str(&format!("Q: {}\nA: {}\n\n", f.question, f.answer));
     }
 
-    // --- 14. Projects: the loaded list only (R-12) ---
-    // Never the `projects` table: the list is validated at startup, the table
-    // is not. One line per repo; a description is appended only when non-empty,
-    // and the line never wraps (the list rejects line separators and controls).
+    // --- 14. Projects and 15. Articles: the held copies only (R-20) ---
+    // Never the `projects` or `articles` tables. Both come from the one
+    // snapshot, so the two lists are from the same moment.
+    push_projects_section(&mut prompt, snapshot.projects.as_deref());
+    push_articles_section(&mut prompt, snapshot.articles.as_deref());
+
+    // --- 16. Compensation deflection (no salary numbers) ---
+    prompt.push_str(&COMPENSATION_DEFLECTION.replace("{name}", &prof.name));
+
+    // --- 17. Response guidelines ---
+    prompt.push_str(RESPONSE_GUIDELINES);
+
+    Ok(prompt)
+}
+
+/// The projects section (R-12, R-20): the adopted preamble, then one line per
+/// repo; a description follows only when non-empty. The line never wraps (the
+/// list rejects line separators and controls). A list with no data yet has
+/// no section at all.
+fn push_projects_section(prompt: &mut String, held: Option<&Held<ProjectsList>>) {
+    let Some(held) = held else { return };
     prompt.push_str(SECTION_PROJECTS);
-    for group in snapshot
-        .projects
-        .iter()
-        .flat_map(|held| held.list().groups())
-    {
+    for group in held.list().groups() {
         for repo in group.repos() {
             let (owner, name) = (group.owner(), repo.name());
             prompt.push_str(&format!(
@@ -313,30 +325,27 @@ fn build_base_prompt(conn: &Connection, snapshot: &Snapshot) -> Result<String, r
         }
     }
     prompt.push('\n');
+}
 
-    // --- 15. Articles (published only) ---
-    let published_articles: Vec<_> = articles.iter().filter(|a| a.published).collect();
-    if !published_articles.is_empty() {
-        prompt.push_str(SECTION_ARTICLES);
-        for a in &published_articles {
-            prompt.push_str(&format!("### {}\n", a.title));
-            if !a.summary.is_empty() {
-                prompt.push_str(&format!("{}\n", a.summary));
-            }
-            if !a.content.is_empty() {
-                prompt.push_str(&format!("{}\n", a.content));
-            }
-            prompt.push('\n');
-        }
+/// The articles section (R-20): the heading, the preamble that marks the
+/// lines as data, then one line per post in held order carrying title,
+/// summary, link and publication date. Every entry starts with `- ` and the
+/// validated fields hold no line separator, so post text cannot open a line
+/// of its own. No body text is held, so none can appear. A list with no data
+/// yet has no section.
+fn push_articles_section(prompt: &mut String, held: Option<&Held<ArticlesList>>) {
+    let Some(held) = held else { return };
+    prompt.push_str(SECTION_ARTICLES);
+    for post in held.list().posts() {
+        prompt.push_str(&format!(
+            "- {} ({}) {}: {}\n",
+            post.title(),
+            post.published(),
+            post.link(),
+            post.summary()
+        ));
     }
-
-    // --- 16. Compensation deflection (no salary numbers) ---
-    prompt.push_str(&COMPENSATION_DEFLECTION.replace("{name}", &prof.name));
-
-    // --- 17. Response guidelines ---
-    prompt.push_str(RESPONSE_GUIDELINES);
-
-    Ok(prompt)
+    prompt.push('\n');
 }
 
 /// Build the system prompt for chat: the shared base prompt plus the chat-only

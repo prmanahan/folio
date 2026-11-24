@@ -23,6 +23,8 @@ pub mod switch;
 #[cfg(test)]
 mod harness;
 #[cfg(test)]
+mod sentinels;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tls_harness;
