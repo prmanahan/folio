@@ -187,6 +187,10 @@ pub(crate) struct Running {
     pub(crate) server: axum_test::TestServer,
     /// The wall clock's instant when the serve step was entered.
     pub(crate) serving_began_at: OffsetDateTime,
+    /// How far tokio's clock moved between the call and the serve step. On a
+    /// paused clock that only happens when the runtime sat idle on a timer,
+    /// which is what an awaited refresh against a silent source would cause.
+    pub(crate) tokio_time_before_serving: std::time::Duration,
     handle: tokio::task::JoinHandle<Result<(), StartError>>,
 }
 
@@ -221,21 +225,31 @@ impl Running {
 pub(crate) async fn try_launch(inputs: StartInputs) -> Result<Running, StartError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let clock = inputs.clock.clone();
+    let called_at = tokio::time::Instant::now();
     let handle = tokio::spawn(start(inputs, move |router| async move {
         // A send can only fail if the test gave up waiting.
-        let _ = tx.send((router, clock.now()));
+        let _ = tx.send((router, clock.now(), called_at.elapsed()));
         std::future::pending::<std::io::Result<()>>().await
     }));
     match rx.await {
-        Ok((router, serving_began_at)) => Ok(Running {
+        Ok((router, serving_began_at, tokio_time_before_serving)) => Ok(Running {
             server: axum_test::TestServer::new(router),
             serving_began_at,
+            tokio_time_before_serving,
             handle,
         }),
         Err(_) => match handle.await.expect("the start task ran to its end") {
             Err(e) => Err(e),
             Ok(()) => panic!("start returned Ok without serving"),
         },
+    }
+}
+
+/// Let every task that can run without the clock moving run to its next
+/// wait. A fixed count of yields, not a sleep: nothing here waits on time.
+pub(crate) async fn settle() {
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
     }
 }
 
