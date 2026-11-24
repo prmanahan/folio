@@ -1,9 +1,8 @@
 //! Validator for the public list file `projects.json` (spec R-8, R-10, R-18,
 //! Data Model).
 //!
-//! Untrusted input: the file is written by the deploy job from GitHub data and
-//! read by the server (R-10) and by `folio check-projects` (R-18). Both reach
-//! it through [`load`] / [`parse`], so they cannot disagree. This is a
+//! Untrusted input: list text arrives from the refresher and from the store,
+//! and both reach it through [`parse`], so they cannot disagree. This is a
 //! fail-closed control: [`ProjectsList`] can only be built by a successful
 //! validation, every unenumerated shape is an error, and no error path
 //! substitutes a default. The root, every group and every repo must be a JSON
@@ -11,12 +10,10 @@
 //! struct, and `deny_unknown_fields` does not cover that, so [`parse`] checks
 //! the shape separately.
 //!
-//! Freshness is a separate question ([`check_fetched_at_age`]): the startup
-//! load must not apply it (a Fly restart must not depend on deploy age), so
-//! [`parse`] never does.
+//! Freshness is a separate question: [`parse`] never applies an age bound, so
+//! a restart does not depend on how old the stored list is.
 
 use std::fmt;
-use std::path::Path;
 
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
@@ -27,8 +24,6 @@ use crate::ai::types::is_invisible;
 /// Owners in file order. `groups` is exactly these two, in this order.
 pub const OWNERS: [&str; 2] = ["mnemra", "prmanahan"];
 
-/// A list file at most this far behind the check's clock passes (inclusive).
-pub const MAX_AGE_BEHIND: Duration = Duration::minutes(30);
 /// A list file at most this far ahead of the check's clock passes (inclusive).
 pub const MAX_AGE_AHEAD: Duration = Duration::minutes(5);
 
@@ -66,7 +61,7 @@ struct RawRepo {
 // ---- validated types ----
 
 /// A list file that passed every Data Model rule. Fields are private: the
-/// only constructors are [`parse`] and [`load`].
+/// only constructor is [`parse`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectsList {
     fetched_at: String,
@@ -144,7 +139,6 @@ impl Repo {
 /// `&'static str` owners and numbers come from this module, not the file.
 #[derive(Debug)]
 pub enum ListError {
-    Read(std::io::Error),
     Json(serde_json::Error),
     NotAnObject {
         at: &'static str,
@@ -183,7 +177,6 @@ pub enum ListError {
 impl fmt::Display for ListError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Read(e) => write!(f, "cannot read the list file: {e}"),
             Self::Json(e) => write!(
                 f,
                 "the list file breaks the Data Model: {:?}",
@@ -237,7 +230,6 @@ impl fmt::Display for ListError {
 impl std::error::Error for ListError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Read(e) => Some(e),
             Self::Json(e) => Some(e),
             Self::FetchedAt(e) => Some(e),
             _ => None,
@@ -263,37 +255,6 @@ impl fmt::Display for FetchedAtError {
 }
 
 impl std::error::Error for FetchedAtError {}
-
-/// Outside the freshness bound, or `fetched_at` itself is invalid.
-#[derive(Debug, PartialEq, Eq)]
-pub enum AgeError {
-    Invalid(FetchedAtError),
-    TooOld { fetched_at: String, age: Duration },
-    TooFarAhead { fetched_at: String, ahead: Duration },
-}
-
-impl fmt::Display for AgeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Invalid(e) => write!(f, "{e}"),
-            Self::TooOld { fetched_at, age } => write!(
-                f,
-                "fetched_at {fetched_at:?} is stale: {} seconds old, the bound is {} minutes",
-                age.whole_seconds(),
-                MAX_AGE_BEHIND.whole_minutes()
-            ),
-            Self::TooFarAhead { fetched_at, ahead } => write!(
-                f,
-                "fetched_at {fetched_at:?} is in the future: {} seconds ahead, the bound is \
-                 {} minutes",
-                ahead.whole_seconds(),
-                MAX_AGE_AHEAD.whole_minutes()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for AgeError {}
 
 // ---- fetched_at ----
 
@@ -325,57 +286,9 @@ fn matches_fetched_at_grammar(s: &str) -> bool {
     })
 }
 
-/// How far `fetched_at` is behind `now`; negative when ahead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Age(pub Duration);
-
-/// R-18's freshness bound: `fetched_at` may be at most [`MAX_AGE_BEHIND`]
-/// before `now` and at most [`MAX_AGE_AHEAD`] after it, both inclusive.
-/// `now` is a parameter so the verdict never depends on the wall clock.
-///
-/// # Errors
-/// [`AgeError::Invalid`] when `fetched_at` breaks the grammar,
-/// [`AgeError::TooOld`] or [`AgeError::TooFarAhead`] outside the bound.
-pub fn check_fetched_at_age(fetched_at: &str, now: OffsetDateTime) -> Result<Age, AgeError> {
-    let instant = parse_fetched_at(fetched_at).map_err(AgeError::Invalid)?;
-    let age = now - instant;
-    if age > MAX_AGE_BEHIND {
-        return Err(AgeError::TooOld {
-            fetched_at: fetched_at.to_owned(),
-            age,
-        });
-    }
-    if -age > MAX_AGE_AHEAD {
-        return Err(AgeError::TooFarAhead {
-            fetched_at: fetched_at.to_owned(),
-            ahead: -age,
-        });
-    }
-    Ok(Age(age))
-}
-
-/// [`check_fetched_at_age`] against the wall clock. The one place the clock is
-/// read, so the binary needs no direct `time` dependency.
-///
-/// # Errors
-/// As [`check_fetched_at_age`].
-pub fn check_fetched_at_age_now(fetched_at: &str) -> Result<Age, AgeError> {
-    check_fetched_at_age(fetched_at, OffsetDateTime::now_utc())
-}
-
 // ---- validation ----
 
-/// Read and validate the file at `path`. Does not apply the age bound.
-///
-/// # Errors
-/// [`ListError::Read`] when the file cannot be read as UTF-8, including a
-/// missing file and a permission error; otherwise as [`parse`].
-pub fn load(path: &Path) -> Result<ProjectsList, ListError> {
-    let text = std::fs::read_to_string(path).map_err(ListError::Read)?;
-    parse(&text)
-}
-
-/// Validate list-file text against every Data Model rule. Does not apply the
+/// Validate list-file text against every Data Model rule. Does not apply an
 /// age bound.
 ///
 /// # Errors

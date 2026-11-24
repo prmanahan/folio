@@ -23,4 +23,3 @@ dotenvy = { workspace = true }
 axum-test = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 serde_json = { workspace = true }
-toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
