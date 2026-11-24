@@ -18,7 +18,7 @@ fn auth_test_app() -> axum_test::TestServer {
         rig_client: None,
         trusted_ip_header: None,
         page_hit_salt: "test-salt".to_string(),
-        projects: common::test_projects::projects(),
+        lists: common::test_projects::lists(),
     });
 
     let protected = Router::new()
@@ -187,7 +187,7 @@ fn login_app(trusted: Option<&str>) -> (axum_test::TestServer, SharedDb) {
         rig_client: None,
         trusted_ip_header: trusted.map(str::to_string),
         page_hit_salt: "test-salt".to_string(),
-        projects: common::test_projects::projects(),
+        lists: common::test_projects::lists(),
     });
 
     let app = Router::new()
@@ -399,7 +399,7 @@ fn auth_test_app_with_db() -> (axum_test::TestServer, SharedDb) {
         rig_client: None,
         trusted_ip_header: None,
         page_hit_salt: "test-salt".to_string(),
-        projects: common::test_projects::projects(),
+        lists: common::test_projects::lists(),
     });
     let protected = Router::new()
         .route("/api/admin/test", get(|| async { "ok" }))
