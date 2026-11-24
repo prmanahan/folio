@@ -24,12 +24,22 @@ pub const MAX_DEPTH: usize = 16;
 const MAX_PUB_DATE_BYTES: usize = 64;
 
 /// A feed that produced a document.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct FeedOutcome {
     /// The articles document as JSON text, `fetched_at` included.
     pub document: String,
     /// Posts rejected among the first 20 items, in document order.
     pub skipped: Vec<SkippedItem>,
+}
+
+/// `document` is response-body text, so Debug prints its length only (R-30).
+impl std::fmt::Debug for FeedOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeedOutcome")
+            .field("document_len", &self.document.len())
+            .field("skipped", &self.skipped)
+            .finish()
+    }
 }
 
 /// An item rejected by index and rule only (R-30).
@@ -71,7 +81,8 @@ pub enum FeedRule {
     TooDeep,
     NoItems,
     NoValidPost,
-    /// The assembled document failed the articles validator.
+    /// The `fetched_at` could not be written, or the assembled document failed
+    /// the articles validator: an internal invariant, not a verdict on the feed.
     DocumentInvalid,
 }
 
@@ -160,11 +171,15 @@ struct Scanner<'a> {
     reader: Reader<&'a [u8]>,
     depth: usize,
     seen_decl: bool,
+    /// Set at the first start tag: a declaration after it is a second
+    /// declaration (R-7), before it a prolog violation.
+    root_started: bool,
 }
 
 impl<'a> Scanner<'a> {
-    /// DSP-16: every reader option is set, none left to a default that a
-    /// library upgrade could change.
+    /// DSP-16: every option `Config` has today is set here. `Config` is
+    /// `#[non_exhaustive]`, so an option a later release adds keeps its
+    /// default; the pinned-configuration test fails when that happens.
     fn new(text: &'a str) -> Self {
         let mut reader = Reader::from_str(text);
         let config = reader.config_mut();
@@ -180,6 +195,7 @@ impl<'a> Scanner<'a> {
             reader,
             depth: 0,
             seen_decl: false,
+            root_started: false,
         }
     }
 
@@ -192,17 +208,26 @@ impl<'a> Scanner<'a> {
         match event {
             Event::DocType(_) => Err(FeedRule::Doctype),
             Event::PI(_) => Err(FeedRule::ProcessingInstruction),
-            Event::Decl(_) => {
-                if self.seen_decl {
+            Event::Decl(d) => {
+                if self.seen_decl || self.root_started {
                     return Err(FeedRule::XmlDeclaration);
                 }
                 if position != 0 {
                     return Err(FeedRule::Prolog);
                 }
+                // XML 1.0 4.3.3: a declared encoding that is not the actual
+                // one (UTF-8, checked above) is fatal. A malformed attribute
+                // fails closed.
+                match d.encoding() {
+                    None => {}
+                    Some(Ok(name)) if name.eq_ignore_ascii_case("utf-8") => {}
+                    Some(Ok(_) | Err(_)) => return Err(FeedRule::XmlDeclaration),
+                }
                 self.seen_decl = true;
                 self.step()
             }
             Event::Start(e) => {
+                self.root_started = true;
                 self.depth += 1;
                 if self.depth > MAX_DEPTH {
                     return Err(FeedRule::TooDeep);
@@ -210,6 +235,7 @@ impl<'a> Scanner<'a> {
                 Ok(Tok::Start(e))
             }
             Event::Empty(e) => {
+                self.root_started = true;
                 if self.depth + 1 > MAX_DEPTH {
                     return Err(FeedRule::TooDeep);
                 }
@@ -244,8 +270,7 @@ impl<'a> Scanner<'a> {
                     return Err(FeedRule::Prolog);
                 }
                 Tok::Start(e) if e.name().as_ref() == "rss" => return Ok(()),
-                // `<rss/>` is a root with no channel; handled by the caller
-                // as the end of the document.
+                // `<rss/>` is a root with no `<channel>`: the channel rule.
                 Tok::Empty(e) if e.name().as_ref() == "rss" => return Err(FeedRule::Channel),
                 Tok::Start(_) | Tok::Empty(_) | Tok::End | Tok::Eof => return Err(FeedRule::Root),
             }
@@ -419,7 +444,14 @@ impl<'a> Scanner<'a> {
                 Tok::Empty(_) => {
                     bad.get_or_insert(PostRule::ElementInField);
                 }
-                Tok::End => return Ok(FieldRead { text, bad }),
+                Tok::End => {
+                    // R-10: decoded `<` is refused in every field, guid
+                    // included, before any field rule reads the text.
+                    if bad.is_none() && text.contains('<') {
+                        bad = Some(PostRule::AngleBracketInField);
+                    }
+                    return Ok(FieldRead { text, bad });
+                }
                 Tok::Eof => return Err(FeedRule::Close),
             }
         }
