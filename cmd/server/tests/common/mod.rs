@@ -13,6 +13,8 @@
 //! process mutates no process-global state: env goes to the child only.
 #![allow(dead_code)]
 
+pub mod server;
+
 use std::fs;
 use std::io::Read;
 use std::net::TcpListener;
