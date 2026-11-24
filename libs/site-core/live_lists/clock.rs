@@ -95,6 +95,23 @@ mod tests {
     }
 
     #[test]
+    fn format_refuses_an_instant_whose_utc_year_is_out_of_the_representable_range() {
+        // 23:00 at -01:00 on 31 Dec 9999 is year 10000 in UTC, which `time`
+        // cannot hold: the conversion must refuse, not panic (R-13, Frame C7)
+        let t = datetime!(9999-12-31 23:00 -1);
+        assert!(matches!(
+            format_fetched_at(t),
+            Err(FormatError::YearOutOfRange)
+        ));
+        // the lower edge, the same way
+        let t = datetime!(-9999-01-01 00:00 +1);
+        assert!(matches!(
+            format_fetched_at(t),
+            Err(FormatError::YearOutOfRange)
+        ));
+    }
+
+    #[test]
     fn property_what_format_writes_the_validator_reads_back_to_the_millisecond() {
         // SplitMix64 over instants 2000..2100 with nanosecond detail
         let mut state = 0x42u64;

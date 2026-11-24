@@ -90,6 +90,8 @@ pub enum PostRule {
     ElementInField,
     CDataInField,
     CommentInField,
+    /// Decoded field text holds `<` (R-10), whichever field it is.
+    AngleBracketInField,
     NumericReference,
     UnknownEntity,
     Title(TextRule),
@@ -1032,13 +1034,31 @@ mod tests {
     }
 
     #[test]
-    fn r7_namespace_declarations_are_not_processed() {
-        // xmlns on the root changes nothing: `atom:link` stays unknown
+    fn r7_namespaces_are_not_processed() {
+        // Given a prefix bound to the same namespace as the default one, so a
+        // namespace-aware reader would read <p:item> as <item>
         let body = format!(
-            "<rss xmlns:atom=\"http://www.w3.org/2005/Atom\"><channel><atom:link href=\"x\"/>{}</channel></rss>",
-            good(1)
+            "<rss xmlns=\"urn:a\" xmlns:p=\"urn:a\"><channel>{}</channel></rss>",
+            good(1).replace("item", "p:item")
         );
-        accepted_one(&body);
+        // Then it is an unknown channel child, not an item
+        fails(&body, FeedRule::NoItems);
+        // and a prefixed field is an unknown child, not the field
+        let prefixed = good(1)
+            .replace("<title>", "<p:title>")
+            .replace("</title>", "</p:title>");
+        let body = format!(
+            "<rss xmlns:p=\"urn:a\"><channel>{prefixed}{}</channel></rss>",
+            good(2)
+        );
+        let out = run(&body).expect("accepted");
+        assert_eq!(
+            out.skipped,
+            vec![SkippedItem {
+                index: 0,
+                rule: PostRule::MissingField(Field::Title)
+            }]
+        );
     }
 
     // ---- R-8 ----
@@ -1261,7 +1281,24 @@ mod tests {
     #[test]
     fn r9_guid_content_is_discarded_never_stored() {
         let out = run(&feed(&good_plus("<guid>SENTINEL-GUID-TEXT</guid>"))).expect("accepted");
+        assert_eq!(titles(&out), vec!["T".to_owned()]);
         assert!(!out.document.contains("SENTINEL-GUID-TEXT"));
+    }
+
+    #[test]
+    fn r9_comment_inside_guid_rejects_the_post() {
+        rejects_post(
+            &good_plus("<guid>a<!-- c -->b</guid>"),
+            PostRule::CommentInField,
+        );
+    }
+
+    #[test]
+    fn r10_decoded_less_than_in_guid_rejects_the_post() {
+        rejects_post(
+            &good_plus("<guid>a&lt;b</guid>"),
+            PostRule::AngleBracketInField,
+        );
     }
 
     // ---- R-10: one negative fixture per bullet ----
@@ -1330,14 +1367,16 @@ mod tests {
     }
 
     #[test]
-    fn r10_decoded_text_containing_less_than_rejects_the_post() {
-        rejects_post(
-            &good_with(Field::Title, "<title>a &lt; b</title>"),
-            PostRule::Title(TextRule::AngleBracket),
-        );
+    fn r10_decoded_text_containing_less_than_rejects_the_post_in_every_field() {
+        for (f, tag, _) in FIELDS {
+            rejects_post(
+                &good_with(f, &format!("<{tag}>a&lt;b</{tag}>")),
+                PostRule::AngleBracketInField,
+            );
+        }
         rejects_post(
             &good_with(Field::Description, "<description>&lt;b&gt;</description>"),
-            PostRule::Summary(TextRule::AngleBracket),
+            PostRule::AngleBracketInField,
         );
     }
 
@@ -1482,6 +1521,29 @@ mod tests {
     }
 
     #[test]
+    fn r11_pubdate_of_exactly_64_bytes_is_accepted_and_65_is_rejected() {
+        // time accepts trailing folding whitespace, so padding isolates length
+        let base = "Tue, 28 Apr 2026 00:00:00 GMT";
+        let at_64 = format!("{base}{}", " ".repeat(64 - base.len()));
+        assert_eq!(at_64.len(), 64);
+        let out = run(&feed(&date_item(&at_64))).expect("64 bytes accepted");
+        assert_eq!(
+            doc(&out)["posts"][0]["published"],
+            "2026-04-28T00:00:00.000Z"
+        );
+        rejects_post(&date_item(&format!("{at_64} ")), PostRule::PubDate);
+    }
+
+    #[test]
+    fn r11_pubdate_whose_utc_year_is_past_9999_rejects_the_post_and_never_panics() {
+        // 23:00 at -01:00 on 31 Dec 9999 is year 10000 in UTC (R-13, Frame C7)
+        rejects_post(
+            &date_item("Fri, 31 Dec 9999 23:00:00 -0100"),
+            PostRule::PubDate,
+        );
+    }
+
+    #[test]
     fn r11_pubdate_is_stored_in_utc_in_the_fetched_at_grammar() {
         for (raw, stored) in [
             ("Tue, 28 Apr 2026 00:00:00 GMT", "2026-04-28T00:00:00.000Z"),
@@ -1616,6 +1678,118 @@ mod tests {
                 index: 0,
                 rule: PostRule::MissingField(Field::Title)
             }]
+        );
+    }
+
+    // ---- declarations and encoding ----
+
+    #[test]
+    fn r7_declaration_after_the_20th_item_or_without_a_leading_one_is_xml_declaration() {
+        let decl = "<?xml version=\"1.0\"?>";
+        let twenty: String = (0..20).map(good).collect();
+        // with a leading declaration, a second one inside the 21st item
+        fails(
+            &feed(&format!("{twenty}<item>{decl}</item>")),
+            FeedRule::XmlDeclaration,
+        );
+        // with none, a declaration after the 20th item, inside a field, or
+        // after </rss> is the same rule, not a prolog violation
+        fails(
+            &feed_plain(&format!("{twenty}<item>{decl}</item>")),
+            FeedRule::XmlDeclaration,
+        );
+        fails(
+            &feed_plain(&good_with(Field::Title, &format!("<title>T{decl}</title>"))),
+            FeedRule::XmlDeclaration,
+        );
+        fails(
+            &format!("{}{decl}", feed_plain(&good(1))),
+            FeedRule::XmlDeclaration,
+        );
+    }
+
+    #[test]
+    fn r7_a_declared_encoding_other_than_utf8_fails_the_feed() {
+        let with = |decl: &str| format!("{decl}{}", feed_plain(&good(1)));
+        // XML 1.0 4.3.3: a mismatch with the actual encoding is fatal
+        for enc in ["ISO-8859-1", "UTF-16", "windows-1252", "ascii", "UTF8"] {
+            fails(
+                &with(&format!("<?xml version=\"1.0\" encoding=\"{enc}\"?>")),
+                FeedRule::XmlDeclaration,
+            );
+        }
+        // an encoding attribute that is not well formed fails closed too
+        fails(
+            &with("<?xml version=\"1.0\" encoding=UTF-8?>"),
+            FeedRule::XmlDeclaration,
+        );
+    }
+
+    #[test]
+    fn r7_utf8_declarations_are_accepted_in_any_case_or_absent() {
+        for decl in [
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
+            "<?xml version=\"1.0\" encoding='Utf-8'?>",
+            "<?xml version=\"1.0\"?>",
+        ] {
+            accepted_one(&format!("{decl}{}", feed_plain(&good(1))));
+        }
+    }
+
+    // ---- untrimmed text (no trim rule in R-10 or R-11) ----
+
+    #[test]
+    fn r10_a_whitespace_only_title_is_accepted_and_stored_as_written() {
+        // Pinned, not endorsed: the spec has no trim rule, so a title of one
+        // space is non-empty and holds no rejected-class code point.
+        let out = run(&feed(&good_with(Field::Title, "<title> </title>"))).expect("accepted");
+        assert_eq!(titles(&out), vec![" ".to_owned()]);
+    }
+
+    #[test]
+    fn r11_a_pretty_printed_field_with_a_newline_is_rejected_as_a_rejected_char() {
+        rejects_post(
+            &good_with(Field::Title, "<title>\n  T\n</title>"),
+            PostRule::Title(TextRule::RejectedChar),
+        );
+        rejects_post(
+            &good_with(Field::Description, "<description>\n  D\n</description>"),
+            PostRule::Summary(TextRule::RejectedChar),
+        );
+    }
+
+    // ---- no body text through Debug, and the reader's configuration ----
+
+    #[test]
+    fn outcome_debug_carries_the_document_length_and_skips_never_its_text() {
+        let out = run(&feed(&format!(
+            "{}{}",
+            good_with(Field::Title, "<title>SECRETTITLE</title>"),
+            good_plus("<extra/>")
+        )))
+        .expect("accepted");
+        // item 0 is kept, item 1 is skipped; the kept title is in `document`
+        let shown = format!("{out:?}");
+        assert!(!shown.contains("SECRETTITLE"), "{shown}");
+        assert!(
+            shown.contains(&format!("document_len: {}", out.document.len())),
+            "{shown}"
+        );
+        assert!(shown.contains("UnknownChild"), "{shown}");
+    }
+
+    const PINNED_READER_CONFIG: &str = "Config { allow_dangling_amp: false, allow_unmatched_ends: false, check_comments: true, check_end_names: true, expand_empty_elements: false, trim_markup_names_in_closing_tags: true, trim_text_start: false, trim_text_end: false }";
+
+    #[test]
+    fn reader_configuration_is_exactly_the_pinned_one() {
+        // `Config` is #[non_exhaustive]: a library upgrade can add an option
+        // with a default this module has never seen. Its Debug text changes
+        // when one does, which fails here and sends the reader to the changelog.
+        let scanner = Scanner::new("");
+        assert_eq!(
+            format!("{:?}", scanner.reader.config()),
+            PINNED_READER_CONFIG
         );
     }
 
