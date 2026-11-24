@@ -497,12 +497,44 @@ mod tests {
     use crate::live_lists::test_support::{self as ts, T0, articles_doc, projects_doc};
     use crate::projects_list::MAX_AGE_AHEAD;
 
+    /// The env var that turns this test binary into the child of
+    /// `production_registers_the_projects_source_and_the_articles_source`.
+    const SOURCES_CHILD: &str = "FOLIO_TEST_PRODUCTION_SOURCES_CHILD";
+
     #[test]
     fn production_registers_the_projects_source_and_the_articles_source() {
-        // The production client builds from the system roots alone
-        let sources = production_sources();
-        assert!(sources.projects.is_some());
-        assert!(sources.articles.is_some());
+        // The client refuses to build while SSL_CERT_FILE or SSL_CERT_DIR is
+        // set (Warden F-1), and a CI runner may set one. The refusal stays, so
+        // the test runs in a child with both removed: this process's
+        // environment is shared with parallel tests.
+        if std::env::var_os(SOURCES_CHILD).is_some() {
+            let (log, _guard) = LogCapture::install();
+            // Then the production client builds from the system roots alone
+            let sources = production_sources();
+            let text = log.text();
+            assert!(sources.projects.is_some(), "no projects source: {text}");
+            assert!(sources.articles.is_some(), "no articles source: {text}");
+            return;
+        }
+        // Given a child with neither trust-root variable
+        let out = std::process::Command::new(std::env::current_exe().expect("this binary"))
+            .args([
+                "--exact",
+                "live_lists::start::tests::production_registers_the_projects_source_and_the_articles_source",
+                "--test-threads=1",
+            ])
+            .env(SOURCES_CHILD, "1")
+            .env_remove("SSL_CERT_FILE")
+            .env_remove("SSL_CERT_DIR")
+            .output()
+            .expect("run the child");
+        // `--exact` on a wrong name runs nothing and exits 0, so require the pass.
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "the child did not pass\nstdout: {stdout}\nstderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     const PROJECTS: &str = "/api/lists/projects";
@@ -1250,7 +1282,10 @@ mod tests {
     const CHILD: &str = CHILD_VAR;
     const SENTINEL: &str = "FOLIO_TEST_PANIC_SENTINEL";
 
-    #[tokio::test]
+    // Paused time: the refresher's first tick is then ready as soon as the
+    // runtime idles. On real time it waits on the timer wheel's 1 ms
+    // granularity, which `settle`'s fixed yields need not outlast on a fast runner.
+    #[tokio::test(start_paused = true)]
     async fn child_of_the_hook_test_runs_a_start_whose_refresher_panics_with_a_sentinel() {
         // Run normally this does nothing; the parent re-runs it with CHILD set.
         if std::env::var_os(CHILD).is_none() {
