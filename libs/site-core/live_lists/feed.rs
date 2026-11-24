@@ -1660,7 +1660,7 @@ mod tests {
     }
 
     #[test]
-    fn r12_a_feed_whose_posts_are_all_bad_fails_so_the_held_copy_is_kept() {
+    fn r12_a_feed_whose_posts_are_all_bad_fails_with_no_valid_post() {
         let bad: String = (0..3).map(|_| "<item></item>").collect();
         fails(&feed(&bad), FeedRule::NoValidPost);
         // 20 bad items and a valid 21st: the 21st is not collected
@@ -1741,32 +1741,24 @@ mod tests {
     }
 
     #[test]
-    fn r7_a_declared_encoding_other_than_utf8_fails_the_feed() {
-        let with = |decl: &str| format!("{decl}{}", feed_plain(&good(1)));
-        // XML 1.0 4.3.3: a mismatch with the actual encoding is fatal
-        for enc in ["ISO-8859-1", "UTF-16", "windows-1252", "ascii", "UTF8"] {
-            fails(
-                &with(&format!("<?xml version=\"1.0\" encoding=\"{enc}\"?>")),
-                FeedRule::XmlDeclaration,
-            );
-        }
-        // an encoding attribute that is not well formed fails closed too
-        fails(
-            &with("<?xml version=\"1.0\" encoding=UTF-8?>"),
-            FeedRule::XmlDeclaration,
-        );
+    fn r7_the_declarations_encoding_attribute_is_never_read() {
+        // Frame D-3 C3: "Attributes are never parsed". Only the UTF-8
+        // validity of the whole body counts, so an ISO-8859-1 declaration over
+        // bytes that are valid UTF-8 is accepted.
+        accepted_one(&format!(
+            "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>{}",
+            feed_plain(&good(1))
+        ));
     }
 
     #[test]
-    fn r7_utf8_declarations_are_accepted_in_any_case_or_absent() {
-        for decl in [
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
-            "<?xml version=\"1.0\" encoding='Utf-8'?>",
-            "<?xml version=\"1.0\"?>",
-        ] {
-            accepted_one(&format!("{decl}{}", feed_plain(&good(1))));
-        }
+    fn r7_a_clock_instant_the_grammar_cannot_hold_is_an_internal_failure_not_a_panic() {
+        // 23:00 at -01:00 on 31 Dec 9999 is year 10000 in UTC
+        let at = time::macros::datetime!(9999-12-31 23:00 -1);
+        assert_eq!(
+            parse_feed(feed(&good(1)).as_bytes(), at),
+            Err(FeedRule::DocumentInvalid)
+        );
     }
 
     // ---- untrimmed text (no trim rule in R-10 or R-11) ----
