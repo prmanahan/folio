@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
-use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_ENCODING};
+use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_ENCODING, LINK};
 use url::Url;
 
 use super::ReasonCode;
@@ -64,6 +64,12 @@ pub(crate) enum Target {
     /// `https://api.github.com/users/prmanahan/repos?type=owner&per_page=100`
     GithubUser(Page),
     /// `https://mnemra.dev/rss.xml`
+    // The feed source constructs it; until it lands only tests do. `expect`, so
+    // the day it is constructed the unfulfilled expectation says to remove this.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by the feed source")
+    )]
     Feed,
 }
 
@@ -99,6 +105,9 @@ impl Target {
 /// A 2xx response. It holds the body, so it has no `Debug`.
 pub(crate) struct Fetched {
     pub(crate) note: RequestNote,
+    /// Every `Link` header value, joined with `, `; `None` when the response
+    /// has none. Read only for `rel="next"`: the URLs in it are never requested (R-1).
+    pub(crate) link: Option<String>,
     pub(crate) body: Vec<u8>,
 }
 
@@ -287,6 +296,18 @@ impl OutboundClient {
             return Err(failed(ReasonCode::ContentEncodingRefused, Some(note)));
         }
 
+        // R-1: pagination reads `rel="next"` from here. A `Link` value that is
+        // not plain text is ambiguous, so the fetch fails rather than ending
+        // the list early.
+        let mut link_values = Vec::new();
+        for value in response.headers().get_all(LINK) {
+            match value.to_str() {
+                Ok(text) => link_values.push(text.to_string()),
+                Err(_unreadable) => return Err(failed(ReasonCode::TransportFailed, Some(note))),
+            }
+        }
+        let link = (!link_values.is_empty()).then(|| link_values.join(", "));
+
         let mut body = Vec::new();
         loop {
             match response.chunk().await {
@@ -298,7 +319,7 @@ impl OutboundClient {
                     }
                     body.extend_from_slice(&chunk);
                 }
-                Ok(None) => return Ok(Fetched { note, body }),
+                Ok(None) => return Ok(Fetched { note, link, body }),
                 Err(e) => return Err(failed(classify(&e), Some(note))),
             }
         }
@@ -494,7 +515,7 @@ mod tests {
         assert_eq!(server.requests().len(), 0);
         // And, the positive control: the same server with its root trusted succeeds
         let trusting = OutboundClient::for_test(TestNet::new(&other, &[(GITHUB, server.addr())]));
-        let fetched = trusting.fetch(org()).await.ok().expect("trusted root");
+        let fetched = trusting.fetch(org()).await.expect("trusted root");
         assert_eq!(fetched.body, JSON);
         assert_eq!(fetched.note.status, 200);
     }
@@ -658,7 +679,7 @@ mod tests {
                 reply = reply.with_header(n, v);
             }
             let rig = rig(reply).await;
-            let fetched = rig.client.fetch(org()).await.ok().expect("accepted");
+            let fetched = rig.client.fetch(org()).await.expect("accepted");
             assert_eq!(fetched.body, JSON, "{headers:?}");
         }
     }
@@ -733,7 +754,7 @@ mod tests {
     async fn r4_a_body_of_exactly_2_mib_is_returned_and_one_byte_more_fails() {
         // Given a body of exactly the cap
         let rig_at = rig(Reply::ok(vec![b'x'; MAX_BODY_BYTES])).await;
-        let fetched = rig_at.client.fetch(org()).await.ok().expect("at the cap");
+        let fetched = rig_at.client.fetch(org()).await.expect("at the cap");
         assert_eq!(fetched.body.len(), MAX_BODY_BYTES);
         // And one of cap + 1 bytes
         let rig_over = rig(Reply::ok(vec![b'x'; MAX_BODY_BYTES + 1])).await;
@@ -762,7 +783,7 @@ mod tests {
     #[tokio::test]
     async fn r4_a_2xx_other_than_200_is_accepted() {
         let rig = rig(Reply::status(204)).await;
-        let fetched = rig.client.fetch(org()).await.ok().expect("204");
+        let fetched = rig.client.fetch(org()).await.expect("204");
         assert_eq!(fetched.note.status, 204);
     }
 
@@ -778,11 +799,11 @@ mod tests {
             ("", None),
         ] {
             let rig = rig(Reply::ok(JSON).with_header("x-ratelimit-remaining", value)).await;
-            let fetched = rig.client.fetch(org()).await.ok().expect("2xx");
+            let fetched = rig.client.fetch(org()).await.expect("2xx");
             assert_eq!(fetched.note.ratelimit_remaining, want, "{value:?}");
         }
         let rig = rig(Reply::ok(JSON)).await;
-        let fetched = rig.client.fetch(org()).await.ok().expect("2xx");
+        let fetched = rig.client.fetch(org()).await.expect("2xx");
         assert_eq!(fetched.note.ratelimit_remaining, None);
     }
 

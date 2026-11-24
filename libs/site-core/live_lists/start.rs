@@ -25,8 +25,10 @@ use time::OffsetDateTime;
 
 use super::articles::ArticlesList;
 use super::clock::{FormatError, SystemClock, WallClock, format_fetched_at};
+use super::github::GithubProjectsSource;
 use super::held::{Held, ListDocument, LiveLists};
-use super::refresher::{Refresher, Sources};
+use super::outbound::OutboundClient;
+use super::refresher::{ListSource, Refresher, Sources};
 use super::store::{DeleteOutcome, ListStore, NoData, SqliteStore, delete_row, load};
 use super::switch::{DisabledLists, ParsedSwitch, parse_switch};
 use super::{ListName, ReasonCode};
@@ -288,10 +290,25 @@ where
     serve(app).await.map_err(StartError::Serve)
 }
 
-/// The sources a production start registers. None yet: the projects and
-/// articles sources are built here, never injected from outside the crate.
+/// The sources a production start registers: the GitHub projects source. The
+/// articles source is registered when it exists. They are built here, never
+/// injected from outside the crate.
+///
+/// A client that cannot be built registers no projects source, and says so at
+/// `error`. The enabled list then has no source, which makes every refresh's
+/// summary a `warn` (R-30), so the gap does not pass as healthy.
 fn production_sources() -> Sources {
-    Sources::default()
+    let projects = match OutboundClient::new() {
+        Ok(client) => Some(Arc::new(GithubProjectsSource::new(client)) as Arc<dyn ListSource>),
+        Err(error) => {
+            tracing::error!(%error, "the outbound client could not be built; projects will not refresh");
+            None
+        }
+    };
+    Sources {
+        projects,
+        ..Sources::default()
+    }
 }
 
 /// SQLite's in-memory forms: the empty name, `:memory:`, and any URI naming

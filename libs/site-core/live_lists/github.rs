@@ -10,11 +10,32 @@
 //! (R-30).
 
 use futures::future::BoxFuture;
+use serde_json::{Value, json};
 use time::OffsetDateTime;
 
 use super::ReasonCode;
-use super::outbound::OutboundClient;
-use super::refresher::{FetchReport, ListSource};
+use super::clock::format_fetched_at;
+use super::outbound::{FetchFailure, OutboundClient, Page, Target};
+use super::refresher::{FetchReport, ListSource, RequestNote};
+use crate::projects_list::{MAX_DESCRIPTION_CODE_POINTS, is_rejected, is_valid_name};
+
+/// One owner: its name in the document and the target of its page N.
+struct Owner {
+    name: &'static str,
+    target: fn(Page) -> Target,
+}
+
+/// R-8 of the adopted spec: `mnemra`, then `prmanahan`.
+const OWNERS: [Owner; 2] = [
+    Owner {
+        name: "mnemra",
+        target: Target::GithubOrg,
+    },
+    Owner {
+        name: "prmanahan",
+        target: Target::GithubUser,
+    },
+];
 
 /// Fetches the projects document from GitHub.
 pub struct GithubProjectsSource {
@@ -25,19 +46,186 @@ impl GithubProjectsSource {
     pub fn new(client: OutboundClient) -> Self {
         Self { client }
     }
-}
 
-impl ListSource for GithubProjectsSource {
-    fn fetch(&self, _now: OffsetDateTime) -> BoxFuture<'_, FetchReport> {
-        let _ = &self.client;
-        Box::pin(async { FetchReport::failed(ReasonCode::TransportFailed) })
+    async fn run(&self, now: OffsetDateTime) -> FetchReport {
+        let mut requests = Vec::new();
+        let document = self.document(now, &mut requests).await;
+        FetchReport {
+            document,
+            skipped: Vec::new(),
+            requests,
+        }
+    }
+
+    /// Each owner in turn: its pages, then R-4's checks, R-3's exclusions and
+    /// R-8's order. The first failure ends the fetch, so no later owner is
+    /// requested (one request per URL attempted, R-4).
+    async fn document(
+        &self,
+        now: OffsetDateTime,
+        requests: &mut Vec<RequestNote>,
+    ) -> Result<String, ReasonCode> {
+        let mut groups = Vec::with_capacity(OWNERS.len());
+        for owner in &OWNERS {
+            let elements = self.owner_elements(owner, requests).await?;
+            let repos = repos_of(owner.name, &elements)?;
+            groups.push(json!({ "owner": owner.name, "repos": repos }));
+        }
+        // The year cannot be out of range for a real clock; the backstop code
+        // is the one for a document that cannot be built.
+        let fetched_at =
+            format_fetched_at(now).map_err(|_cause| ReasonCode::ProjectsDocumentRejected)?;
+        Ok(json!({ "fetched_at": fetched_at, "groups": groups }).to_string())
+    }
+
+    /// Every element of every page of one owner (R-1, R-4).
+    async fn owner_elements(
+        &self,
+        owner: &Owner,
+        requests: &mut Vec<RequestNote>,
+    ) -> Result<Vec<Value>, ReasonCode> {
+        let mut elements = Vec::new();
+        let mut page = Page::FIRST;
+        loop {
+            let fetched = match self.client.fetch((owner.target)(page)).await {
+                Ok(fetched) => fetched,
+                Err(FetchFailure { reason, note }) => {
+                    requests.extend(note);
+                    return Err(reason);
+                }
+            };
+            requests.push(fetched.note);
+            // The parse error is dropped: its text may quote the body (R-30).
+            match serde_json::from_slice::<Value>(&fetched.body) {
+                Ok(Value::Array(items)) => elements.extend(items),
+                Ok(_) | Err(_) => return Err(ReasonCode::ProjectsBodyNotArray),
+            }
+            if !fetched.link.as_deref().is_some_and(has_rel_next) {
+                return Ok(elements);
+            }
+            // The next page's URL is the fixed one plus `&page=N`, never the
+            // URL in the header. At the cap, a further `next` is a failure.
+            page = page.next().ok_or(ReasonCode::PageCapReached)?;
+        }
     }
 }
 
-/// Whether a `Link` header value carries a `rel="next"` link. The URL inside
-/// the angle brackets is never read (R-1).
-pub(crate) fn has_rel_next(_link: &str) -> bool {
+impl ListSource for GithubProjectsSource {
+    fn fetch(&self, now: OffsetDateTime) -> BoxFuture<'_, FetchReport> {
+        Box::pin(self.run(now))
+    }
+}
+
+/// An element that passed R-4.
+struct Checked {
+    name: String,
+    description: String,
+    fork: bool,
+    archived: bool,
+}
+
+/// R-4 of the adopted spec. `None` is a failed element. A key that is
+/// missing fails like one of the wrong type, so a response that dropped a
+/// field is refused, not read as a default.
+fn check_element(owner: &str, element: &Value) -> Option<Checked> {
+    let object = element.as_object()?;
+    if object.get("private") != Some(&Value::Bool(false)) {
+        return None;
+    }
+    let fork = object.get("fork")?.as_bool()?;
+    let archived = object.get("archived")?.as_bool()?;
+    let login = object.get("owner")?.as_object()?.get("login")?.as_str()?;
+    if !login.eq_ignore_ascii_case(owner) {
+        return None;
+    }
+    let name = object.get("name")?.as_str()?;
+    if !is_valid_name(name) {
+        return None;
+    }
+    let description = match object.get("description")? {
+        Value::Null => "",
+        Value::String(text) => text.as_str(),
+        _ => return None,
+    };
+    // A lone surrogate cannot reach here: serde_json refuses the body.
+    if description.chars().count() > MAX_DESCRIPTION_CODE_POINTS
+        || description.chars().any(is_rejected)
+    {
+        return None;
+    }
+    Some(Checked {
+        name: name.to_string(),
+        description: description.to_string(),
+        fork,
+        archived,
+    })
+}
+
+/// R-4 over every element (a failure fails the run, never skips the
+/// element), then R-3's exclusions, then R-8's order.
+fn repos_of(owner: &str, elements: &[Value]) -> Result<Vec<Value>, ReasonCode> {
+    let checked: Option<Vec<Checked>> = elements
+        .iter()
+        .map(|element| check_element(owner, element))
+        .collect();
+    let mut included: Vec<Checked> = checked
+        .ok_or(ReasonCode::ProjectsElementRejected)?
+        .into_iter()
+        .filter(|c| !c.fork && !c.archived && !c.name.eq_ignore_ascii_case(".github"))
+        .collect();
+    if included.is_empty() {
+        return Err(ReasonCode::ProjectsOwnerEmpty);
+    }
+    // Names are ASCII by now (R-4), so lowercasing and comparing bytes is
+    // R-8's "ASCII-lowercased name, compared by code unit".
+    included.sort_by_cached_key(|c| c.name.to_ascii_lowercase());
+    let twin = included
+        .windows(2)
+        .any(|pair| pair[0].name.eq_ignore_ascii_case(&pair[1].name));
+    if twin {
+        return Err(ReasonCode::ProjectsDuplicateName);
+    }
+    Ok(included
+        .into_iter()
+        .map(|c| json!({ "name": c.name, "description": c.description }))
+        .collect())
+}
+
+/// Whether a `Link` header value carries a link whose `rel` names `next`
+/// (R-1). The URL inside the angle brackets is never read, and a `rel` inside
+/// one is not a relation. An unterminated target is no link.
+pub(crate) fn has_rel_next(link: &str) -> bool {
+    let mut rest = link;
+    while let Some(open) = rest.find('<') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('>') else {
+            return false;
+        };
+        let tail = &after[close + 1..];
+        let params_end = tail.find('<').unwrap_or(tail.len());
+        if params_name_next(&tail[..params_end]) {
+            return true;
+        }
+        rest = &tail[params_end..];
+    }
     false
+}
+
+/// Whether the `;`-separated parameters hold `rel=` with `next` among its
+/// space-separated tokens.
+fn params_name_next(params: &str) -> bool {
+    params.split(';').any(|param| {
+        let Some((name, value)) = param.split_once('=') else {
+            return false;
+        };
+        name.trim().eq_ignore_ascii_case("rel")
+            && value
+                .trim()
+                .trim_end_matches(|c: char| c == ',' || c.is_whitespace())
+                .trim_matches('"')
+                .split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("next"))
+    })
 }
 
 #[cfg(test)]
@@ -129,7 +317,7 @@ mod tests {
     }
 
     fn document(report: &FetchReport) -> Value {
-        serde_json::from_str(report.document.as_ref().ok().expect("a document")).expect("json")
+        serde_json::from_str(report.document.as_ref().expect("a document")).expect("json")
     }
 
     fn targets(gh: &Gh) -> Vec<String> {
@@ -671,7 +859,8 @@ mod tests {
 
     #[tokio::test]
     async fn r6_each_condition_seeded_from_a_held_copy_leaves_the_copy_and_its_time() {
-        let conditions: Vec<(&str, Vec<(String, Reply)>, ReasonCode)> = vec![
+        type Condition<'a> = (&'a str, Vec<(String, Reply)>, ReasonCode);
+        let conditions: Vec<Condition> = vec![
             (
                 "not an array",
                 vec![(ORG.into(), Reply::ok(&br#"{"m":1}"#[..]))],
