@@ -37,7 +37,7 @@ function serveList(list: unknown) {
 		'fetch',
 		vi.fn(async (input: unknown) => {
 			const url = typeof input === 'string' ? input : String((input as { url?: string }).url ?? input);
-			if (url === '/projects.json') {
+			if (url === '/api/lists/projects') {
 				return new Response(JSON.stringify(list), { status: 200, headers: { 'content-type': 'application/json' } });
 			}
 			return new Response('nope', { status: 500 });
