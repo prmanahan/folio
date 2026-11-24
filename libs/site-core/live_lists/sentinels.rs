@@ -117,6 +117,22 @@ struct World {
 }
 
 impl World {
+    /// Fails unless `needle` is in what the hosts will serve (a body or a
+    /// header value), so a substitution that matched nothing cannot leave a
+    /// case that passes without ever carrying its sentinel.
+    fn assert_serves(&self, needle: &str) {
+        let in_reply = |r: &Reply| {
+            String::from_utf8_lossy(&r.body).contains(needle)
+                || r.headers.iter().any(|(_, v)| v.contains(needle))
+        };
+        assert!(
+            in_reply(&self.org)
+                || in_reply(&self.user)
+                || String::from_utf8_lossy(&self.feed).contains(needle),
+            "{needle} is in nothing the hosts serve"
+        );
+    }
+
     fn valid() -> Self {
         Self {
             org: org_reply(&json!([repo("mnemra", "alpha", json!("a"))])),
@@ -215,6 +231,7 @@ async fn r30_a_sentinel_in_a_mismatched_end_tag_name_stays_out_of_the_log() {
             1,
         )
         .into_bytes();
+    world.assert_serves(s.endtag());
     let served = start_against(world).await;
     served.assert_fetched(FEED);
     served.log.one_line("live list refresh failed");
@@ -234,6 +251,7 @@ async fn r30_a_sentinel_in_a_rejected_posts_description_stays_out_of_the_log() {
     world.feed = CAPTURE
         .replacen("<item>", &format!("{bad}<item>"), 1)
         .into_bytes();
+    world.assert_serves(s.post_description());
     let served = start_against(world).await;
     served.assert_fetched(FEED);
     let skip = served.log.one_line("post skipped");
@@ -257,6 +275,7 @@ async fn r30_a_sentinel_in_a_json_string_where_the_type_is_not_a_string_stays_ou
     let mut element = repo("mnemra", "alpha", json!("a"));
     element["archived"] = json!(s.json_type());
     world.org = org_reply(&json!([element]));
+    world.assert_serves(s.json_type());
     let served = start_against(world).await;
     served.assert_fetched(ORG);
     let line = served.log.one_line("live list refresh failed");
@@ -270,6 +289,7 @@ async fn r30_a_sentinel_in_a_github_description_that_fails_r4_stays_out_of_the_l
     let mut world = World::valid();
     let description = format!("{}\u{202e}", s.github_description());
     world.org = org_reply(&json!([repo("mnemra", "alpha", json!(description))]));
+    world.assert_serves(s.github_description());
     let served = start_against(world).await;
     served.assert_fetched(ORG);
     let line = served.log.one_line("live list refresh failed");
@@ -288,9 +308,16 @@ async fn r30_a_sentinel_in_a_discarded_channel_child_stays_out_of_the_log() {
             1,
         )
         .into_bytes();
+    world.assert_serves(s.channel_child());
     let served = start_against(world).await;
     served.assert_fetched(FEED);
     s.assert_absent_from(&served.log);
+    // the child is discarded, not a failure: the articles list advanced
+    assert!(
+        served.summary().contains("articles=\"outcome=advanced"),
+        "{}",
+        served.summary()
+    );
 }
 
 #[tokio::test]
@@ -304,9 +331,15 @@ async fn r30_a_sentinel_in_an_attribute_value_stays_out_of_the_log() {
             1,
         )
         .into_bytes();
+    world.assert_serves(s.attribute());
     let served = start_against(world).await;
     served.assert_fetched(FEED);
     s.assert_absent_from(&served.log);
+    assert!(
+        served.summary().contains("articles=\"outcome=advanced"),
+        "{}",
+        served.summary()
+    );
 }
 
 #[tokio::test]
@@ -316,9 +349,16 @@ async fn r30_a_sentinel_as_a_non_integer_ratelimit_remaining_stays_out_of_the_lo
     world.org = world
         .org
         .with_header("x-ratelimit-remaining", s.ratelimit());
+    world.assert_serves(s.ratelimit());
     let served = start_against(world).await;
     served.assert_fetched(ORG);
     s.assert_absent_from(&served.log);
+    // an unparseable value is a missing note, not a failed fetch
+    assert!(
+        served.summary().contains("projects=\"outcome=advanced"),
+        "{}",
+        served.summary()
+    );
     // and the field is absent from the summary, not rendered as text
     assert!(
         !served.summary().contains("ratelimit_remaining"),

@@ -295,6 +295,11 @@ const SSE_REPLY: &str = concat!(
     "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
 );
 
+/// The text delta in `SSE_REPLY` and the verdict in `FIT_VERDICT`: what a
+/// handler that answered carries in its body.
+const CHAT_ANSWER: &str = "probe answer";
+const FIT_ANSWER: &str = "strong_fit";
+
 const FIT_VERDICT: &str = r#"{\"verdict\":\"strong_fit\",\"headline\":\"h\",\"opening\":\"o\",\"gaps\":[],\"transfers\":[{\"skill\":\"s\",\"relevance\":\"high\"}],\"recommendation\":\"r\"}"#;
 
 /// A local Anthropic double: it answers both AI handlers and keeps the
@@ -423,6 +428,13 @@ impl Running {
             )
             .await;
         chat.assert_status_ok();
+        // The handler returns the stream before any answer exists, so the
+        // answer is read from the body: the double's text delta must arrive.
+        let chat_body = chat.text();
+        assert!(
+            chat_body.contains(CHAT_ANSWER),
+            "the chat stream carried no answer: {chat_body}"
+        );
         let fit = self
             .post_json(
                 env,
@@ -431,6 +443,11 @@ impl Running {
             )
             .await;
         fit.assert_status_ok();
+        let fit_body = fit.text();
+        assert!(
+            fit_body.contains(FIT_ANSWER),
+            "the fit response carried no verdict: {fit_body}"
+        );
         [probe.chat_system().await, probe.fit_system().await]
     }
 }
