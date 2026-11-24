@@ -102,14 +102,14 @@ pub enum PostRule {
 
 /// Parse a feed body into the articles document.
 ///
-/// `fetched_at` is the document's `fetched_at` in its grammar; the caller
-/// writes it from the wall clock. Whole-feed rules (R-7) are enforced for the
+/// `now` is the wall clock's instant; it becomes the document's `fetched_at`.
+/// Whole-feed rules (R-7) are enforced for the
 /// entire body, including items past the 20th. Only the first 20 `<item>`s
 /// are collected and validated (R-12).
 ///
 /// # Errors
 /// The [`FeedRule`] that failed the whole feed.
-pub fn parse_feed(body: &[u8], fetched_at: &str) -> Result<FeedOutcome, FeedRule> {
+pub fn parse_feed(body: &[u8], now: OffsetDateTime) -> Result<FeedOutcome, FeedRule> {
     if body.len() > MAX_BODY_BYTES {
         return Err(FeedRule::TooLarge);
     }
@@ -120,7 +120,10 @@ pub fn parse_feed(body: &[u8], fetched_at: &str) -> Result<FeedOutcome, FeedRule
         return Err(FeedRule::Prolog);
     }
     let scan = Scanner::new(text).scan()?;
-    assemble(scan, fetched_at)
+    // The wall clock is the caller's; a year the grammar cannot hold is not a
+    // document we can write, so the feed fails rather than panics.
+    let fetched_at = format_fetched_at(now).map_err(|_| FeedRule::DocumentInvalid)?;
+    assemble(scan, &fetched_at)
 }
 
 /// The items among the first 20, in document order, each accepted or
@@ -636,6 +639,10 @@ mod tests {
     use serde_json::Value;
 
     const FETCHED_AT: &str = "2026-11-24T12:00:00.000Z";
+
+    fn now() -> OffsetDateTime {
+        time::macros::datetime!(2026-11-24 12:00 UTC)
+    }
     const CAPTURE: &str = include_str!("fixtures/mnemra-rss-2026-11-24.xml");
 
     // ---- builders ----
@@ -696,7 +703,7 @@ mod tests {
     }
 
     fn run(body: &str) -> Result<FeedOutcome, FeedRule> {
-        parse_feed(body.as_bytes(), FETCHED_AT)
+        parse_feed(body.as_bytes(), now())
     }
 
     fn fails(body: &str, rule: FeedRule) {
@@ -742,7 +749,7 @@ mod tests {
     fn r14_capture_of_the_live_feed_parses_to_its_expected_post() {
         // Given the body of https://mnemra.dev/rss.xml captured 2026-11-24
         // When parsed
-        let out = parse_feed(CAPTURE.as_bytes(), FETCHED_AT).expect("capture parses");
+        let out = parse_feed(CAPTURE.as_bytes(), now()).expect("capture parses");
         // Then it holds the one post the feed served that day, in the stored
         // grammar, and the articles validator accepts the document
         let d = doc(&out);
@@ -804,11 +811,11 @@ mod tests {
             body.push(0xFF);
             body.extend_from_slice(after.as_bytes());
             body.extend_from_slice(b"</channel></rss>");
-            assert_eq!(parse_feed(&body, FETCHED_AT), Err(FeedRule::NotUtf8));
+            assert_eq!(parse_feed(&body, now()), Err(FeedRule::NotUtf8));
         }
         let mut body = feed(&good(1)).into_bytes();
         body.extend_from_slice(b"\n\xFF");
-        assert_eq!(parse_feed(&body, FETCHED_AT), Err(FeedRule::NotUtf8));
+        assert_eq!(parse_feed(&body, now()), Err(FeedRule::NotUtf8));
     }
 
     #[test]
@@ -1710,7 +1717,7 @@ mod tests {
         for i in 0..20_000 {
             let input = mutate(&seeds[i % seeds.len()], &mut rng);
             // When parsed (a panic fails the test)
-            if let Ok(out) = parse_feed(&input, FETCHED_AT) {
+            if let Ok(out) = parse_feed(&input, now()) {
                 accepted += 1;
                 // Then an Ok output passes the articles validator, holds at
                 // most 20 posts, and every skip index is within the first 20
@@ -1729,7 +1736,7 @@ mod tests {
         for _ in 0..5_000 {
             let n = rng.below(200);
             let bytes: Vec<u8> = (0..n).map(|_| rng.next() as u8).collect();
-            let _ = parse_feed(&bytes, FETCHED_AT);
+            let _ = parse_feed(&bytes, now());
         }
     }
 
@@ -1766,7 +1773,7 @@ mod tests {
                 "<rss k=\"{m}-rss\"><channel k=\"{m}-chan\">{discarded}{first}{second}</channel></rss>"
             );
             // When parsed
-            let out = parse_feed(body.as_bytes(), FETCHED_AT)
+            let out = parse_feed(body.as_bytes(), now())
                 .unwrap_or_else(|e| panic!("case {case} rejected {e:?}: {body}"));
             // Then no marker appears in the document or in the skip record
             assert_eq!(titles(&out), vec!["Kept".to_owned()], "case {case}");
