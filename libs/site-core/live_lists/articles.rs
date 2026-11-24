@@ -9,9 +9,11 @@
 //! rejected here came from a response body, and R-30 keeps response bytes out
 //! of logs.
 
+use serde::Deserialize;
 use time::OffsetDateTime;
+use url::Url;
 
-use crate::projects_list::FetchedAtError;
+use crate::projects_list::{FetchedAtError, is_rejected, parse_fetched_at};
 
 pub const MAX_POSTS: usize = 20;
 pub const MAX_TITLE_CODE_POINTS: usize = 200;
@@ -142,7 +144,133 @@ impl std::error::Error for ArticlesError {}
 /// # Errors
 /// An [`ArticlesError`] naming the first rule the text breaks.
 pub fn parse(text: &str) -> Result<ArticlesList, ArticlesError> {
-    Err(ArticlesError::Json)
+    // serde's messages can quote the input, so the cause is dropped on
+    // purpose: the error names a rule, never text (R-30).
+    //
+    // Positional arrays satisfy a derived struct `Deserialize`; require
+    // objects first (the projects validator does the same).
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| ArticlesError::Json)?;
+    require_objects(&value)?;
+    // The strict typed parse still runs: it rejects unknown fields and
+    // duplicate keys, which `Value` would let through.
+    let raw: RawList = serde_json::from_str(text).map_err(|_| ArticlesError::Json)?;
+    let fetched_at_instant = parse_fetched_at(&raw.fetched_at).map_err(ArticlesError::FetchedAt)?;
+    if !(1..=MAX_POSTS).contains(&raw.posts.len()) {
+        return Err(ArticlesError::PostCount {
+            found: raw.posts.len(),
+        });
+    }
+    let mut posts = Vec::with_capacity(raw.posts.len());
+    for (index, p) in raw.posts.into_iter().enumerate() {
+        validate_text(&p.title, MAX_TITLE_CODE_POINTS)
+            .map_err(|rule| ArticlesError::Title { index, rule })?;
+        validate_text(&p.summary, MAX_SUMMARY_CODE_POINTS)
+            .map_err(|rule| ArticlesError::Summary { index, rule })?;
+        validate_link(&p.link).map_err(|rule| ArticlesError::Link { index, rule })?;
+        parse_fetched_at(&p.published)
+            .map_err(|error| ArticlesError::Published { index, error })?;
+        posts.push(Post {
+            title: p.title,
+            summary: p.summary,
+            link: p.link,
+            published: p.published,
+        });
+    }
+    Ok(ArticlesList {
+        fetched_at: raw.fetched_at,
+        fetched_at_instant,
+        posts,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawList {
+    fetched_at: String,
+    posts: Vec<RawPost>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPost {
+    title: String,
+    summary: String,
+    link: String,
+    published: String,
+}
+
+fn require_objects(root: &serde_json::Value) -> Result<(), ArticlesError> {
+    let Some(root) = root.as_object() else {
+        return Err(ArticlesError::NotAnObject { at: "root" });
+    };
+    for post in root
+        .get("posts")
+        .and_then(|p| p.as_array())
+        .into_iter()
+        .flatten()
+    {
+        if !post.is_object() {
+            return Err(ArticlesError::NotAnObject { at: "post" });
+        }
+    }
+    Ok(())
+}
+
+/// R-10 and R-11 on decoded text: length in code points, the rejected class
+/// the projects validator uses, and no `<`.
+fn validate_text(s: &str, max_code_points: usize) -> Result<(), TextRule> {
+    let code_points = s.chars().count();
+    if code_points == 0 {
+        return Err(TextRule::Empty);
+    }
+    if code_points > max_code_points {
+        return Err(TextRule::TooLong);
+    }
+    if s.chars().any(is_rejected) {
+        return Err(TextRule::RejectedChar);
+    }
+    if s.contains('<') {
+        return Err(TextRule::AngleBracket);
+    }
+    Ok(())
+}
+
+/// R-11's link rules. The parsed link's serialized form must equal the raw
+/// link, so what is stored is exactly what was checked.
+fn validate_link(raw: &str) -> Result<(), LinkRule> {
+    if raw.len() > MAX_LINK_BYTES {
+        return Err(LinkRule::TooLong);
+    }
+    if raw.chars().any(is_rejected) {
+        return Err(LinkRule::RejectedChar);
+    }
+    let url = Url::parse(raw).map_err(|_| LinkRule::NotAUrl)?;
+    if url.scheme() != "https" {
+        return Err(LinkRule::Scheme);
+    }
+    if url.host_str() != Some("mnemra.dev") {
+        return Err(LinkRule::Host);
+    }
+    if url.port().is_some() {
+        return Err(LinkRule::Port);
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(LinkRule::Userinfo);
+    }
+    if url.query().is_some() {
+        return Err(LinkRule::Query);
+    }
+    if url.fragment().is_some() {
+        return Err(LinkRule::Fragment);
+    }
+    match url.path().strip_prefix("/blog/") {
+        Some(rest) if !rest.is_empty() => {}
+        _ => return Err(LinkRule::Path),
+    }
+    if url.as_str() != raw {
+        return Err(LinkRule::NotCanonical);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

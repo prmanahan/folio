@@ -38,6 +38,11 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         "ai_hourly_ceilings",
         include_str!("../../../migrations/007_ai_hourly_ceilings.sql"),
     ),
+    (
+        8,
+        "live_lists",
+        include_str!("../../../migrations/008_live_lists.sql"),
+    ),
 ];
 
 /// Ensure the migrations tracking table exists.

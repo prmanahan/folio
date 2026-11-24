@@ -500,6 +500,6 @@ fn ascii_lowercase_lt(a: &str, b: &str) -> bool {
 
 /// The rejected class: `\p{Cc}` (C0, DEL, C1), U+2028, U+2029, and the
 /// generated invisible table.
-fn is_rejected(c: char) -> bool {
+pub(crate) fn is_rejected(c: char) -> bool {
     c.is_control() || LINE_SEPARATORS.contains(&(c as u32)) || is_invisible(c)
 }

@@ -77,8 +77,36 @@ pub struct ParsedSwitch {
 /// Parse the raw value of `LIVE_LISTS_DISABLED` (`None` when the variable is
 /// unset).
 pub fn parse_switch(raw: Option<&OsStr>) -> ParsedSwitch {
+    let Some(raw) = raw else {
+        return ParsedSwitch {
+            disabled: DisabledLists::NONE,
+            problem: None,
+        };
+    };
+    let Some(text) = raw.to_str() else {
+        return ParsedSwitch {
+            disabled: DisabledLists::BOTH,
+            problem: Some(SwitchProblem::NotUnicode),
+        };
+    };
+    let mut disabled = DisabledLists::NONE;
+    for token in text.split(',').map(str::trim) {
+        // An empty segment disables nothing. Matching is exact and
+        // case-sensitive: the allowlist is the two names and nothing else.
+        match token {
+            "" => {}
+            "projects" => disabled.insert(ListName::Projects),
+            "articles" => disabled.insert(ListName::Articles),
+            _ => {
+                return ParsedSwitch {
+                    disabled: DisabledLists::BOTH,
+                    problem: Some(SwitchProblem::UnknownToken),
+                };
+            }
+        }
+    }
     ParsedSwitch {
-        disabled: DisabledLists::NONE,
+        disabled,
         problem: None,
     }
 }
