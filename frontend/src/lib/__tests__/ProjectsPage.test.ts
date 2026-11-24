@@ -4,7 +4,7 @@
  *
  * Reads, and why:
  *  - frontend/scripts/projects-fixtures/list-expected.json: the expected list file (spec R-8), used
- *    as the served `/projects.json` body and as the oracle for hrefs and order;
+ *    as the served `/api/lists/projects` body and as the oracle for hrefs and order;
  *  - the current page (src/routes/(public)/projects/+page.svelte): its error element is
  *    `<p class="error">`; R-13 says "the existing error text", so the error element is located as
  *    `.error` or `[role=alert]`. No error string is pinned (plan D14).
@@ -31,12 +31,12 @@ const EXPECTED: ListFile = JSON.parse(
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
-/** Serve `/projects.json` with the given response; any other URL gets a 500, so a page that still
+/** Serve `/api/lists/projects` with the given response; any other URL gets a 500, so a page that still
  *  reads the old API shows its own error instead of crashing the test. */
 function serve(projectsJson: () => Response) {
 	fetchMock = vi.fn(async (input: unknown) => {
 		const url = typeof input === 'string' ? input : String((input as { url?: string }).url ?? input);
-		if (url === '/projects.json') return projectsJson();
+		if (url === '/api/lists/projects') return projectsJson();
 		return new Response('nope', { status: 500 });
 	});
 	vi.stubGlobal('fetch', fetchMock);
@@ -46,8 +46,8 @@ function serveList(list: unknown) {
 	serve(() => new Response(JSON.stringify(list), { status: 200, headers: { 'content-type': 'application/json' } }));
 }
 
-function requestedProjectsJson(): boolean {
-	return fetchMock.mock.calls.some((c) => String(c[0]) === '/projects.json');
+function requestedProjectsList(): boolean {
+	return fetchMock.mock.calls.some((c) => String(c[0]) === '/api/lists/projects');
 }
 
 function norm(s: string | null | undefined): string {
@@ -83,12 +83,12 @@ afterEach(() => {
 });
 
 describe('R-13: /projects renders the list file', () => {
-	it('loads /projects.json and renders one h2 per owner, in file order, under the single h1', async () => {
+	it('loads /api/lists/projects and renders one h2 per owner, in file order, under the single h1', async () => {
 		serveList(EXPECTED);
 		const { container } = render(ProjectsPage);
 		await waitFor(() => expect(container.querySelectorAll('h2').length).toBeGreaterThan(0));
 
-		expect(requestedProjectsJson()).toBe(true);
+		expect(requestedProjectsList()).toBe(true);
 		expect(container.querySelectorAll('h1').length).toBe(1);
 		const h2s = [...container.querySelectorAll('h2')].map((h) => norm(h.textContent));
 		expect(h2s.length).toBe(EXPECTED.groups.length);
@@ -176,7 +176,7 @@ describe('R-13: /projects renders the list file', () => {
 describe('R-13: a failed load shows the error and no entries', () => {
 	async function expectErrorState(container: HTMLElement) {
 		await waitFor(() => expect(errorElement(container)).not.toBeNull());
-		expect(requestedProjectsJson()).toBe(true);
+		expect(requestedProjectsList()).toBe(true);
 		expect(norm(errorElement(container)?.textContent)).not.toBe('');
 		expect(repoAnchors(container).length).toBe(0);
 		expect(container.querySelectorAll('h2').length).toBe(0);
