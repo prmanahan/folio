@@ -58,7 +58,13 @@ fn validate_edge_auth_token(token: &str) -> Result<(), String> {
 /// holds the raw value, and its `Debug` would print a secret's bytes, before
 /// the payload-free panic hook is installed.
 fn required_from(name: &str, result: Result<String, env::VarError>) -> String {
-    result.expect(&format!("{name} env var is required"))
+    match result {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => panic!("{name} env var is required: NotPresent"),
+        Err(env::VarError::NotUnicode(_)) => {
+            panic!("{name} env var is required and must be valid Unicode")
+        }
+    }
 }
 
 impl Config {

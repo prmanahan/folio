@@ -80,14 +80,12 @@ fn removed_api_articles_answers_the_json_404() {
 
 #[test]
 fn a_bind_failure_is_logged_with_the_text_the_refusal_guard_keys_on() {
-    // Given a valid list file and a port something else holds
+    // Given no list file (R-29) and a port something else holds
     let sb = Sandbox::new();
-    sb.write_list(&common::valid_doc(&common::fetched_at(0)));
     // When the server starts and fails to bind
     let out = sb.run_serve();
-    // Then it exits non-zero and its output carries the bind failure text,
-    // which `assert_refused_naming` treats as "the start got as far as
-    // binding". A hook that hid the bind failure would blind that guard.
+    // Then it exits non-zero and its output carries the bind failure text.
+    // A hook that hid the bind failure would hide it from the operator.
     assert!(!out.timed_out, "{}", out.output);
     assert!(
         matches!(out.code, Some(c) if c != 0),
