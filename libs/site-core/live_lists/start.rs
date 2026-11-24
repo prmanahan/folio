@@ -419,6 +419,14 @@ mod tests {
     use crate::live_lists::test_support::{self as ts, T0, articles_doc, projects_doc};
     use crate::projects_list::MAX_AGE_AHEAD;
 
+    #[test]
+    fn production_registers_the_projects_source_and_the_articles_source() {
+        // The production client builds from the system roots alone
+        let sources = production_sources();
+        assert!(sources.projects.is_some());
+        assert!(sources.articles.is_some());
+    }
+
     const PROJECTS: &str = "/api/lists/projects";
     const FRESHNESS: &str = "/api/lists/freshness";
     const START_LINE: &str = "live lists start";

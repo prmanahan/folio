@@ -32,6 +32,8 @@ pub const REFRESH_BOUND: Duration = Duration::from_secs(120);
 /// A post a source rejected, by its item index and reason code only (R-30).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SkippedPost {
+    /// Zero-based: the position among the feed's direct `<item>` children, in
+    /// document order.
     pub index: usize,
     pub reason: ReasonCode,
 }
