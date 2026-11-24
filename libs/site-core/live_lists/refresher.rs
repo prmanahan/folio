@@ -388,7 +388,7 @@ fn join_notes(
         .flat_map(|o| {
             o.requests
                 .iter()
-                .filter_map(|n| pick(n))
+                .filter_map(&pick)
                 .map(|v| format!("{}:{v}", o.list.as_str()))
                 .collect::<Vec<_>>()
         })
