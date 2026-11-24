@@ -51,7 +51,7 @@ function errorElement(container: HTMLElement): HTMLElement | null {
 
 function repoAnchors(container: HTMLElement): HTMLAnchorElement[] {
 	return [...container.querySelectorAll<HTMLAnchorElement>('a')].filter((a) =>
-		(a.getAttribute('href') ?? '').startsWith('https://github.com/'),
+		/^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(a.getAttribute('href') ?? ''), // owner links (R-24) have one segment
 	);
 }
 
