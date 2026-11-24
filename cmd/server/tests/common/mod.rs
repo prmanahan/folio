@@ -309,7 +309,7 @@ fn collect(mut cmd: Command) -> Outcome {
 }
 
 /// What a server that reached `TcpListener::bind` on the held port reports.
-const BIND_FAILURE: &str = "Failed to bind to port";
+pub const BIND_FAILURE: &str = "Failed to bind to port";
 
 /// Fake, never a real credential. Built at run time so no secret literal
 /// sits in the source.

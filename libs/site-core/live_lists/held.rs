@@ -243,4 +243,12 @@ mod tests {
         assert!(lists.0.snapshot.is_poisoned(), "setup: lock is poisoned");
         assert_eq!(lists.snapshot().projects.unwrap().json(), PROJECTS_DOC);
     }
+
+    #[test]
+    fn held_debug_prints_the_document_length_never_its_text() {
+        let held = Held::<ProjectsList>::new(PROJECTS_DOC.to_string()).unwrap();
+        let shown = format!("{held:?}");
+        assert!(!shown.contains("alpha"), "{shown}");
+        assert!(shown.contains(&PROJECTS_DOC.len().to_string()), "{shown}");
+    }
 }

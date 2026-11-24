@@ -61,15 +61,39 @@ const GLOBAL_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 /// let _ = inputs.cors_origin; // a public field is readable
 /// ```
 ///
-/// Reaching the sources from outside the crate does not compile (the control
-/// above is the same program reading a public field):
+/// Reaching the sources, or the clock, from outside the crate does not compile
+/// (the control above is the same program reading a public field). The error
+/// is pinned: E0616 is "field is private", so a different compile error does
+/// not pass for it.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0616
 /// # use site_core::config::Config;
 /// # use site_core::live_lists::start::StartInputs;
 /// # fn config() -> Config { Config { port: 0, database_url: String::new(), admin_password: String::new(), anthropic_api_key: None, trusted_ip_header: None, static_dir: String::new(), page_hit_salt: String::new(), edge_auth_token: String::new() } }
 /// let inputs = StartInputs::production(config(), None, None);
 /// let _ = &inputs.sources; // the field is not reachable, so it cannot be set
+/// ```
+///
+/// ```compile_fail,E0616
+/// # use site_core::config::Config;
+/// # use site_core::live_lists::start::StartInputs;
+/// # fn config() -> Config { Config { port: 0, database_url: String::new(), admin_password: String::new(), anthropic_api_key: None, trusted_ip_header: None, static_dir: String::new(), page_hit_salt: String::new(), edge_auth_token: String::new() } }
+/// let inputs = StartInputs::production(config(), None, None);
+/// let _ = &inputs.clock;
+/// ```
+///
+/// Nor can a caller name the source seam (E0603: private item):
+///
+/// ```compile_fail,E0603
+/// use site_core::live_lists::refresher::Sources;
+/// ```
+///
+/// ```compile_fail,E0603
+/// use site_core::live_lists::refresher::ListSource;
+/// ```
+///
+/// ```compile_fail,E0603
+/// use site_core::live_lists::refresher::Refresher;
 /// ```
 pub struct StartInputs {
     pub config: Config,
@@ -119,10 +143,22 @@ pub enum StartError {
     PasswordHash(crate::error::AppError),
     StartedAt(FormatError),
     Store(rusqlite::Error),
+    /// `STATIC_DIR` is missing or holds no `index.html`.
+    StaticDir(crate::static_files::StaticDirError),
+    /// `CORS_ORIGIN` is not a valid header value.
+    CorsOrigin,
     /// `DATABASE_URL` names an in-memory database. The refresher's store is a
     /// second connection, which would see an empty database of its own.
     InMemoryDatabase,
     Serve(io::Error),
+}
+
+impl StartError {
+    /// Log the failure at `error`, once, with fixed text and no response
+    /// bytes. `main.rs` calls this before it exits: with the payload-free
+    /// panic hook installed, a failure must reach the operator through the log,
+    /// not through a panic message.
+    pub fn log(&self) {}
 }
 
 /// Run the startup sequence, then `serve` the app.
@@ -170,7 +206,7 @@ where
 
     // Today's work, in today's order: it needs no database, so it runs
     // before step 2.
-    crate::static_files::validate_static_dir(&config.static_dir);
+    crate::static_files::validate_static_dir(&config.static_dir).map_err(StartError::StaticDir)?;
     tracing::info!(port = config.port, "starting server");
 
     // Step 2.
@@ -1027,5 +1063,159 @@ mod tests {
                 result.err()
             );
         }
+    }
+
+    // ---- startup failures are errors, not panics the hook would hide ----
+
+    #[tokio::test]
+    async fn a_missing_static_dir_is_a_start_error_naming_the_directory() {
+        let env = Env::new();
+        let mut inputs = env.inputs(None, Sources::default());
+        inputs.config.static_dir = env
+            .static_dir()
+            .join("absent")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let result = try_launch(inputs).await;
+        assert!(
+            matches!(result, Err(StartError::StaticDir(_))),
+            "{:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cors_origin_that_is_not_a_header_value_is_a_start_error() {
+        let env = Env::new();
+        let mut inputs = env.inputs(None, Sources::default());
+        inputs.cors_origin = Some("bad\nvalue".to_string());
+        let result = try_launch(inputs).await;
+        assert!(
+            matches!(result, Err(StartError::CorsOrigin)),
+            "{:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn serve_tcp_reports_a_bind_failure_as_an_error_with_the_guard_text() {
+        // Given a port something else holds
+        let held = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        // When the production serve step tries to bind it
+        let result = tokio::spawn(serve_tcp(port, Router::new())).await;
+        // Then it returns an error (no panic) whose text is the one the
+        // spawned-binary guard looks for
+        match result {
+            Ok(Err(e)) => assert!(e.to_string().contains("Failed to bind to port"), "{e}"),
+            other => panic!("expected an Err from serve_tcp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_start_error_logs_one_error_line_that_says_what_failed() {
+        let cases: Vec<(StartError, &str)> = vec![
+            (
+                StartError::Database(rusqlite::Error::InvalidQuery),
+                "Failed to connect to database",
+            ),
+            (
+                StartError::Store(rusqlite::Error::InvalidQuery),
+                "Failed to open the live lists store",
+            ),
+            (
+                StartError::PasswordHash(crate::error::AppError::Internal("x".into())),
+                "Failed to hash the admin password",
+            ),
+            (
+                StartError::StartedAt(FormatError::YearOutOfRange),
+                "Failed to write started_at",
+            ),
+            (
+                StartError::StaticDir(crate::static_files::StaticDirError::NotADirectory(
+                    "/x".into(),
+                )),
+                "STATIC_DIR '/x' does not exist",
+            ),
+            (
+                StartError::CorsOrigin,
+                "CORS_ORIGIN is not a valid header value",
+            ),
+            (StartError::InMemoryDatabase, "in-memory database"),
+            (
+                StartError::Serve(io::Error::other("Failed to bind to port 80: denied")),
+                "Failed to bind to port 80",
+            ),
+        ];
+        for (error, text) in cases {
+            let (log, _guard) = LogCapture::install();
+            error.log();
+            let line = log.one_line(text);
+            assert!(line.contains("ERROR"), "{line}");
+        }
+    }
+
+    // ---- the hook is installed by start (a child process: the hook is process-global) ----
+
+    /// The env var that turns this test binary into the child of
+    /// `a_start_installs_the_payload_free_hook`.
+    const CHILD: &str = "FOLIO_TEST_PANIC_HOOK_CHILD";
+    const SENTINEL: &str = "FOLIO_TEST_PANIC_SENTINEL";
+
+    #[tokio::test]
+    async fn child_of_the_hook_test_runs_a_start_whose_refresher_panics_with_a_sentinel() {
+        // Run normally this does nothing; the parent re-runs it with CHILD set.
+        if std::env::var_os(CHILD).is_none() {
+            return;
+        }
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .init();
+        let sentinel = std::env::var(SENTINEL).expect("the parent sets the sentinel");
+        let env = Env::new();
+        let source = crate::live_lists::test_support::FakeSource::answering(&projects_doc(T0));
+        let mut inputs = env.inputs(
+            None,
+            Sources {
+                projects: Some(source),
+                articles: None,
+            },
+        );
+        inputs.store = Some(Box::new(crate::live_lists::test_support::SentinelStore(
+            sentinel,
+        )));
+        let _running = launch(inputs).await;
+        crate::live_lists::harness::settle().await;
+    }
+
+    #[test]
+    fn a_start_installs_the_payload_free_hook() {
+        // Given a child process running a start whose refresher panics with a
+        // sentinel in its payload
+        let sentinel = format!("sentinel-{}", uuid::Uuid::new_v4());
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "live_lists::start::tests::child_of_the_hook_test_runs_a_start_whose_refresher_panics_with_a_sentinel",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .env(SENTINEL, &sentinel)
+            .output()
+            .expect("run the child");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Then the panic was logged without its payload
+        assert!(text.contains("panic (payload withheld)"), "{text}");
+        assert!(
+            !text.contains(&sentinel),
+            "the payload reached the output: {text}"
+        );
     }
 }

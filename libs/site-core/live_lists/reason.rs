@@ -16,6 +16,9 @@ pub enum ReasonCode {
     DeleteFailed,
     /// R-4: one list's fetch had not finished when the refresh bound passed.
     RefreshBoundPassed,
+    /// R-13: a source panicked. The refresher caught it, failed that list for
+    /// this refresh, and carried on.
+    SourcePanicked,
     /// R-6: the projects validator refused a document the projects source
     /// built. The source checks each R-6 condition itself, so this is the
     /// backstop for the two checks disagreeing.
@@ -158,6 +161,7 @@ impl ReasonCode {
             ReasonCode::PersistFailed => "persist_failed",
             ReasonCode::DeleteFailed => "delete_failed",
             ReasonCode::RefreshBoundPassed => "refresh_bound_passed",
+            ReasonCode::SourcePanicked => "source_panicked",
             ReasonCode::ProjectsDocumentRejected => "projects_document_rejected",
             ReasonCode::SchemeRefused => "scheme_refused",
             ReasonCode::CertificateRefused => "certificate_refused",
