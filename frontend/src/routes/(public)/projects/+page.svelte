@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { isInvisible } from '#lib/invisible.ts';
 
 	interface Repo {
 		name: string;
@@ -25,27 +26,51 @@
 		return typeof v === 'object' && v !== null && !Array.isArray(v);
 	}
 
-	/** Parse the list file (spec Data Model) at the boundary; any other shape is an error. */
-	function parseList(body: unknown): Group[] {
-		if (!isRecord(body) || typeof body.fetched_at !== 'string' || !Array.isArray(body.groups)) {
-			throw new Error('Failed to load');
+	/** True when `v` is a record whose keys are exactly `keys` (no unknown key, none missing). */
+	function hasExactKeys(v: Record<string, unknown>, keys: readonly string[]): boolean {
+		const own = Object.keys(v);
+		return own.length === keys.length && keys.every((k) => own.includes(k));
+	}
+
+	/** The Data Model's rejected class: \p{Cc}, U+2028, U+2029, and the generated invisible table. */
+	function hasRejectedCodePoint(text: string): boolean {
+		for (const ch of text) {
+			const cp = ch.codePointAt(0) ?? 0;
+			if (/\p{Cc}/u.test(ch) || cp === 0x2028 || cp === 0x2029 || isInvisible(cp)) return true;
 		}
-		// Duplicates are a wrong shape: the keyed each below throws on a repeated key.
-		const owners = new Set<string>();
-		return body.groups.map((g: unknown): Group => {
-			if (!isRecord(g) || typeof g.owner !== 'string' || !Array.isArray(g.repos)) {
-				throw new Error('Failed to load');
-			}
-			if (owners.has(g.owner)) throw new Error('Failed to load');
-			owners.add(g.owner);
+		return false;
+	}
+
+	const NAME_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
+	const MAX_DESCRIPTION_CODE_POINTS = 350;
+
+	/**
+	 * Parse the held list (adopted Data Model, R-8/R-10 rules) at the boundary; any other document is an
+	 * error. Exactly two groups, `mnemra` then `prmanahan`, each with at least one repo; names match
+	 * NAME_PATTERN and are unique within an owner (the keyed each below throws on a repeated key);
+	 * descriptions are at most 350 code points with no rejected-class code point; no unknown key at any level.
+	 */
+	function parseList(body: unknown): Group[] {
+		const fail = (): never => {
+			throw new Error('Failed to load');
+		};
+		if (!isRecord(body) || !hasExactKeys(body, ['fetched_at', 'groups'])) return fail();
+		if (typeof body.fetched_at !== 'string' || !Array.isArray(body.groups)) return fail();
+		if (body.groups.length !== OWNERS.length) return fail();
+		return body.groups.map((g: unknown, i): Group => {
+			if (!isRecord(g) || !hasExactKeys(g, ['owner', 'repos'])) return fail();
+			const owner = OWNERS[i];
+			if (typeof g.owner !== 'string' || g.owner !== owner) return fail();
+			if (!Array.isArray(g.repos) || g.repos.length === 0) return fail();
 			const names = new Set<string>();
 			return {
-				owner: g.owner,
+				owner,
 				repos: g.repos.map((r: unknown): Repo => {
-					if (!isRecord(r) || typeof r.name !== 'string' || typeof r.description !== 'string') {
-						throw new Error('Failed to load');
-					}
-					if (names.has(r.name)) throw new Error('Failed to load');
+					if (!isRecord(r) || !hasExactKeys(r, ['name', 'description'])) return fail();
+					if (typeof r.name !== 'string' || typeof r.description !== 'string') return fail();
+					if (!NAME_PATTERN.test(r.name) || names.has(r.name)) return fail();
+					if ([...r.description].length > MAX_DESCRIPTION_CODE_POINTS) return fail();
+					if (hasRejectedCodePoint(r.description)) return fail();
 					names.add(r.name);
 					return { name: r.name, description: r.description };
 				}),
@@ -57,7 +82,18 @@
 	// not AbortSignal.timeout: the edge test's page.clock can fake only the former (T17, LL-PW-4).
 	onMount(() => {
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+		let disposed = false;
+		const showUnavailable = () => {
+			// After unmount nothing is rendered, so no state is written.
+			if (disposed) return;
+			groups = [];
+			status = 'unavailable';
+		};
+		// The timer shows the line itself: it does not rely on fetch rejecting when aborted.
+		const timer = setTimeout(() => {
+			controller.abort();
+			showUnavailable();
+		}, TIMEOUT_MS);
 		void (async () => {
 			try {
 				const res = await fetch('/api/lists/projects', { signal: controller.signal });
@@ -68,13 +104,13 @@
 				groups = parsed;
 				status = 'ready';
 			} catch {
-				groups = [];
-				status = 'unavailable';
+				showUnavailable();
 			} finally {
 				clearTimeout(timer);
 			}
 		})();
 		return () => {
+			disposed = true;
 			clearTimeout(timer);
 			controller.abort();
 		};
@@ -100,8 +136,6 @@
 				</li>
 			{/each}
 		</ul>
-	{:else if groups.length === 0}
-		<p class="empty">No projects yet.</p>
 	{:else}
 		{#each groups as group (group.owner)}
 			<section class="group">
@@ -160,10 +194,6 @@
 	.description {
 		color: var(--color-text-muted);
 		margin-top: 0.25rem;
-	}
-
-	.empty, .error {
-		color: var(--color-text-muted);
 	}
 
 	.error {
