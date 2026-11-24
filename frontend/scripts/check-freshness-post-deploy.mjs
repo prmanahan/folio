@@ -7,11 +7,12 @@
 // first read that settles green and makes no further read. It is red once 150 s have passed, no read
 // is in flight, and none settled green: the last settled body or error is printed, exit code 1.
 //
-// A control, so it is held small: no imports, no environment, no dependency. R-35's tests scan
-// this file's source for what it may import and what it may mention.
+// A control, so it is held small: it loads no module, reads no environment, and takes no
+// dependency. R-35's tests scan this file's source for the modules it may load and the words it
+// may contain.
 //
-// The twin of check-freshness-daily.mjs. The two share no module on purpose, since the import
-// allowlist would forbid one; the shared pieces below are kept identical by hand.
+// The twin of check-freshness-daily.mjs. The two share no module on purpose, since the
+// permitted-module list would forbid one; the shared pieces below are kept identical by hand.
 
 const URL_FRESHNESS = 'https://peter.manahan.io/api/lists/freshness';
 const READ_TIMEOUT_MS = 30_000;

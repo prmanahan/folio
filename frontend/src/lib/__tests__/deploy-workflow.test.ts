@@ -10,7 +10,9 @@
  *  - spec R-7 and plan D14 (step name `Fetch projects list`).
  *  - The five action SHAs below are the commits the Base refs resolve to, checked on 2026-11-18
  *    against the upstream repositories (not copied from the workflow files).
- * No implementation code is read or called.
+ * No implementation code is called. The R-35 check-job block (T13) also reads the two check scripts,
+ * frontend/scripts/check-freshness-daily.mjs and check-freshness-post-deploy.mjs, as text, to scan
+ * their imports and tokens; it never runs them.
  *
  * Shape: `r7Violations(doc)` is test-side checker logic derived from R-7's clauses, each returning a
  * rule id. Polarity is allowlist: the fetch step and Deploy's env are pinned to exactly the permitted
@@ -1047,20 +1049,36 @@ function checkJobViolations(docs: Record<string, Workflow>): string[] {
 	return [...new Set(v)];
 }
 
-/** Imports, static or dynamic: literal specifiers only, and only from the allowlist. */
+/**
+ * Imports, static or dynamic: literal specifiers only, and only from the allowlist.
+ *
+ * Polarity is permit-the-enumerated: every occurrence of the word `import` (other than
+ * `import.meta`) must be consumed by one strict accepted form, and so must every `export` that
+ * re-exports `from` a module. An occurrence no accepted form consumes is a violation, so a
+ * spelling the scanner did not anticipate (no whitespace, a comment inside the statement) fails
+ * rather than passing unseen. The cost is that the word `import` may not appear in a script's
+ * comments; the two scripts are worded to avoid it.
+ */
 function importViolations(src: string): string[] {
 	const v: string[] = [];
-	const literal = /^\s*(['"])([^'"`\\]*)\1\s*$/;
 	const judge = (spec: string) => {
 		if (!IMPORT_ALLOWLIST.includes(spec)) v.push(`import-not-allowed:${spec}`);
 	};
-	for (const m of src.matchAll(/\bimport\s*\(([^)]*)\)/g)) {
-		const l = literal.exec(m[1]);
-		if (!l) v.push('import-non-literal');
-		else judge(l[2]);
+	const STATIC = /^import\s*(?:[\w$*{}\s,]+?\s*from\s*)?(['"])([^'"`\\]*)\1/;
+	const DYNAMIC = /^import\s*\(\s*(['"])([^'"`\\]*)\1\s*\)/;
+	for (const m of src.matchAll(/\bimport\b(?!\s*\.\s*meta\b)/g)) {
+		const rest = src.slice(m.index);
+		const hit = DYNAMIC.exec(rest) ?? STATIC.exec(rest);
+		if (hit) judge(hit[2]);
+		else v.push('import-non-literal');
 	}
-	for (const m of src.matchAll(/\bimport\s+(?:[\w*${}\s,]+?\s+from\s+)?(['"])([^'"]*)\1/g)) judge(m[2]);
-	for (const m of src.matchAll(/\bexport\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s+from\s+(['"])([^'"]*)\1/g)) judge(m[2]);
+	const REEXPORT = /^export\s*(?:\*(?:\s*as\s+[\w$]+)?|\{[^}]*\})\s*from\s*(['"])([^'"`\\]*)\1/;
+	for (const m of src.matchAll(/\bexport\b/g)) {
+		const rest = src.slice(m.index);
+		const hit = REEXPORT.exec(rest);
+		if (hit) judge(hit[2]);
+		else if (/\bfrom\b/.test(rest.split(';')[0])) v.push('import-non-literal');
+	}
 	if (/\brequire\s*\(/.test(src)) v.push('import-non-literal');
 	return [...new Set(v)];
 }
@@ -1293,6 +1311,7 @@ describe('R-35: the check scripts, imports and forbidden tokens', () => {
 		['a dynamic import with a comment before the paren', "const m = await import /*x*/ ('node:fs');", 'import-non-literal'],
 		['a dynamic import with a comment inside the paren', "const m = await import(/*x*/'node:fs');", 'import-non-literal'],
 		['a re-export with no whitespace', "export*from'node:fs';", 'import-not-allowed:node:fs'],
+		['the word import in prose (the catch-all fails closed on what it cannot read)', '// an import of nothing in particular', 'import-non-literal'],
 		['a default import with a tab', "import\tfs\tfrom\t'node:fs';", 'import-not-allowed:node:fs'],
 		['an import followed by a newline and a path', "import fs from\n'node:fs';", 'import-not-allowed:node:fs']
 	];

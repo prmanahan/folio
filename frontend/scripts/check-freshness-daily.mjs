@@ -5,11 +5,12 @@
 // within [now - 48 h, now + skew], both ends inclusive. Anything else is red: the body or the error
 // is printed and the exit code is 1.
 //
-// A control, so it is held small: no imports, no environment, no dependency. R-35's tests scan
-// this file's source for what it may import and what it may mention.
+// A control, so it is held small: it loads no module, reads no environment, and takes no
+// dependency. R-35's tests scan this file's source for the modules it may load and the words it
+// may contain.
 //
-// The twin of check-freshness-post-deploy.mjs. The two share no module on purpose, since the import
-// allowlist would forbid one; the shared pieces below are kept identical by hand.
+// The twin of check-freshness-post-deploy.mjs. The two share no module on purpose, since the
+// permitted-module list would forbid one; the shared pieces below are kept identical by hand.
 
 const URL_FRESHNESS = 'https://peter.manahan.io/api/lists/freshness';
 const READ_TIMEOUT_MS = 30_000;
