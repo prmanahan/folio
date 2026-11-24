@@ -208,21 +208,15 @@ impl<'a> Scanner<'a> {
         match event {
             Event::DocType(_) => Err(FeedRule::Doctype),
             Event::PI(_) => Err(FeedRule::ProcessingInstruction),
-            Event::Decl(d) => {
+            Event::Decl(_) => {
                 if self.seen_decl || self.root_started {
                     return Err(FeedRule::XmlDeclaration);
                 }
                 if position != 0 {
                     return Err(FeedRule::Prolog);
                 }
-                // XML 1.0 4.3.3: a declared encoding that is not the actual
-                // one (UTF-8, checked above) is fatal. A malformed attribute
-                // fails closed.
-                match d.encoding() {
-                    None => {}
-                    Some(Ok(name)) if name.eq_ignore_ascii_case("utf-8") => {}
-                    Some(Ok(_) | Err(_)) => return Err(FeedRule::XmlDeclaration),
-                }
+                // The declaration's attributes are never read (Frame D-3 C3):
+                // only UTF-8 validity of the whole body counts.
                 self.seen_decl = true;
                 self.step()
             }
