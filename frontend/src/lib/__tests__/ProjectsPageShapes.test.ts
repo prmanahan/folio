@@ -1,16 +1,14 @@
 /**
- * R-13 (docs/specs/2026-11-11-projects-from-github.md): wrong-shape list files on /projects show the
- * error state and no entries. Added in the #4726 T8 review fix, beside (not inside) ProjectsPage.test.ts.
+ * Wrong-shape and out-of-contract list documents on /projects show R-24's unavailable line, the two
+ * owner links and no entries (docs/specs/2026-11-18-live-lists-and-blog-move.md). The document rules
+ * are the Data Model of the adopted projects spec (docs/specs/2026-11-11-projects-from-github.md, blob
+ * 32f66b75): two groups, mnemra then prmanahan, each with a repo; the name pattern; a description of at
+ * most 350 code points with no rejected-class code point; no unknown key at any level.
  *
  * Reads, and why:
  *  - frontend/scripts/projects-fixtures/list-expected.json: a valid list file, mutated one field at a
- *    time so each case differs from valid in exactly one way;
- *  - the page's error element, located as `.error` or `[role=alert]` (same as ProjectsPage.test.ts);
- *  - spec R-13 and the Data Model (fetched_at, owner and name strings, description a string).
+ *    time so each case differs from valid in exactly one way.
  * Only global `fetch` is substituted (the network boundary); the page is rendered for real.
- *
- * The duplicate-name case is new behaviour: a duplicate repo name within an owner is not a valid list,
- * so the page shows the error state instead of throwing out of Svelte's keyed each.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor } from '@testing-library/svelte';
@@ -18,6 +16,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import ProjectsPage from '../../routes/(public)/projects/+page.svelte';
+import { alertLine, expectUnavailable } from './projects-page-support';
+
+async function expectErrorState(container: HTMLElement) {
+	await waitFor(() => expect(alertLine(container)).not.toBeNull());
+	expectUnavailable(container);
+}
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 type Repo = { name: Json; description: Json };
@@ -43,23 +47,6 @@ function serveList(list: unknown) {
 			return new Response('nope', { status: 500 });
 		}),
 	);
-}
-
-function errorElement(container: HTMLElement): HTMLElement | null {
-	return container.querySelector<HTMLElement>('.error, [role="alert"]');
-}
-
-function repoAnchors(container: HTMLElement): HTMLAnchorElement[] {
-	return [...container.querySelectorAll<HTMLAnchorElement>('a')].filter((a) =>
-		/^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(a.getAttribute('href') ?? ''), // owner links (R-24) have one segment
-	);
-}
-
-async function expectErrorState(container: HTMLElement) {
-	await waitFor(() => expect(errorElement(container)).not.toBeNull());
-	expect((errorElement(container)?.textContent ?? '').trim()).not.toBe('');
-	expect(repoAnchors(container).length).toBe(0);
-	expect(container.querySelectorAll('h2').length).toBe(0);
 }
 
 beforeEach(() => {
@@ -115,4 +102,65 @@ describe('R-13: a wrong-shape list file shows the error state and no entries', (
 		const { container } = render(ProjectsPage);
 		await expectErrorState(container);
 	});
+});
+
+describe('Data Model: one rule per case, each shows the unavailable line', () => {
+	const rejects: [string, (l: ListFile) => void][] = [
+		['no groups (an empty list is not a valid document)', (l) => (l.groups = [])],
+		['one group only', (l) => l.groups.splice(1)],
+		['three groups', (l) => l.groups.push({ owner: 'mnemra', repos: [{ name: 'fixture-x', description: '' }] })],
+		['owners swapped: prmanahan then mnemra', (l) => l.groups.reverse()],
+		['an owner other than mnemra or prmanahan', (l) => (l.groups[1].owner = 'someone-else')],
+		['an owner repeated', (l) => (l.groups[1].owner = 'mnemra')],
+		['an owner with an empty repos array', (l) => (l.groups[1].repos = [])],
+		['a name with a space', (l) => (l.groups[0].repos[0].name = 'fixture a')],
+		['a name with a slash', (l) => (l.groups[0].repos[0].name = 'fixture/a')],
+		['an empty name', (l) => (l.groups[0].repos[0].name = '')],
+		['a name of 101 characters', (l) => (l.groups[0].repos[0].name = 'a'.repeat(101))],
+		['a description of 351 code points', (l) => (l.groups[0].repos[0].description = 'a'.repeat(351))],
+		[
+			'a description of 351 code points made of astral characters (code points, not UTF-16 units)',
+			(l) => (l.groups[0].repos[0].description = '\u{1F600}'.repeat(351)),
+		],
+		['a description with a newline (Cc)', (l) => (l.groups[0].repos[0].description = 'a\nb')],
+		['a description with DEL (Cc)', (l) => (l.groups[0].repos[0].description = 'a\u007fb')],
+		['a description with U+0085 (C1 control)', (l) => (l.groups[0].repos[0].description = 'a\u0085b')],
+		['a description with U+2028', (l) => (l.groups[0].repos[0].description = 'a b')],
+		['a description with U+2029', (l) => (l.groups[0].repos[0].description = 'a b')],
+		['a description with a zero-width space (invisible table)', (l) => (l.groups[0].repos[0].description = 'a​b')],
+		['a description with a bidi control (invisible table)', (l) => (l.groups[0].repos[0].description = 'a‮b')],
+		['a description with a tag character (invisible table)', (l) => (l.groups[0].repos[0].description = 'a\u{E0041}b')],
+		['an unknown key at the top level', (l) => Object.assign(l, { extra: 1 })],
+		['an unknown key on a group', (l) => Object.assign(l.groups[0], { extra: 1 })],
+		['an unknown key on a repo', (l) => Object.assign(l.groups[0].repos[0], { url: 'https://github.com/mnemra/x' })],
+	];
+	for (const [name, mutate] of rejects) {
+		it(`rejects ${name}`, async () => {
+			const list = valid();
+			mutate(list);
+			serveList(list);
+			const { container } = render(ProjectsPage);
+			await expectErrorState(container);
+		});
+	}
+
+	const accepts: [string, (l: ListFile) => void][] = [
+		['a name of exactly 100 characters', (l) => (l.groups[0].repos[0].name = 'a'.repeat(100))],
+		['a description of exactly 350 code points', (l) => (l.groups[0].repos[0].description = 'a'.repeat(350))],
+		[
+			'a description of 350 astral code points (700 UTF-16 units)',
+			(l) => (l.groups[0].repos[0].description = '\u{1F600}'.repeat(350)),
+		],
+		['a name with dot, underscore and hyphen', (l) => (l.groups[0].repos[0].name = 'Fixture.a_b-C')],
+	];
+	for (const [name, mutate] of accepts) {
+		it(`accepts ${name}`, async () => {
+			const list = valid();
+			mutate(list);
+			serveList(list);
+			const { container } = render(ProjectsPage);
+			await waitFor(() => expect(container.querySelectorAll('h2').length).toBe(2));
+			expect(alertLine(container)).toBeNull();
+		});
+	}
 });

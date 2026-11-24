@@ -12,8 +12,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import ProjectsPage from '../../routes/(public)/projects/+page.svelte';
+import { alertLine, expectUnavailable, githubLinks } from './projects-page-support';
 
-const LINE = 'The project list is temporarily unavailable; try again shortly.';
 const URL_PATH = '/api/lists/projects';
 
 const EXPECTED = JSON.parse(
@@ -44,36 +44,6 @@ function hang(signal: AbortSignal | undefined): Promise<Response> {
 	});
 }
 
-function line(c: HTMLElement): HTMLElement | null {
-	return c.querySelector<HTMLElement>('[role="alert"]');
-}
-function repoLinks(c: HTMLElement): HTMLAnchorElement[] {
-	return [...c.querySelectorAll<HTMLAnchorElement>('a')].filter((a) =>
-		(a.getAttribute('href') ?? '').startsWith('https://github.com/'),
-	);
-}
-
-function expectUnavailable(c: HTMLElement) {
-	const el = line(c);
-	expect(el).not.toBeNull();
-	expect(el?.textContent?.trim()).toBe(LINE);
-	expect(c.querySelectorAll('h2').length).toBe(0);
-	expect(c.textContent).not.toContain('No projects yet.');
-	const links = repoLinks(c);
-	expect(links.map((a) => a.getAttribute('href'))).toEqual([
-		'https://github.com/mnemra',
-		'https://github.com/prmanahan',
-	]);
-	const texts = links.map((a) => (a.textContent ?? '').trim());
-	expect(texts[0]).toContain('mnemra');
-	expect(texts[1]).toContain('prmanahan');
-	expect(new Set(texts).size).toBe(2);
-	for (const a of links) {
-		expect(a.getAttribute('target')).toBe('_blank');
-		expect(a.getAttribute('rel')).toBe('noopener noreferrer');
-	}
-}
-
 beforeEach(() => {
 	vi.unstubAllGlobals();
 });
@@ -91,7 +61,7 @@ describe('R-24: pending and the 15 s abort', () => {
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(container.querySelector('h1')?.textContent).toBe('Projects');
-		expect(line(container)).toBeNull();
+		expect(alertLine(container)).toBeNull();
 		expect(container.textContent).not.toContain('No projects yet.');
 		expect(container.textContent).not.toContain('temporarily unavailable');
 		expect(container.querySelectorAll('a').length).toBe(0);
@@ -115,10 +85,48 @@ describe('R-24: pending and the 15 s abort', () => {
 		const { container } = render(ProjectsPage);
 		await vi.advanceTimersByTimeAsync(15_000);
 		expect(signals[0].aborted).toBe(true);
+		// The 15 s timer itself shows the line: this fetch ignores the signal and has not settled.
+		expectUnavailable(container);
 		await vi.advanceTimersByTimeAsync(2_000);
 
 		expectUnavailable(container);
-		expect(repoLinks(container).length).toBe(2);
+		expect(githubLinks(container).length).toBe(2);
+	});
+
+	it('the 15 s timer shows the line even when the fetch neither settles nor honours the signal', async () => {
+		vi.useFakeTimers();
+		stubFetch(() => new Promise<Response>(() => {}));
+		const { container } = render(ProjectsPage);
+		await vi.advanceTimersByTimeAsync(14_999);
+		expect(alertLine(container)).toBeNull();
+		await vi.advanceTimersByTimeAsync(1);
+
+		expectUnavailable(container);
+	});
+
+	it('unmounting aborts the request and leaves no timer behind', async () => {
+		vi.useFakeTimers();
+		stubFetch(hang);
+		const { unmount } = render(ProjectsPage);
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(vi.getTimerCount()).toBeGreaterThan(0);
+		unmount();
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(signals[0].aborted).toBe(true);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it('the timeout is setTimeout plus AbortController: AbortSignal.timeout is never called', async () => {
+		vi.useFakeTimers();
+		const spy = vi.spyOn(AbortSignal, 'timeout');
+		stubFetch(hang);
+		render(ProjectsPage);
+		await vi.advanceTimersByTimeAsync(15_000);
+
+		expect(signals[0].aborted).toBe(true);
+		expect(spy).not.toHaveBeenCalled();
+		spy.mockRestore();
 	});
 
 	it('a response that settles before 15 s is applied and the timer does not later replace it', async () => {
@@ -129,7 +137,7 @@ describe('R-24: pending and the 15 s abort', () => {
 		expect(container.querySelectorAll('h2').length).toBe(EXPECTED.groups.length);
 		await vi.advanceTimersByTimeAsync(20_000);
 
-		expect(line(container)).toBeNull();
+		expect(alertLine(container)).toBeNull();
 		expect(container.querySelectorAll('h2').length).toBe(EXPECTED.groups.length);
 	});
 });
@@ -147,16 +155,16 @@ describe('R-24: every other outcome shows the exact line and the two links', () 
 		it(name, async () => {
 			stubFetch(impl);
 			const { container } = render(ProjectsPage);
-			await waitFor(() => expect(line(container)).not.toBeNull());
+			await waitFor(() => expect(alertLine(container)).not.toBeNull());
 			expectUnavailable(container);
 		});
 	}
 
-	it('an empty list is not the unavailable line: it keeps "No projects yet."', async () => {
+	it('an empty list is not a valid document: it shows the line, never "No projects yet."', async () => {
 		stubFetch(async () => json({ fetched_at: EXPECTED.fetched_at, groups: [] }));
 		const { container } = render(ProjectsPage);
-		await waitFor(() => expect(container.textContent).toContain('No projects yet.'));
-		expect(line(container)).toBeNull();
+		await waitFor(() => expect(alertLine(container)).not.toBeNull());
+		expectUnavailable(container);
 	});
 });
 
@@ -167,11 +175,12 @@ describe('R-24 / D21: text only', () => {
 				fetched_at: EXPECTED.fetched_at,
 				groups: [
 					{ owner: 'mnemra', repos: [{ name: 'fixture-solo', description: '<img src=x onerror=alert(1)> **b**' }] },
+					{ owner: 'prmanahan', repos: [{ name: 'fixture-other', description: '' }] },
 				],
 			}),
 		);
 		const { container } = render(ProjectsPage);
-		await waitFor(() => expect(repoLinks(container).length).toBe(1));
+		await waitFor(() => expect(githubLinks(container).length).toBe(2));
 
 		expect(container.querySelector('img')).toBeNull();
 		expect(container.querySelector('strong')).toBeNull();
