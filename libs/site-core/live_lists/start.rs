@@ -27,7 +27,7 @@ use super::articles::ArticlesList;
 use super::clock::{FormatError, SystemClock, WallClock, format_fetched_at};
 use super::held::{Held, ListDocument, LiveLists};
 use super::refresher::{Refresher, Sources};
-use super::store::{DeleteOutcome, ListStore, SqliteStore, delete_row, load};
+use super::store::{DeleteOutcome, ListStore, NoData, SqliteStore, delete_row, load};
 use super::switch::{DisabledLists, ParsedSwitch, parse_switch};
 use super::{ListName, ReasonCode};
 use crate::app::build_app;
@@ -76,10 +76,12 @@ pub struct StartInputs {
     /// unset. A value that is not Unicode must reach the parser as such.
     pub switch: Option<OsString>,
     pub clock: Arc<dyn WallClock>,
-    pub sources: Sources,
+    /// `None` builds the production sources inside `start` (R-2). Only this
+    /// crate's tests set it.
+    pub(crate) sources: Option<Sources>,
     /// The refresher's store. `None` opens the production store on
-    /// `config.database_url`.
-    pub store: Option<Box<dyn ListStore>>,
+    /// `config.database_url`. Only this crate's tests set it.
+    pub(crate) store: Option<Box<dyn ListStore>>,
 }
 
 impl StartInputs {
@@ -96,7 +98,7 @@ impl StartInputs {
             cors_origin,
             switch,
             clock: Arc::new(SystemClock),
-            sources: Sources::default(),
+            sources: None,
             store: None,
         }
     }
@@ -136,6 +138,19 @@ where
         sources,
         store,
     } = inputs;
+    let sources = sources.unwrap_or_else(production_sources);
+
+    // R-5 and R-17: a panic must never print its payload (it could hold
+    // response text, R-30). A test build keeps libtest's hook.
+    #[cfg(not(test))]
+    super::panic_hook::install();
+
+    // The refresher's store is a second connection, so an in-memory database
+    // would give it an empty database of its own. Refuse loudly.
+    if is_in_memory(&config.database_url) {
+        tracing::error!("DATABASE_URL names an in-memory database; live lists need a file");
+        return Err(StartError::InMemoryDatabase);
+    }
 
     // Step 1 (R-18). The parser never fails: a bad value disables both lists
     // and says so here, at `error`. The value itself is never logged.
@@ -273,6 +288,20 @@ where
     serve(app).await.map_err(StartError::Serve)
 }
 
+/// The sources a production start registers. None yet: the projects and
+/// articles sources are built here, never injected from outside the crate.
+fn production_sources() -> Sources {
+    Sources::default()
+}
+
+/// SQLite's in-memory forms: the empty name, `:memory:`, and any URI naming
+/// `mode=memory` or `:memory:`.
+fn is_in_memory(database_url: &str) -> bool {
+    database_url.is_empty()
+        || database_url.contains(":memory:")
+        || database_url.contains("mode=memory")
+}
+
 /// R-19: one line per start, naming the parsed set and each disabled list's
 /// delete outcome; `error` when any delete failed.
 fn log_start_line(disabled: DisabledLists, deleted: &[(ListName, DeleteOutcome)]) {
@@ -325,11 +354,20 @@ fn load_enabled<L: ListDocument>(
             Some(Arc::new(held))
         }
         Err(no_data) => {
-            tracing::info!(
-                list = L::NAME.as_str(),
-                reason = no_data.as_str(),
-                "live list has no data yet"
-            );
+            // A missing row is ordinary (first start, or just disabled); a row
+            // that exists and cannot be used is an anomaly worth a warn.
+            match no_data {
+                NoData::Absent => tracing::info!(
+                    list = L::NAME.as_str(),
+                    reason = no_data.as_str(),
+                    "live list has no data yet"
+                ),
+                NoData::Invalid | NoData::Unreadable | NoData::AheadOfClock => tracing::warn!(
+                    list = L::NAME.as_str(),
+                    reason = no_data.as_str(),
+                    "live list has no data yet"
+                ),
+            }
             None
         }
     }

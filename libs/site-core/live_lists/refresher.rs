@@ -172,7 +172,6 @@ impl Refresher {
     /// then commit each list on its own: one list failing never moves the
     /// other's time (R-17).
     async fn refresh(&mut self, trigger: Trigger) {
-        let began = tokio::time::Instant::now();
         let now = self.clock.now();
         // Owned inputs, not `&self`: the store is `Send` but not `Sync`, so
         // a borrow of the whole refresher cannot cross an await in a task.
@@ -186,8 +185,8 @@ impl Refresher {
         let (projects, articles) =
             futures::join!(fetch_of(ListName::Projects), fetch_of(ListName::Articles));
         let outcomes = [
-            self.commit(ListName::Projects, projects, began),
-            self.commit(ListName::Articles, articles, began),
+            self.commit(ListName::Projects, projects),
+            self.commit(ListName::Articles, articles),
         ];
         log_summary(trigger, &outcomes);
     }
@@ -195,7 +194,11 @@ impl Refresher {
     /// Validate, persist, then swap, in that order (R-15). Returns what to
     /// log. No lock is held here: the held-copy lock is taken only inside the
     /// swap, and the store is this task's own.
-    fn commit(&mut self, list: ListName, fetch: Fetch, began: tokio::time::Instant) -> ListOutcome {
+    ///
+    /// The list's elapsed time is its own fetch plus its own commit (R-30),
+    /// not the whole refresh's.
+    fn commit(&mut self, list: ListName, (fetch, fetch_elapsed): (Fetch, Duration)) -> ListOutcome {
+        let commit_began = tokio::time::Instant::now();
         let (document, skipped, requests) = match fetch {
             Fetch::Disabled => return ListOutcome::idle(list, Outcome::Disabled),
             Fetch::NoSource => return ListOutcome::idle(list, Outcome::NoSource),
@@ -222,7 +225,7 @@ impl Refresher {
             },
             skipped,
             requests,
-            elapsed: began.elapsed(),
+            elapsed: fetch_elapsed + commit_began.elapsed(),
         }
     }
 
@@ -246,17 +249,23 @@ impl Refresher {
 
 /// One list's fetch, bounded by [`REFRESH_BOUND`]. A disabled list is never
 /// fetched (R-19).
-async fn fetch(disabled: bool, source: Option<Arc<dyn ListSource>>, now: OffsetDateTime) -> Fetch {
+async fn fetch(
+    disabled: bool,
+    source: Option<Arc<dyn ListSource>>,
+    now: OffsetDateTime,
+) -> (Fetch, Duration) {
     if disabled {
-        return Fetch::Disabled;
+        return (Fetch::Disabled, Duration::ZERO);
     }
     let Some(source) = source else {
-        return Fetch::NoSource;
+        return (Fetch::NoSource, Duration::ZERO);
     };
-    match tokio::time::timeout(REFRESH_BOUND, source.fetch(now)).await {
+    let began = tokio::time::Instant::now();
+    let fetched = match tokio::time::timeout(REFRESH_BOUND, source.fetch(now)).await {
         Ok(report) => Fetch::Reported(report),
         Err(_elapsed) => Fetch::BoundPassed,
-    }
+    };
+    (fetched, began.elapsed())
 }
 
 /// What a list's fetch produced, before commit.
@@ -321,8 +330,9 @@ impl ListOutcome {
 }
 
 /// The per-list lines and the one summary line of a refresh (R-30). The
-/// summary is `info` when every list that was attempted succeeded and `warn`
-/// otherwise; a disabled list or one with no source was not attempted. It is
+/// summary is `info` when every enabled list succeeded and `warn` otherwise
+/// (an enabled list with no source did not succeed; a disabled list does not
+/// count). It is
 /// written on every refresh and never rate-limited.
 fn log_summary(trigger: Trigger, outcomes: &[ListOutcome; 2]) {
     for o in outcomes {
@@ -352,9 +362,11 @@ fn log_summary(trigger: Trigger, outcomes: &[ListOutcome; 2]) {
     let (projects, articles) = (describe(ListName::Projects), describe(ListName::Articles));
     let requests = join_notes(outcomes, |n| Some(n.status.to_string()));
     let remaining = join_notes(outcomes, |n| n.ratelimit_remaining.map(|r| r.to_string()));
+    // A disabled list was not attempted and does not count. An enabled list
+    // with no source did not succeed, so it makes the line `warn` (R-30).
     let all_ok = outcomes
         .iter()
-        .all(|o| !matches!(o.outcome, Outcome::Failed(_)));
+        .all(|o| !matches!(o.outcome, Outcome::Failed(_) | Outcome::NoSource));
     let trigger = tracing::field::display(trigger.as_str());
     if all_ok {
         tracing::info!(
@@ -933,7 +945,10 @@ mod tests {
         let (log, _guard) = LogCapture::install();
         launch(env.inputs(None, sources(Some(&projects), Some(&articles)))).await;
         settle().await;
-        tokio::time::advance(Duration::from_secs(30)).await;
+        // (in two steps: one jump of 30 s would wake both sleeps at once)
+        tokio::time::advance(Duration::from_secs(10)).await;
+        settle().await;
+        tokio::time::advance(Duration::from_secs(20)).await;
         settle().await;
         // Then each list's elapsed_ms is its own
         let line = log.one_line("live lists refresh");
