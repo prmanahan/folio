@@ -172,6 +172,7 @@ impl Env {
             clock: self.clock.clone(),
             sources: Some(sources),
             store: None,
+            anthropic: None,
         }
     }
 
@@ -226,6 +227,19 @@ impl Running {
 /// test and then never returns. Returns the `StartError` when `start` ends
 /// before serving.
 pub(crate) async fn try_launch(inputs: StartInputs) -> Result<Running, StartError> {
+    try_launch_over(inputs, false).await
+}
+
+/// As [`try_launch`], and serving the router the way `serve_tcp` does, over
+/// a real socket with the peer address attached. The AI routes extract that
+/// address, so a request to them needs this form.
+pub(crate) async fn launch_over_http(inputs: StartInputs) -> Running {
+    try_launch_over(inputs, true)
+        .await
+        .unwrap_or_else(|e| panic!("start failed before serving: {e:?}"))
+}
+
+async fn try_launch_over(inputs: StartInputs, http: bool) -> Result<Running, StartError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let clock = inputs.clock.clone();
     let called_at = tokio::time::Instant::now();
@@ -236,7 +250,13 @@ pub(crate) async fn try_launch(inputs: StartInputs) -> Result<Running, StartErro
     }));
     match rx.await {
         Ok((router, serving_began_at, tokio_time_before_serving)) => Ok(Running {
-            server: axum_test::TestServer::new(router),
+            server: if http {
+                axum_test::TestServer::builder()
+                    .http_transport()
+                    .build(router.into_make_service_with_connect_info::<std::net::SocketAddr>())
+            } else {
+                axum_test::TestServer::new(router)
+            },
             serving_began_at,
             tokio_time_before_serving,
             handle,
@@ -260,4 +280,159 @@ pub(crate) async fn launch(inputs: StartInputs) -> Running {
     try_launch(inputs)
         .await
         .unwrap_or_else(|e| panic!("start failed before serving: {e:?}"))
+}
+
+/// Marker text each probe request carries, so one local server can answer
+/// the chat handler (an SSE stream) and the fit handler (a JSON message)
+/// differently and keep each handler's outbound body apart.
+pub(crate) const CHAT_PROBE: &str = "CHATPROBE";
+pub(crate) const FIT_PROBE: &str = "FITPROBE";
+
+const SSE_REPLY: &str = concat!(
+    "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"m\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+    "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"probe answer\"}}\n\n",
+    "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+    "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":2}}\n\n",
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+);
+
+const FIT_VERDICT: &str = r#"{\"verdict\":\"strong_fit\",\"headline\":\"h\",\"opening\":\"o\",\"gaps\":[],\"transfers\":[{\"skill\":\"s\",\"relevance\":\"high\"}],\"recommendation\":\"r\"}"#;
+
+/// A local Anthropic double: it answers both AI handlers and keeps the
+/// outbound request body of each, so a test can read the system prompt the
+/// handler built. Reached through a client injected at the start function's
+/// seam, the same constructor path as production's.
+pub(crate) struct AiProbe {
+    server: mockito::ServerGuard,
+    chat: Arc<Mutex<Vec<Vec<u8>>>>,
+    fit: Arc<Mutex<Vec<Vec<u8>>>>,
+    _mocks: Vec<mockito::Mock>,
+}
+
+impl AiProbe {
+    pub(crate) async fn new() -> Self {
+        let mut server = mockito::Server::new_async().await;
+        let chat = Arc::new(Mutex::new(Vec::new()));
+        let fit = Arc::new(Mutex::new(Vec::new()));
+        let mut mocks = Vec::new();
+        for (marker, bucket, content_type, body) in [
+            (
+                CHAT_PROBE,
+                chat.clone(),
+                "text/event-stream",
+                SSE_REPLY.to_string(),
+            ),
+            (
+                FIT_PROBE,
+                fit.clone(),
+                "application/json",
+                format!(
+                    r#"{{"id":"msg_test","type":"message","role":"assistant","content":[{{"type":"text","text":"{FIT_VERDICT}"}}],"model":"m","stop_reason":"end_turn","stop_sequence":null,"usage":{{"input_tokens":1,"output_tokens":1}}}}"#
+                ),
+            ),
+        ] {
+            mocks.push(
+                server
+                    .mock("POST", "/v1/messages")
+                    .match_request(move |req| {
+                        let body = req.body().expect("outbound body");
+                        let mine = String::from_utf8_lossy(body).contains(marker);
+                        if mine {
+                            bucket.lock().expect("probe lock").push(body.to_vec());
+                        }
+                        mine
+                    })
+                    .with_status(200)
+                    .with_header("content-type", content_type)
+                    .with_body(body)
+                    .create_async()
+                    .await,
+            );
+        }
+        Self {
+            server,
+            chat,
+            fit,
+            _mocks: mocks,
+        }
+    }
+
+    /// A client for the injected seam; its key is generated per run.
+    pub(crate) fn client(&self) -> rig_core::providers::anthropic::Client {
+        rig_core::providers::anthropic::Client::builder()
+            .api_key(format!("probe-{}", uuid::Uuid::new_v4().simple()))
+            .base_url(&self.server.url())
+            .build()
+            .expect("a client for the local double")
+    }
+
+    /// The system prompt of the first chat request, once it arrives.
+    pub(crate) async fn chat_system(&self) -> String {
+        Self::system_of(&self.chat).await
+    }
+
+    /// The system prompt of the first fit request, once it arrives.
+    pub(crate) async fn fit_system(&self) -> String {
+        Self::system_of(&self.fit).await
+    }
+
+    /// Polls for the request up to a bound: the chat handler sends it from a
+    /// spawned task, after its response has begun.
+    async fn system_of(bucket: &Arc<Mutex<Vec<Vec<u8>>>>) -> String {
+        for _ in 0..200 {
+            if let Some(body) = bucket.lock().expect("probe lock").first() {
+                let json: serde_json::Value =
+                    serde_json::from_slice(body).expect("an outbound JSON body");
+                return json["system"]
+                    .as_array()
+                    .expect("system is an array of blocks")
+                    .iter()
+                    .filter_map(|block| block["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("no outbound request reached the double within 5 s");
+    }
+}
+
+impl Running {
+    /// POST a JSON body with the edge secret.
+    pub(crate) async fn post_json(
+        &self,
+        env: &Env,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> axum_test::TestResponse {
+        let (name, value) = env.edge_header();
+        self.server
+            .post(path)
+            .add_header(name, value)
+            .json(body)
+            .await
+    }
+
+    /// Ask the chat handler one question and the fit handler one posting;
+    /// returns the chat and fit system prompts they built, in that order.
+    pub(crate) async fn both_prompts(&self, env: &Env, probe: &AiProbe) -> [String; 2] {
+        let chat = self
+            .post_json(
+                env,
+                "/api/chat",
+                &serde_json::json!({ "message": CHAT_PROBE }),
+            )
+            .await;
+        chat.assert_status_ok();
+        let fit = self
+            .post_json(
+                env,
+                "/api/fit",
+                &serde_json::json!({ "job_description": FIT_PROBE }),
+            )
+            .await;
+        fit.assert_status_ok();
+        [probe.chat_system().await, probe.fit_system().await]
+    }
 }

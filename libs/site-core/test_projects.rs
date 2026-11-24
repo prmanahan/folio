@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::live_lists::LiveLists;
+use crate::live_lists::articles::ArticlesList;
 use crate::live_lists::held::{Held, Snapshot};
 use crate::projects_list::ProjectsList;
 
@@ -18,6 +19,22 @@ pub(crate) fn lists_with(doc: &str) -> LiveLists {
     lists.set_projects(Arc::new(
         Held::<ProjectsList>::new(doc.to_string()).expect("test list is valid"),
     ));
+    lists
+}
+
+/// A handle holding the given documents, each only when given.
+pub(crate) fn lists_holding(projects: Option<&str>, articles: Option<&str>) -> LiveLists {
+    let lists = LiveLists::new("2026-11-13T11:00:00.000Z".to_string());
+    if let Some(doc) = projects {
+        lists.set_projects(Arc::new(
+            Held::<ProjectsList>::new(doc.to_string()).expect("test projects are valid"),
+        ));
+    }
+    if let Some(doc) = articles {
+        lists.set_articles(Arc::new(
+            Held::<ArticlesList>::new(doc.to_string()).expect("test articles are valid"),
+        ));
+    }
     lists
 }
 
