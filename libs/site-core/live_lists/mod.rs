@@ -10,7 +10,11 @@ pub mod articles;
 pub mod clock;
 pub mod held;
 pub mod reason;
+pub mod store;
 pub mod switch;
+
+#[cfg(test)]
+mod test_support;
 
 pub use held::LiveLists;
 pub use reason::ReasonCode;
