@@ -15,14 +15,34 @@
 use std::ffi::OsString;
 use std::future::Future;
 use std::io;
-use std::sync::Arc;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use axum::Router;
+use axum::{Extension, Router};
+use rusqlite::Connection;
+use time::OffsetDateTime;
 
-use super::clock::{FormatError, SystemClock, WallClock};
-use super::refresher::Sources;
-use super::store::ListStore;
+use super::articles::ArticlesList;
+use super::clock::{FormatError, SystemClock, WallClock, format_fetched_at};
+use super::held::{Held, ListDocument, LiveLists};
+use super::refresher::{Refresher, Sources};
+use super::store::{DeleteOutcome, ListStore, SqliteStore, delete_row, load};
+use super::switch::{DisabledLists, ParsedSwitch, parse_switch};
+use super::{ListName, ReasonCode};
+use crate::app::build_app;
+use crate::auth;
 use crate::config::Config;
+use crate::db;
+use crate::middleware::global_rate_limit::GlobalRateLimitState;
+use crate::middleware::origin_lock::OriginLockState;
+use crate::projects_list::{self, ProjectsList};
+use crate::state::{AppState, DbState};
+
+/// Sliding window used by `global_rate_limit_middleware` (60 req/min) and
+/// the interval its stale buckets are purged on. Same value on purpose: an
+/// entry can't go stale faster than the window it's measured against.
+const GLOBAL_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
 /// Everything `start` is given. Production fills it with
 /// [`StartInputs::production`]; tests fill the same fields with fakes.
@@ -83,8 +103,211 @@ where
     S: FnOnce(Router) -> Fut + Send,
     Fut: Future<Output = io::Result<()>> + Send,
 {
-    let _ = inputs;
-    serve(Router::new()).await.map_err(StartError::Serve)
+    let StartInputs {
+        config,
+        cors_origin,
+        switch,
+        clock,
+        sources,
+        store,
+    } = inputs;
+
+    // Step 1 (R-18). The parser never fails: a bad value disables both lists
+    // and says so here, at `error`. The value itself is never logged.
+    let ParsedSwitch { disabled, problem } = parse_switch(switch.as_deref());
+    if let Some(problem) = problem {
+        tracing::error!(
+            problem = problem.as_str(),
+            "LIVE_LISTS_DISABLED is not a clean allowlist: both live lists are disabled"
+        );
+    }
+
+    // Today's work, in today's order: it needs no database, so it runs
+    // before step 2. R-10 (projects-from-github) fails closed before anything
+    // is opened. No age check: a Fly restart must not depend on how long ago
+    // the last deploy was (the release command checks freshness). Retired by
+    // the task that moves the prompts onto the held copies.
+    crate::static_files::validate_static_dir(&config.static_dir);
+    let projects_path = std::path::Path::new(&config.static_dir).join("projects.json");
+    let projects = match projects_list::load(&projects_path) {
+        Ok(list) => Arc::new(list),
+        Err(e) => {
+            tracing::error!(path = %projects_path.display(), error = %e, remedy = "run `GITHUB_TOKEN=<token> just fetch-projects`, then rebuild the frontend", "refusing to start: projects list invalid");
+            return Err(StartError::ProjectsListRefused);
+        }
+    };
+    let counts: Vec<String> = projects.counts().map(|(o, n)| format!("{o}={n}")).collect();
+    tracing::info!(
+        path = %projects_path.display(),
+        fetched_at = projects.fetched_at(),
+        counts = counts.join(" "),
+        "projects list loaded"
+    );
+    tracing::info!(port = config.port, "starting server");
+
+    // Step 2.
+    let conn = db::connect(&config.database_url).map_err(StartError::Database)?;
+
+    // Step 3 (R-19): before any refresher write, and before the load, so a
+    // disabled list's row cannot be read back.
+    let deleted: Vec<(ListName, DeleteOutcome)> = ListName::ALL
+        .into_iter()
+        .filter(|list| disabled.contains(*list))
+        .map(|list| (list, delete_row(&conn, list)))
+        .collect();
+    log_start_line(disabled, &deleted);
+
+    // Step 4 (R-16): a disabled list is never loaded, whatever its delete did.
+    let now = clock.now();
+    let held_projects = load_enabled::<ProjectsList>(&conn, disabled, now);
+    let held_articles = load_enabled::<ArticlesList>(&conn, disabled, now);
+
+    // Step 5 (R-22): fixed here, before the first request can be served.
+    let started_at = format_fetched_at(clock.now()).map_err(StartError::StartedAt)?;
+    let live_lists = LiveLists::new(started_at);
+    if let Some(held) = held_projects {
+        live_lists.set_projects(held);
+    }
+    if let Some(held) = held_articles {
+        live_lists.set_articles(held);
+    }
+
+    // Today's work, continued. Hash the admin password with Argon2id.
+    let password_hash =
+        auth::hash_password(&config.admin_password).map_err(StartError::PasswordHash)?;
+    let rig_client = config
+        .anthropic_api_key
+        .as_ref()
+        .and_then(|key| rig_core::providers::anthropic::Client::new(key).ok());
+    let db_state: DbState = Arc::new(AppState {
+        db: Arc::new(Mutex::new(conn)),
+        admin_password_hash: password_hash,
+        rig_client,
+        trusted_ip_header: config.trusted_ip_header.clone(),
+        page_hit_salt: config.page_hit_salt.clone(),
+        projects,
+    });
+
+    // LLM-audit Nit / R6: CORS_ORIGIN fail-loud. The old silent
+    // `unwrap_or_else(|_| "http://localhost:3000")` made a missing prod
+    // env var yield a wrong-origin policy that breaks the site without any
+    // operator signal. WARN form (not require-in-prod) is chosen to match
+    // the existing `PAGE_HIT_SALT` pattern and keep local/dev ergonomics
+    // (dev has no CORS_ORIGIN; only `ADMIN_PASSWORD` is fail-loud). A
+    // missing CORS_ORIGIN now emits a WARN naming the var before falling
+    // back, so the misconfiguration is loud in the logs.
+    let cors_origin = match cors_origin {
+        Some(origin) => origin,
+        None => {
+            tracing::warn!(
+                "CORS_ORIGIN is unset; falling back to the localhost dev \
+                 default (http://localhost:3000). In production set \
+                 CORS_ORIGIN explicitly — a missing value silently yields a \
+                 wrong-origin CORS policy."
+            );
+            "http://localhost:3000".to_string()
+        }
+    };
+    let origin_lock_state = OriginLockState::new(&config.edge_auth_token);
+
+    let global_rate_limit = GlobalRateLimitState::new();
+    // Task #3558: Phase 2 keys rate-limit buckets per visitor rather than
+    // per Cloudflare edge, widening this map's key space for the life of
+    // the process. Purge on the same cadence as the limiter's own
+    // window so an entry can't go stale faster than it's purged. Detached on
+    // purpose: it lives as long as the process.
+    let purge_state = global_rate_limit.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(GLOBAL_RATE_LIMIT_WINDOW);
+        loop {
+            interval.tick().await;
+            purge_state.purge_stale(GLOBAL_RATE_LIMIT_WINDOW);
+        }
+    });
+
+    // The handle the two `/api/lists/` routes read. Added outside the app so
+    // `build_app`'s signature, and every caller of it, is unchanged.
+    let app = build_app(
+        db_state,
+        origin_lock_state,
+        global_rate_limit,
+        &config.static_dir,
+        &cors_origin,
+    )
+    .layer(Extension(live_lists.clone()));
+
+    // Step 6 (R-17): the refresher runs off the startup path. Its store is a
+    // connection of its own.
+    let store = match store {
+        Some(store) => store,
+        None => Box::new(SqliteStore::open(&config.database_url).map_err(StartError::Store)?),
+    };
+    Refresher::new(live_lists, clock, sources, disabled, store).spawn();
+
+    // Step 7.
+    serve(app).await.map_err(StartError::Serve)
+}
+
+/// R-19: one line per start, naming the parsed set and each disabled list's
+/// delete outcome; `error` when any delete failed.
+fn log_start_line(disabled: DisabledLists, deleted: &[(ListName, DeleteOutcome)]) {
+    let outcome = |list: ListName| {
+        deleted
+            .iter()
+            .find(|(l, _)| *l == list)
+            .map(|(_, o)| tracing::field::display(o.as_str()))
+    };
+    let set = tracing::field::display(disabled.describe());
+    let projects = outcome(ListName::Projects);
+    let articles = outcome(ListName::Articles);
+    if deleted.iter().any(|(_, o)| *o == DeleteOutcome::Failed) {
+        tracing::error!(
+            disabled = set,
+            projects_delete = projects,
+            articles_delete = articles,
+            reason = ReasonCode::DeleteFailed.as_str(),
+            "live lists start"
+        );
+    } else {
+        tracing::info!(
+            disabled = set,
+            projects_delete = projects,
+            articles_delete = articles,
+            "live lists start"
+        );
+    }
+}
+
+/// Load `L` unless the switch disabled it, and say what happened. The reason
+/// a list loads as no data yet is one of [`NoData`]'s fixed codes, never the
+/// row's text.
+fn load_enabled<L: ListDocument>(
+    conn: &Connection,
+    disabled: DisabledLists,
+    now: OffsetDateTime,
+) -> Option<Arc<Held<L>>> {
+    if disabled.contains(L::NAME) {
+        return None;
+    }
+    match load::<L>(conn, now) {
+        Ok(held) => {
+            tracing::info!(
+                list = L::NAME.as_str(),
+                fetched_at = held.fetched_at(),
+                count = held.list().count(),
+                "live list loaded from the store"
+            );
+            Some(Arc::new(held))
+        }
+        Err(no_data) => {
+            tracing::info!(
+                list = L::NAME.as_str(),
+                reason = no_data.as_str(),
+                "live list has no data yet"
+            );
+            None
+        }
+    }
 }
 
 /// The production serve step: bind `0.0.0.0:port` and serve with connect info.
@@ -92,8 +315,15 @@ where
 /// # Panics
 /// When the port cannot be bound, as `main.rs` did.
 pub async fn serve_tcp(port: u16, app: Router) -> io::Result<()> {
-    let _ = (port, app);
-    Ok(())
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .expect("Failed to bind to port");
+    tracing::info!(port, "listening");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -338,7 +568,13 @@ mod tests {
         assert_eq!(env.stored(ListName::Articles), None);
         assert!(env.stored(ListName::Projects).is_some());
         assert!(log.one_line(START_LINE).contains("disabled={articles}"));
-        assert!(log.lines_containing("ERROR").is_empty(), "{}", log.text());
+        // a clean value raises no switch error, and the start line is `info`
+        assert!(
+            log.lines_containing("LIVE_LISTS_DISABLED").is_empty(),
+            "{}",
+            log.text()
+        );
+        assert!(log.one_line(START_LINE).contains("INFO"));
     }
 
     async fn assert_nothing_disabled(switch: Option<&str>) {
