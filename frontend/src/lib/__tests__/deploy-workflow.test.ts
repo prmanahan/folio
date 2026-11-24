@@ -1257,7 +1257,7 @@ function healthStepViolations(run: unknown): string[] {
 	if (!/(^|\s)-o\s+\/dev\/null(\s|$)/.test(run)) v.push('health-body-not-discarded');
 	if (!/(^|\s)-w\s+\S/.test(run)) v.push('health-status-not-printed');
 	if (!/(^|\s)--fail(\s|$)/.test(run)) v.push('health-no-fail');
-	if (!run.includes('https://peter.manahan.io/api/health')) v.push('health-wrong-url');
+	if (!/(^|\s)https:\/\/peter\.manahan\.io\/api\/health(\s|$)/.test(run)) v.push('health-wrong-url');
 	return v;
 }
 
@@ -1299,6 +1299,22 @@ describe('the post-deploy health step prints no response body', () => {
 
 	it('seed: --fail removed', () => {
 		expect(healthStepViolations(GOOD.replace(' --fail', ''))).toContain('health-no-fail');
+	});
+
+	it('seed: the URL is retargeted by a suffix', () => {
+		expect(healthStepViolations(GOOD.replace('/api/health', '/api/health.evil.tld'))).toContain('health-wrong-url');
+	});
+
+	it('seed: the URL appears only inside another URL', () => {
+		expect(
+			healthStepViolations(
+				GOOD.replace('https://peter.manahan.io/api/health', 'https://evil/?u=https://peter.manahan.io/api/health')
+			)
+		).toContain('health-wrong-url');
+	});
+
+	it('seed: the URL removed entirely', () => {
+		expect(healthStepViolations(GOOD.replace(' https://peter.manahan.io/api/health', ''))).toContain('health-wrong-url');
 	});
 
 	it('seed: no step', () => {
