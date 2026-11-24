@@ -64,12 +64,12 @@ mod retired_release_command_tests {
 
     const FLY_TOML: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fly.toml");
 
-    /// Whether any non-comment line of a `fly.toml` text sets `release_command`.
+    /// Whether any non-comment line of a `fly.toml` text mentions
+    /// `release_command`, in any spelling TOML allows: bare, quoted or dotted
+    /// key, or inside an inline table.
     fn sets_release_command(text: &str) -> bool {
-        text.lines().any(|l| {
-            let l = l.trim_start();
-            !l.starts_with('#') && l.starts_with("release_command")
-        })
+        text.lines()
+            .any(|l| !l.trim_start().starts_with('#') && l.contains("release_command"))
     }
 
     #[test]
@@ -82,6 +82,20 @@ mod retired_release_command_tests {
     fn r29_control_a_fly_toml_with_a_release_command_is_detected() {
         let seeded = "[deploy]\n  release_command = \"./folio check-projects\"\n";
         assert!(sets_release_command(seeded));
+    }
+
+    #[test]
+    fn r29_control_quoted_dotted_and_inline_spellings_are_detected() {
+        for seeded in [
+            "[deploy]\n  \"release_command\" = \"x\"\n",
+            "deploy.release_command = \"x\"\n",
+            "deploy = { release_command = \"x\" }\n",
+        ] {
+            assert!(sets_release_command(seeded), "{seeded:?}");
+        }
+        assert!(!sets_release_command(
+            "# release_command was retired\n[vm]\n"
+        ));
     }
 
     #[test]

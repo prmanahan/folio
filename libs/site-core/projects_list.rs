@@ -24,7 +24,8 @@ use crate::ai::types::is_invisible;
 /// Owners in file order. `groups` is exactly these two, in this order.
 pub const OWNERS: [&str; 2] = ["mnemra", "prmanahan"];
 
-/// A list file at most this far ahead of the check's clock passes (inclusive).
+/// The load-time skew allowance (R-16, R-34): a list whose `fetched_at` is at
+/// most this far ahead of the loader's clock is accepted (inclusive).
 pub const MAX_AGE_AHEAD: Duration = Duration::minutes(5);
 
 const MAX_NAME_LEN: usize = 100;
