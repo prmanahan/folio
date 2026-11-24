@@ -4,7 +4,7 @@ Source: `docs/specs/2026-11-18-live-lists-and-blog-move.md`, blob `4e8af5ed0aa02
 
 ## First run, merge 1: unpublish the article
 
-**Route choice is open.** Route A (unpublish in the admin editor before the merge-1 deploy) or Route B (sqlite3 over `fly ssh` after it) is Peter's level-3 call at merge 1's go. It is not yet decided. Route A is the recommended primary: it needs no root shell, no package install and no second writer on the WAL database. Route B is the fallback, used only if Peter keeps this step until after the deploy.
+**Route choice: ruled B (2026-11-20).** At merge 1's go Peter chose Route B ("I'm remote and I won't be able to access it easily so it's going to have to be option B: have Bolt do it"). Bolt ran it after the deploy, and article id 2 was unpublished. Route A (unpublish in the admin editor before the deploy) stays documented below as the primary for any future use: it needs no root shell, no package install and no second writer on the WAL database.
 
 **Unpublished at first run** (Peter, 2026-11-20: "Unpublish at first run"; review finding ACTOR-6). After merge 1 nothing in the app can unpublish an article, and `libs/site-core/ai/context.rs` still puts every `articles` row with `published = 1`, full text included, into the chat and fit prompts until merge 2's T11 (R-20) moves them to mnemra.dev's RSS feed. This step sets "The Workflow Didn't Change" unpublished in the production DB so the prompts stop quoting it.
 
