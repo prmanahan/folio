@@ -64,12 +64,6 @@ pub(crate) enum Target {
     /// `https://api.github.com/users/prmanahan/repos?type=owner&per_page=100`
     GithubUser(Page),
     /// `https://mnemra.dev/rss.xml`
-    // The feed source constructs it; until it lands only tests do. `expect`, so
-    // the day it is constructed the unfulfilled expectation says to remove this.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by the feed source")
-    )]
     Feed,
 }
 

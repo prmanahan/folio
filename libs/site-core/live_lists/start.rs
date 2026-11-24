@@ -25,10 +25,11 @@ use time::OffsetDateTime;
 
 use super::articles::ArticlesList;
 use super::clock::{FormatError, SystemClock, WallClock, format_fetched_at};
+use super::feed_source::FeedArticlesSource;
 use super::github::GithubProjectsSource;
 use super::held::{Held, ListDocument, LiveLists};
 use super::outbound::OutboundClient;
-use super::refresher::{ListSource, Refresher, Sources};
+use super::refresher::{Refresher, Sources};
 use super::store::{DeleteOutcome, ListStore, NoData, SqliteStore, delete_row, load};
 use super::switch::{DisabledLists, ParsedSwitch, parse_switch};
 use super::{ListName, ReasonCode};
@@ -298,16 +299,15 @@ where
 /// `error`. The enabled list then has no source, which makes every refresh's
 /// summary a `warn` (R-30), so the gap does not pass as healthy.
 fn production_sources() -> Sources {
-    let projects = match OutboundClient::new() {
-        Ok(client) => Some(Arc::new(GithubProjectsSource::new(client)) as Arc<dyn ListSource>),
+    match OutboundClient::new() {
+        Ok(client) => Sources {
+            projects: Some(Arc::new(GithubProjectsSource::new(client.clone()))),
+            articles: Some(Arc::new(FeedArticlesSource::new(client))),
+        },
         Err(error) => {
-            tracing::error!(%error, "the outbound client could not be built; projects will not refresh");
-            None
+            tracing::error!(%error, "the outbound client could not be built; neither list will refresh");
+            Sources::default()
         }
-    };
-    Sources {
-        projects,
-        ..Sources::default()
     }
 }
 
