@@ -18,6 +18,7 @@ Project-specific rules. These extend the DEFAULTS.md projection.
 - **90% line + function coverage is the target, not a gate.** Measured by `just backend-coverage` and `just frontend-coverage`; no recipe or CI step fails on a coverage figure (#2750).
 - **No `rust_embed` or compile-time asset embedding.** Static files served via `ServeDir`, Docker multi-stage build copies both binary and frontend assets.
 - **Deployment: Fly.io.** `fly.toml` at project root. A merge to `main` deploys to Fly via CI (`.github/workflows/deploy.yml`: tests, then `flyctl deploy`, then health and origin-closure checks; no path filter). Auto-deploy stands (Peter, 2026-10-25).
+- **Granted P-RustDefault departure: the two freshness checks are Node, not Rust.** `frontend/scripts/check-freshness-daily.mjs` and `frontend/scripts/check-freshness-post-deploy.mjs` are Node scripts with Node tests ("Node script + tests"; Peter's grant, Frame OPC-9; P-RustDefault, which asks that a granted departure be recorded in the project's own instructions). The cost avoided is building Rust in a daily CI job. They take no npm dependency and may import only `node:timers/promises` (they import nothing today), which `deploy-workflow.test.ts` asserts. The grant covers these two scripts only.
 - **`ADMIN_PASSWORD` required at startup by design.** The app panics if unset — this is intentional, not a bug. Local dev handled via `.env` file. Never add a default.
 </guardrails>
 

@@ -627,11 +627,14 @@ describe('R-7: action pins and checkout pin, over every workflow file', () => {
 		return (a as { baseRef: string }).baseRef;
 	};
 
-	// The five jobs holding a checkout step (R-7 names four; audit.yml adds its own), each as the first step.
+	// The seven jobs holding a checkout step (R-7 names four; audit.yml and the two freshness checks
+	// add their own), each as the first step.
 	const CHECKOUT_LOCS = [
 		'audit.yml:audit:0',
 		'deploy.yml:test:0',
 		'deploy.yml:deploy:0',
+		'deploy.yml:post-deploy-freshness:0',
+		'freshness-daily.yml:freshness:0',
 		'test.yml:invisible-tables:0',
 		'test.yml:test:0',
 	];
@@ -649,12 +652,13 @@ describe('R-7: action pins and checkout pin, over every workflow file', () => {
 			expect(listed).toEqual(expect.arrayContaining(['audit.yml', 'deploy.yml', 'test.yml']));
 		});
 
-		it('control: 14 uses:, 1 in audit.yml, 7 in deploy.yml and 6 in test.yml', () => {
+		it('control: 18 uses:, 1 in audit.yml, 9 in deploy.yml, 2 in freshness-daily.yml and 6 in test.yml', () => {
 			const d = docs();
 			expect(useSites('audit.yml', d['audit.yml'])).toHaveLength(1);
-			expect(useSites('deploy.yml', d['deploy.yml'])).toHaveLength(7);
+			expect(useSites('deploy.yml', d['deploy.yml'])).toHaveLength(9);
+			expect(useSites('freshness-daily.yml', d['freshness-daily.yml'])).toHaveLength(2);
 			expect(useSites('test.yml', d['test.yml'])).toHaveLength(6);
-			expect(allSites(d)).toHaveLength(14);
+			expect(allSites(d)).toHaveLength(18);
 		});
 
 		it('control: every uses: value matches the shape regex and an exact allowlist pair', () => {
@@ -683,10 +687,10 @@ describe('R-7: action pins and checkout pin, over every workflow file', () => {
 			expect(w.version).toMatch(FLYCTL_VERSION_RE);
 		});
 
-		it('control: a checkout step in each of five jobs, and in no other', () => {
+		it('control: a checkout step in each of seven jobs, and in no other', () => {
 			const checkouts = allSites(docs()).filter((u) => u.value.startsWith('actions/checkout@'));
 			expect(checkouts.map((u) => u.loc)).toEqual(CHECKOUT_LOCS);
-			expect(new Set(checkouts.map((u) => `${u.file}:${u.job}`)).size).toBe(5);
+			expect(new Set(checkouts.map((u) => `${u.file}:${u.job}`)).size).toBe(7);
 		});
 
 		it('control: every checkout step has with deep-equal to {persist-credentials: false}, a boolean', () => {
@@ -699,7 +703,7 @@ describe('R-7: action pins and checkout pin, over every workflow file', () => {
 		});
 	});
 
-	describe('seeds: one seeded copy per seed and uses:, over all 14', () => {
+	describe('seeds: one seeded copy per seed and uses:, over all 18', () => {
 		const sites = allSites(docs());
 		const seeds: [string, string, (u: UseSite) => string][] = [
 			['the Base ref in place of the SHA', 'uses-not-sha-pinned', (u) => `${u.value.split('@')[0]}@${baseRefOf(u.value)}`],
@@ -707,8 +711,8 @@ describe('R-7: action pins and checkout pin, over every workflow file', () => {
 			['a 40-hex SHA on no allowlist pair', 'uses-not-on-pin-allowlist', (u) => `${u.value.split('@')[0]}@${UNLISTED_SHA}`],
 		];
 
-		it('there are 14 sites to seed', () => {
-			expect(sites).toHaveLength(14);
+		it('there are 18 sites to seed', () => {
+			expect(sites).toHaveLength(18);
 		});
 
 		for (const u of sites) {
@@ -788,7 +792,7 @@ describe('R-7: action pins and checkout pin, over every workflow file', () => {
 		});
 	});
 
-	describe('seeds: the checkout pin, one seeded copy per seed and checkout step, over all four', () => {
+	describe('seeds: the checkout pin, one seeded copy per seed and checkout step, over all seven', () => {
 		const withSeeds: [string, (s: Obj) => void][] = [
 			['with: removed', (s) => void delete s.with],
 			['persist-credentials: true', (s) => void ((s.with as Obj)['persist-credentials'] = true)],
@@ -907,5 +911,413 @@ describe('R-35: the dev-only guard steps', () => {
 				expect(guardViolations(d)).toEqual([`guard-keys@${loc}`]);
 			});
 		}
+	}
+});
+
+// ---- R-35, the freshness check jobs (plan D9, T13) ----
+//
+// The two check jobs run a Node script against the live site, so what they may hold and what
+// the scripts may import are controls. Allowlist polarity throughout: a job key, a step key, an
+// import specifier or a trigger the author did not enumerate is a violation. Each rule is proven
+// on seeded copies of an embedded compliant baseline, so a seed cannot fail for an unrelated
+// reason, and the real files are checked against the same function.
+//
+// What the scans establish, exactly: the scripts import nothing but `node:timers/promises` by a
+// literal specifier, pass `fetch` only `redirect` and `signal` (the scripts' own specs), and
+// contain none of the scanned tokens. A TLS or proxy setting reached by a route none of these
+// covers is not checked.
+
+const SCRIPTS_DIR = resolve(import.meta.dirname, '../../../scripts');
+const DAILY_FILE = 'freshness-daily.yml';
+
+type CheckSpec = { file: string; job: string; script: string };
+const DAILY: CheckSpec = {
+	file: DAILY_FILE,
+	job: 'freshness',
+	script: 'frontend/scripts/check-freshness-daily.mjs'
+};
+const POST_DEPLOY: CheckSpec = {
+	file: 'deploy.yml',
+	job: 'post-deploy-freshness',
+	script: 'frontend/scripts/check-freshness-post-deploy.mjs'
+};
+const CHECKS: CheckSpec[] = [DAILY, POST_DEPLOY];
+
+const CHECK_JOB_KEYS = ['name', 'runs-on', 'needs', 'permissions', 'timeout-minutes', 'steps'];
+const CHECK_STEP_KEYS = ['name', 'uses', 'with', 'run'];
+const DAILY_CRON_RE = /^\d{1,2} \d{1,2} \* \* \*$/;
+const IMPORT_ALLOWLIST = ['node:timers/promises'];
+const FORBIDDEN_TOKENS = [
+	'process.env',
+	'process[',
+	'globalThis',
+	'global',
+	'NODE_TLS',
+	'Symbol.for',
+	'getBuiltinModule',
+	'dispatcher',
+	'eval(',
+	'Function('
+];
+
+const tokenRefs = (leaf: string): boolean =>
+	expressions(leaf).some(
+		(e) =>
+			/\bsecrets\b/.test(e) ||
+			/\bgithub\s*\.\s*token\b/i.test(e) ||
+			/\bgithub\s*\[\s*(['"])token\1\s*\]/i.test(e) ||
+			/\btoJSON\s*\(\s*github\s*\)/i.test(e)
+	);
+
+/** Every R-35 check-job rule, over the daily workflow and deploy.yml. Rule ids carry a locator. */
+function checkJobViolations(docs: Record<string, Workflow>): string[] {
+	const v: string[] = [];
+	const permsOk = (p: Json | undefined) => isDeepStrictEqual(p, { contents: 'read' });
+
+	for (const c of CHECKS) {
+		const loc = `${c.file}:${c.job}`;
+		const doc = docs[c.file];
+		const job = doc ? jobs(doc)[c.job] : undefined;
+		if (!doc || !job) {
+			v.push(`job-missing@${loc}`);
+			continue;
+		}
+
+		// workflow level: no env, no secret or token reference outside the jobs
+		if ('env' in doc) v.push(`workflow-env@${c.file}`);
+		for (const [k, val] of Object.entries(doc)) {
+			if (k === 'jobs') continue;
+			const leaves: { path: string[]; text: string }[] = [];
+			walk(val as Json, [k], leaves);
+			if (leaves.some((l) => tokenRefs(l.text))) v.push(`secret-reference@${c.file}:workflow`);
+		}
+
+		// triggers, permissions
+		if (c === DAILY) {
+			const on = doc.on as Obj | undefined;
+			const keys = on && typeof on === 'object' ? Object.keys(on) : [];
+			const sched = on?.schedule;
+			if (!Array.isArray(sched) || sched.length === 0) v.push(`daily-no-schedule@${c.file}`);
+			else if (
+				!sched.every(
+					(s) =>
+						typeof s === 'object' &&
+						s !== null &&
+						!Array.isArray(s) &&
+						isDeepStrictEqual(Object.keys(s), ['cron']) &&
+						typeof s.cron === 'string' &&
+						DAILY_CRON_RE.test(s.cron)
+				)
+			)
+				v.push(`daily-cron-not-daily@${c.file}`);
+			if (!keys.includes('workflow_dispatch')) v.push(`daily-no-dispatch@${c.file}`);
+			if (keys.some((k) => k !== 'schedule' && k !== 'workflow_dispatch')) v.push(`daily-extra-trigger@${c.file}`);
+			if (!permsOk(doc.permissions as Json | undefined)) v.push(`workflow-permissions@${c.file}`);
+			if ('permissions' in job && !permsOk(job.permissions)) v.push(`job-permissions@${loc}`);
+		} else if ('permissions' in job) {
+			v.push(`post-deploy-sets-permissions@${loc}`);
+		}
+		if (c === POST_DEPLOY && job.needs !== 'deploy') v.push(`needs@${loc}`);
+
+		// no environment, no env, no secret, on the job or its steps
+		if ('environment' in job) v.push(`environment@${loc}`);
+		if ('env' in job) v.push(`env@${loc}`);
+		const steps = stepsOf(job);
+		steps.forEach((s, i) => {
+			if ('env' in s) v.push(`env@${loc}:${i}`);
+		});
+		const leaves: { path: string[]; text: string }[] = [];
+		walk(job as Json, [c.job], leaves);
+		if (leaves.some((l) => tokenRefs(l.text))) v.push(`secret-reference@${loc}`);
+
+		// the run, the time limit
+		const runs = steps.filter((s) => 'run' in s);
+		if (runs.length !== 1) v.push(`run-count@${loc}=${runs.length}`);
+		steps.forEach((s, i) => {
+			if ('run' in s && s.run !== `node ${c.script}`) v.push(`run-not-exact@${loc}:${i}`);
+		});
+		if (job['timeout-minutes'] !== 10) v.push(`timeout-not-10@${loc}`);
+
+		// key allowlists
+		for (const k of Object.keys(job)) if (!CHECK_JOB_KEYS.includes(k)) v.push(`job-key:${k}@${loc}`);
+		steps.forEach((s, i) => {
+			for (const k of Object.keys(s)) if (!CHECK_STEP_KEYS.includes(k)) v.push(`step-key:${k}@${loc}:${i}`);
+		});
+	}
+	return [...new Set(v)];
+}
+
+/** Imports, static or dynamic: literal specifiers only, and only from the allowlist. */
+function importViolations(src: string): string[] {
+	const v: string[] = [];
+	const literal = /^\s*(['"])([^'"`\\]*)\1\s*$/;
+	const judge = (spec: string) => {
+		if (!IMPORT_ALLOWLIST.includes(spec)) v.push(`import-not-allowed:${spec}`);
+	};
+	for (const m of src.matchAll(/\bimport\s*\(([^)]*)\)/g)) {
+		const l = literal.exec(m[1]);
+		if (!l) v.push('import-non-literal');
+		else judge(l[2]);
+	}
+	for (const m of src.matchAll(/\bimport\s+(?:[\w*${}\s,]+?\s+from\s+)?(['"])([^'"]*)\1/g)) judge(m[2]);
+	for (const m of src.matchAll(/\bexport\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s+from\s+(['"])([^'"]*)\1/g)) judge(m[2]);
+	if (/\brequire\s*\(/.test(src)) v.push('import-non-literal');
+	return [...new Set(v)];
+}
+
+const tokenViolations = (src: string): string[] =>
+	FORBIDDEN_TOKENS.filter((t) => src.includes(t)).map((t) => `token:${t}`);
+
+const readScript = (script: string): string => {
+	try {
+		return readFileSync(resolve(SCRIPTS_DIR, script.replace('frontend/scripts/', '')), 'utf8');
+	} catch {
+		return '';
+	}
+};
+
+const checkoutStep = (): Step => ({
+	uses: pair(ACTIONS.checkout),
+	with: { 'persist-credentials': false }
+});
+const nodeStep = (): Step => ({ uses: pair(ACTIONS.setupNode), with: { 'node-version': 22 } });
+
+/** A compliant pair of workflow documents, independent of the real files. */
+function baselineDocs(): Record<string, Workflow> {
+	return {
+		[DAILY_FILE]: {
+			name: 'Freshness (daily)',
+			on: { schedule: [{ cron: '17 6 * * *' }], workflow_dispatch: null },
+			permissions: { contents: 'read' },
+			jobs: {
+				[DAILY.job]: {
+					name: 'Daily list freshness check',
+					'runs-on': 'ubuntu-latest',
+					'timeout-minutes': 10,
+					steps: [checkoutStep(), nodeStep(), { name: 'Check freshness', run: `node ${DAILY.script}` }]
+				}
+			}
+		},
+		'deploy.yml': {
+			name: 'Deploy',
+			on: { push: { branches: ['main'] } },
+			permissions: { contents: 'read' },
+			jobs: {
+				deploy: { name: 'Deploy to Fly.io', 'runs-on': 'ubuntu-latest', steps: [] },
+				[POST_DEPLOY.job]: {
+					name: 'Post-deploy list freshness check',
+					'runs-on': 'ubuntu-latest',
+					needs: 'deploy',
+					'timeout-minutes': 10,
+					steps: [checkoutStep(), nodeStep(), { name: 'Check freshness', run: `node ${POST_DEPLOY.script}` }]
+				}
+			}
+		}
+	};
+}
+
+describe('R-35: the freshness check jobs, the real files', () => {
+	it('the real workflows raise no check-job violation', () => {
+		expect(checkJobViolations(loadAll())).toEqual([]);
+	});
+
+	it('control: the compliant baseline raises none', () => {
+		expect(checkJobViolations(baselineDocs())).toEqual([]);
+	});
+
+	it('control: the checker reports a violation on a known-bad input (no workflows)', () => {
+		expect(checkJobViolations({})).toEqual([
+			`job-missing@${DAILY.file}:${DAILY.job}`,
+			`job-missing@${POST_DEPLOY.file}:${POST_DEPLOY.job}`
+		]);
+	});
+
+	it('the daily workflow file exists and the post-deploy job sits in deploy.yml', () => {
+		const d = loadAll();
+		expect(Object.keys(d)).toContain(DAILY_FILE);
+		expect(Object.keys(jobs(d['deploy.yml']))).toContain(POST_DEPLOY.job);
+	});
+
+	it('each check script exists', () => {
+		for (const c of CHECKS) expect(readScript(c.script), c.script).not.toBe('');
+	});
+});
+
+describe('R-35: the freshness check jobs, seeded violations', () => {
+	type Seed = [name: string, rule: string, mutate: (d: Record<string, Workflow>) => void];
+	const dailyJob = (d: Record<string, Workflow>) => jobs(d[DAILY_FILE])[DAILY.job];
+	const postJob = (d: Record<string, Workflow>) => jobs(d['deploy.yml'])[POST_DEPLOY.job];
+	const runStep = (j: Obj) => stepsOf(j).find((s) => 'run' in s) as Step;
+	const dailyLoc = `${DAILY.file}:${DAILY.job}`;
+	const postLoc = `${POST_DEPLOY.file}:${POST_DEPLOY.job}`;
+	const dailyOn = (d: Record<string, Workflow>) => d[DAILY_FILE].on as Obj;
+
+	const seeds: Seed[] = [
+		// the daily workflow's triggers
+		['daily: no schedule', `daily-no-schedule@${DAILY_FILE}`, (d) => void delete dailyOn(d).schedule],
+		['daily: empty schedule list', `daily-no-schedule@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [])],
+		['daily: a schedule with no cron', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{}])],
+		['daily: a cron every five minutes', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: '*/5 * * * *' }])],
+		['daily: an hourly cron', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: '17 * * * *' }])],
+		['daily: a weekly cron', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: '17 6 * * 1' }])],
+		['daily: a non-string cron', `daily-cron-not-daily@${DAILY_FILE}`, (d) => void (dailyOn(d).schedule = [{ cron: 5 }])],
+		['daily: no workflow_dispatch', `daily-no-dispatch@${DAILY_FILE}`, (d) => void delete dailyOn(d).workflow_dispatch],
+		['daily: a push trigger', `daily-extra-trigger@${DAILY_FILE}`, (d) => void (dailyOn(d).push = null)],
+		['daily: a pull_request_target trigger', `daily-extra-trigger@${DAILY_FILE}`, (d) => void (dailyOn(d).pull_request_target = null)],
+		// the daily workflow's permissions
+		['daily: workflow permissions broadened to write-all', `workflow-permissions@${DAILY_FILE}`, (d) => void (d[DAILY_FILE].permissions = 'write-all')],
+		['daily: workflow permissions gain a second key', `workflow-permissions@${DAILY_FILE}`, (d) => void ((d[DAILY_FILE].permissions as Obj)['id-token'] = 'write')],
+		['daily: workflow contents: write', `workflow-permissions@${DAILY_FILE}`, (d) => void ((d[DAILY_FILE].permissions as Obj).contents = 'write')],
+		['daily: workflow permissions removed', `workflow-permissions@${DAILY_FILE}`, (d) => void delete d[DAILY_FILE].permissions],
+		['daily: workflow permissions empty', `workflow-permissions@${DAILY_FILE}`, (d) => void (d[DAILY_FILE].permissions = {})],
+		['daily: job permissions contents: write', `job-permissions@${dailyLoc}`, (d) => void (dailyJob(d).permissions = { contents: 'write' })],
+		['daily: job permissions gain a second key', `job-permissions@${dailyLoc}`, (d) => void (dailyJob(d).permissions = { contents: 'read', actions: 'write' })],
+		// the post-deploy job
+		['post-deploy: the job sets permissions', `post-deploy-sets-permissions@${postLoc}`, (d) => void (postJob(d).permissions = { contents: 'read' })],
+		['post-deploy: needs removed', `needs@${postLoc}`, (d) => void delete postJob(d).needs],
+		['post-deploy: needs test', `needs@${postLoc}`, (d) => void (postJob(d).needs = 'test')],
+		['post-deploy: needs a list', `needs@${postLoc}`, (d) => void (postJob(d).needs = ['deploy'])]
+	];
+
+	const perJob: [string, (d: Record<string, Workflow>) => Obj, string, CheckSpec, CheckSpec][] = [
+		[DAILY_FILE, dailyJob, dailyLoc, DAILY, POST_DEPLOY],
+		['deploy.yml', postJob, postLoc, POST_DEPLOY, DAILY]
+	];
+	for (const [file, jobOf, loc, self, other] of perJob) {
+		const tag = file === DAILY_FILE ? 'daily' : 'post-deploy';
+		const jobSeeds: Seed[] = [
+			// environment, env, secrets
+			[`${tag}: an environment`, `environment@${loc}`, (d) => void (jobOf(d).environment = 'production')],
+			[`${tag}: job env`, `env@${loc}`, (d) => void (jobOf(d).env = { X: '1' })],
+			[`${tag}: step env`, `env@${loc}:2`, (d) => void (runStep(jobOf(d)).env = { X: '1' })],
+			[`${tag}: step env on the checkout step`, `env@${loc}:0`, (d) => void (stepsOf(jobOf(d))[0].env = { X: '1' })],
+			[`${tag}: workflow-level env`, `workflow-env@${file}`, (d) => void (d[file].env = { X: '1' })],
+			[`${tag}: a secret in a with value`, `secret-reference@${loc}`, (d) => void ((stepsOf(jobOf(d))[0].with as Obj).token = '${{ secrets.GITHUB_TOKEN }}')],
+			[`${tag}: a secret in the run`, `secret-reference@${loc}`, (d) => void (runStep(jobOf(d)).run = 'echo ${{ secrets.FLY_API_TOKEN }}')],
+			[`${tag}: toJSON(secrets)`, `secret-reference@${loc}`, (d) => void ((stepsOf(jobOf(d))[1].with as Obj).x = '${{ toJSON(secrets) }}')],
+			[`${tag}: secrets['X']`, `secret-reference@${loc}`, (d) => void ((stepsOf(jobOf(d))[1].with as Obj).x = "${{ secrets['X'] }}")],
+			[`${tag}: github.token`, `secret-reference@${loc}`, (d) => void ((stepsOf(jobOf(d))[1].with as Obj).x = '${{ github.token }}')],
+			[`${tag}: toJSON(github)`, `secret-reference@${loc}`, (d) => void ((stepsOf(jobOf(d))[1].with as Obj).x = '${{ toJSON(github) }}')],
+			[`${tag}: a secret at workflow level`, `secret-reference@${file}:workflow`, (d) => void (d[file].name = '${{ secrets.X }}')],
+			// the run, exactly
+			[`${tag}: another script`, `run-not-exact@${loc}:2`, (d) => void (runStep(jobOf(d)).run = 'node frontend/scripts/other.mjs')],
+			[`${tag}: the other check's script`, `run-not-exact@${loc}:2`, (d) => void (runStep(jobOf(d)).run = `node ${other.script}`)],
+			[`${tag}: run with || true`, `run-not-exact@${loc}:2`, (d) => void (runStep(jobOf(d)).run = `node ${self.script} || true`)],
+			[`${tag}: run with an argument`, `run-not-exact@${loc}:2`, (d) => void (runStep(jobOf(d)).run = `node ${self.script} --lenient`)],
+			[`${tag}: run with a second command`, `run-not-exact@${loc}:2`, (d) => void (runStep(jobOf(d)).run = `node ${self.script}\ncurl https://example.test`)],
+			[`${tag}: a second run step`, `run-count@${loc}=2`, (d) => void stepsOf(jobOf(d)).push({ name: 'extra', run: 'echo hi' })],
+			[`${tag}: the run step removed`, `run-count@${loc}=0`, (d) => void stepsOf(jobOf(d)).splice(2, 1)],
+			// the time limit
+			[`${tag}: timeout-minutes removed`, `timeout-not-10@${loc}`, (d) => void delete jobOf(d)['timeout-minutes']],
+			[`${tag}: timeout-minutes 11`, `timeout-not-10@${loc}`, (d) => void (jobOf(d)['timeout-minutes'] = 11)],
+			[`${tag}: timeout-minutes "10" as a string`, `timeout-not-10@${loc}`, (d) => void (jobOf(d)['timeout-minutes'] = '10')]
+		];
+		for (const k of [
+			'continue-on-error',
+			'if',
+			'shell',
+			'working-directory',
+			'environment',
+			'container',
+			'services',
+			'strategy',
+			'defaults',
+			'outputs',
+			'concurrency',
+			'uses',
+			'secrets',
+			'env'
+		])
+			jobSeeds.push([`${tag}: job key ${k}`, `job-key:${k}@${loc}`, (d) => void (jobOf(d)[k] = k === 'if' ? 'always()' : 'x')]);
+		for (const k of ['continue-on-error', 'if', 'shell', 'working-directory', 'env', 'id', 'timeout-minutes'])
+			for (const i of [0, 1, 2])
+				jobSeeds.push([
+					`${tag}: step ${i} key ${k}`,
+					`step-key:${k}@${loc}:${i}`,
+					(d) => void (stepsOf(jobOf(d))[i][k] = k === 'if' ? 'always()' : 'x')
+				]);
+		seeds.push(...jobSeeds);
+	}
+
+	for (const [name, rule, mutate] of seeds) {
+		it(`seed: ${name}`, () => {
+			const d = clone(baselineDocs());
+			mutate(d);
+			expect(checkJobViolations(d)).toContain(rule);
+		});
+	}
+
+	it('the key seeds cover continue-on-error, if, shell and working-directory at job and step level, for each job', () => {
+		for (const k of ['continue-on-error', 'if', 'shell', 'working-directory']) {
+			for (const loc of [dailyLoc, postLoc]) {
+				expect(seeds.some((s) => s[1] === `job-key:${k}@${loc}`), `job ${k} ${loc}`).toBe(true);
+				expect(seeds.some((s) => s[1].startsWith(`step-key:${k}@${loc}:`)), `step ${k} ${loc}`).toBe(true);
+			}
+		}
+	});
+});
+
+describe('R-35: the check scripts, imports and forbidden tokens', () => {
+	const SEED_SOURCE = "import { setTimeout as sleep } from 'node:timers/promises';\nconst x = 1;\n";
+
+	it('control: the allowlisted import by a literal specifier raises nothing', () => {
+		expect(importViolations(SEED_SOURCE)).toEqual([]);
+		expect(importViolations("const m = await import('node:timers/promises');")).toEqual([]);
+		expect(importViolations('const x = 1;')).toEqual([]);
+	});
+
+	it.each(CHECKS.map((c) => [c.script]))('the real %s imports nothing outside the allowlist', (script) => {
+		const src = readScript(script);
+		expect(src).not.toBe('');
+		expect(importViolations(src)).toEqual([]);
+	});
+
+	const importSeeds: [string, string, string][] = [
+		['a static import of another builtin', "import fs from 'node:fs';", 'import-not-allowed:node:fs'],
+		['a static import of the bare timers/promises name', "import { setTimeout } from 'timers/promises';", 'import-not-allowed:timers/promises'],
+		['a side-effect import', "import 'node:fs';", 'import-not-allowed:node:fs'],
+		['a relative import', "import x from './other.mjs';", 'import-not-allowed:./other.mjs'],
+		['a package import', "import x from 'left-pad';", 'import-not-allowed:left-pad'],
+		['a namespace import', "import * as os from 'node:os';", 'import-not-allowed:node:os'],
+		['a re-export', "export * from 'node:fs';", 'import-not-allowed:node:fs'],
+		['a named re-export', "export { readFile } from 'node:fs/promises';", 'import-not-allowed:node:fs/promises'],
+		['a dynamic import of another builtin', "const m = await import('node:fs');", 'import-not-allowed:node:fs'],
+		['a dynamic import by a variable', 'const m = await import(spec);', 'import-non-literal'],
+		['a dynamic import by a concatenation', "const m = await import('node:' + 'fs');", 'import-non-literal'],
+		['a dynamic import by a template literal', 'const m = await import(`node:fs`);', 'import-non-literal'],
+		['a dynamic import by a call', 'const m = await import(pick());', 'import-non-literal'],
+		['a require call', "const fs = require('node:fs');", 'import-non-literal']
+	];
+	for (const [name, line, rule] of importSeeds) {
+		it(`seed: ${name}`, () => {
+			expect(importViolations(`${SEED_SOURCE}${line}\n`)).toContain(rule);
+		});
+	}
+
+	it.each(CHECKS.map((c) => [c.script]))('the real %s contains none of the forbidden tokens', (script) => {
+		const src = readScript(script);
+		expect(src).not.toBe('');
+		expect(tokenViolations(src)).toEqual([]);
+	});
+
+	const tokenSeeds: Record<string, string> = {
+		'process.env': 'const a = process.env.X;',
+		'process[': "const a = process['env'];",
+		globalThis: 'const a = globalThis.fetch;',
+		global: 'const a = global.fetch;',
+		NODE_TLS: "const a = 'NODE_TLS_REJECT_UNAUTHORIZED';",
+		'Symbol.for': "const a = Symbol.for('x');",
+		getBuiltinModule: "const a = process.getBuiltinModule('node:fs');",
+		dispatcher: 'const a = { dispatcher: x };',
+		'eval(': "const a = eval('1');",
+		'Function(': "const a = Function('return 1')();"
+	};
+	it('the seed table has one seed per forbidden token', () => {
+		expect(Object.keys(tokenSeeds).sort()).toEqual([...FORBIDDEN_TOKENS].sort());
+	});
+	for (const token of FORBIDDEN_TOKENS) {
+		it(`seed: the token ${token}`, () => {
+			expect(tokenViolations(`${SEED_SOURCE}${tokenSeeds[token]}\n`)).toContain(`token:${token}`);
+		});
 	}
 });
