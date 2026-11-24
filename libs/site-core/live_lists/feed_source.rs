@@ -13,7 +13,7 @@ use time::OffsetDateTime;
 
 use super::ReasonCode;
 use super::articles::{LinkRule, TextRule};
-use super::feed::{FeedRule, Field, PostRule, parse_feed};
+use super::feed::{FeedRule, Field, PostRule, SkippedItem, parse_feed};
 use super::outbound::{FetchFailure, Fetched, OutboundClient, Target};
 use super::refresher::{FetchReport, ListSource, SkippedPost};
 
@@ -53,24 +53,27 @@ pub(crate) fn feed_report(
     };
     let requests = vec![fetched.note];
     match parse_feed(&fetched.body, now) {
-        Err(rule) => FetchReport {
-            document: Err(reason_of_feed(rule)),
-            skipped: Vec::new(),
+        Err(failure) => FetchReport {
+            document: Err(reason_of_feed(failure.rule)),
+            skipped: skipped_posts(failure.skipped),
             requests,
         },
         Ok(outcome) => FetchReport {
             document: Ok(outcome.document),
-            skipped: outcome
-                .skipped
-                .into_iter()
-                .map(|s| SkippedPost {
-                    index: s.index,
-                    reason: reason_of_post(s.rule),
-                })
-                .collect(),
+            skipped: skipped_posts(outcome.skipped),
             requests,
         },
     }
+}
+
+fn skipped_posts(skipped: Vec<SkippedItem>) -> Vec<SkippedPost> {
+    skipped
+        .into_iter()
+        .map(|s| SkippedPost {
+            index: s.index,
+            reason: reason_of_post(s.rule),
+        })
+        .collect()
 }
 
 /// R-30: the code a failed feed logs. A body over the cap is R-4's code.
@@ -136,6 +139,7 @@ pub(crate) fn reason_of_post(rule: PostRule) -> ReasonCode {
         PostRule::Link(LinkRule::Path) => ReasonCode::PostLinkPath,
         PostRule::Link(LinkRule::NotCanonical) => ReasonCode::PostLinkNotCanonical,
         PostRule::PubDate => ReasonCode::PostPubDate,
+        PostRule::PubDateTooLong => ReasonCode::PostPubDateTooLong,
         PostRule::Validator => ReasonCode::PostValidatorRefused,
     }
 }
