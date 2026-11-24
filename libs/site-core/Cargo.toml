@@ -30,9 +30,19 @@ mime_guess = { workspace = true }
 time = { workspace = true, features = ["parsing", "formatting", "macros"] }
 url = { workspace = true }
 jiff = { workspace = true, features = ["std"] }
+# R-1 to R-5: the one outbound client. Same version and TLS feature as rig-core's, so the
+# lockfile gains no package. No decompression feature: R-3 forbids decoding a body.
+reqwest = { version = "0.13.2", default-features = false, features = ["rustls"] }
+# The type a certificate-class error is recognised by (R-2, R-30). Already in Cargo.lock.
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 axum-test = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
 mockito = "1"
+# R-5 TLS test harness. rcgen is held to a dev-dependency by scripts/check-dev-only.sh:
+# default features off, the aws-lc-rs provider reqwest already builds, no `pem`, keys in
+# memory only. tokio-rustls serves the local TLS server and is already in Cargo.lock.
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }

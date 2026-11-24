@@ -816,3 +816,96 @@ describe('R-7: action pins and checkout pin, over every workflow file', () => {
 		});
 	});
 });
+
+// ---- R-35, the dev-only guard steps (plan D9, D18) ----
+//
+// deny.toml ignores an advisory by ID across the whole graph, which is sound only while the
+// package stays out of the shipped graph; rcgen is held to dev-only the same way. Each guard is
+// one step that runs scripts/check-dev-only.sh with one package, and nothing may soften it: a step
+// with `continue-on-error`, `if`, `shell` or `working-directory` is a guard that can be skipped.
+
+type GuardSpec = { file: string; job: string; name: string; run: string };
+
+const GUARDS: GuardSpec[] = [
+	{ file: 'test.yml', job: 'test', name: 'Check chrono stays dev-only', run: 'scripts/check-dev-only.sh chrono' },
+	{ file: 'test.yml', job: 'test', name: 'Check rcgen stays dev-only', run: 'scripts/check-dev-only.sh rcgen' },
+	{ file: 'deploy.yml', job: 'test', name: 'Check rcgen stays dev-only', run: 'scripts/check-dev-only.sh rcgen' },
+];
+
+/** A guard step has exactly the keys `name` and `run`; any other key is a violation. */
+function guardViolations(docs: Record<string, Workflow>): string[] {
+	const v: string[] = [];
+	for (const g of GUARDS) {
+		const loc = `${g.file}:${g.job}:${g.name}`;
+		const doc = docs[g.file];
+		const matches = stepsOf(doc ? jobs(doc)[g.job] : undefined).filter((s) => s.name === g.name);
+		if (matches.length !== 1) {
+			v.push(`guard-step-count@${loc}=${matches.length}`);
+			continue;
+		}
+		const step = matches[0];
+		if (step.run !== g.run) v.push(`guard-run@${loc}`);
+		if (!isDeepStrictEqual(Object.keys(step).sort(), ['name', 'run'])) v.push(`guard-keys@${loc}`);
+	}
+	return v;
+}
+
+describe('R-35: the dev-only guard steps', () => {
+	const docs = () => clone(loadAll());
+	const guardIn = (d: Record<string, Workflow>, g: GuardSpec): Step =>
+		stepsOf(jobs(d[g.file])[g.job]).find((s) => s.name === g.name) as Step;
+
+	it('the real workflows hold every guard step, exactly', () => {
+		expect(guardViolations(docs())).toEqual([]);
+	});
+
+	for (const g of GUARDS) {
+		const loc = `${g.file}:${g.job}:${g.name}`;
+		it(`the real ${g.file} ${g.job} job has "${g.name}" running exactly ${g.run}`, () => {
+			const step = guardIn(docs(), g);
+			expect(step.run).toBe(g.run);
+			expect(Object.keys(step).sort()).toEqual(['name', 'run']);
+		});
+
+		it(`seed: ${loc} removed`, () => {
+			const d = docs();
+			const steps = stepsOf(jobs(d[g.file])[g.job]);
+			steps.splice(steps.indexOf(guardIn(d, g)), 1);
+			expect(guardViolations(d)).toEqual([`guard-step-count@${loc}=0`]);
+		});
+
+		it(`seed: ${loc} renamed`, () => {
+			const d = docs();
+			guardIn(d, g).name = `${g.name} (renamed)`;
+			expect(guardViolations(d)).toEqual([`guard-step-count@${loc}=0`]);
+		});
+
+		it(`seed: ${loc} with another run`, () => {
+			const d = docs();
+			guardIn(d, g).run = `${g.run} || true`;
+			expect(guardViolations(d)).toEqual([`guard-run@${loc}`]);
+		});
+
+		it(`seed: ${loc} runs the script for another package`, () => {
+			const d = docs();
+			guardIn(d, g).run = g.run.replace(/ \w+$/, ' serde');
+			expect(guardViolations(d)).toEqual([`guard-run@${loc}`]);
+		});
+
+		const forbidden: [string, Json][] = [
+			['continue-on-error', true],
+			['if', '${{ always() }}'],
+			['shell', 'bash'],
+			['working-directory', 'frontend'],
+			['env', { X: '1' }],
+			['with', { x: '1' }],
+		];
+		for (const [key, value] of forbidden) {
+			it(`seed: ${loc} gains the key ${key}`, () => {
+				const d = docs();
+				guardIn(d, g)[key] = value;
+				expect(guardViolations(d)).toEqual([`guard-keys@${loc}`]);
+			});
+		}
+	}
+});
