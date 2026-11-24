@@ -1024,19 +1024,36 @@ mod tests {
     // ---- through the refresher: the held copy survives a rejected fetch ----
 
     /// Poll until the refresher's summary line is logged, on the real clock.
-    async fn wait_for_summary(log: &LogCapture) {
-        for _ in 0..400 {
+    async fn wait_for_summary(log: &LogCapture, within: Duration) {
+        let began = tokio::time::Instant::now();
+        while began.elapsed() < within {
             if !log.lines_containing("live lists refresh").is_empty() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("no refresh summary within 4 s");
+        panic!("no refresh summary within {within:?}");
     }
 
-    async fn started(
+    async fn started(env: &Env, gh: Gh) -> StartedRig {
+        started_within(env, gh, Duration::from_secs(4)).await
+    }
+
+    type StartedRig = (
+        crate::live_lists::harness::Running,
+        LogCapture,
+        tracing::subscriber::DefaultGuard,
+        Gh,
+    );
+
+    async fn started_within(env: &Env, gh: Gh, within: Duration) -> StartedRig {
+        started_inner(env, gh, within).await
+    }
+
+    async fn started_inner(
         env: &Env,
         gh: Gh,
+        within: Duration,
     ) -> (
         crate::live_lists::harness::Running,
         LogCapture,
@@ -1053,7 +1070,7 @@ mod tests {
             articles: Some(FakeSource::answering(&articles_doc(T0))),
         };
         let running = launch(env.inputs(None, sources)).await;
-        wait_for_summary(&log).await;
+        wait_for_summary(&log, within).await;
         (running, log, guard, gh)
     }
 
@@ -1160,27 +1177,44 @@ mod tests {
 
     // ---- R-4: the refresh bound, through the production client ----
 
+    /// The production bound, 120 s, on the real clock (R-4: the production
+    /// limits are not shortened; R-5: only the trust root, the name map and
+    /// the clock differ). GitHub answers each page of the org after 18 s, under
+    /// the 20 s total timeout, with `rel="next"` on every page. Six pages are
+    /// done at 108 s; the seventh would finish at 126 s, so it is in flight
+    /// when the 120 s bound passes. Takes about two minutes.
+    ///
+    /// Elapsed must be at least 120 s (a shorter bound fails) and under 125 s
+    /// (a bound of 126 s or more lets page 7 finish and the list succeed). The
+    /// summary holds exactly the six completed requests: a cancelled fetch
+    /// keeps the requests it finished (R-30).
     #[tokio::test]
-    async fn r4_a_list_still_in_flight_at_the_refresh_bound_fails_and_the_finished_list_is_kept() {
-        use crate::live_lists::refresher::set_bound_for_test;
-        // Given a short bound, a held projects copy, and GitHub answering
-        // page 1 at once and then never answering page 2
-        set_bound_for_test(Duration::from_millis(400));
+    async fn r4_a_list_still_in_flight_at_the_120s_refresh_bound_fails_and_the_finished_list_is_kept()
+     {
         let env = Env::new();
         env.seed(ListName::Projects, &projects_doc(HELD_AT));
         env.seed(ListName::Articles, &articles_doc(HELD_AT));
-        let mut stalled = Reply::ok(body(&json!([])));
-        stalled.head_delay = Duration::from_secs(3600);
-        let routes = vec![
-            (
-                ORG.into(),
-                ok(&json!([repo("mnemra", "alpha", json!("a"))]))
-                    .with_header("Link", r#"<https://x/>; rel="next""#),
-            ),
-            (page_target(ORG, 2), stalled),
-        ];
-        let (running, log, _guard, _gh) = started(&env, gh(routes).await).await;
-        // Then the articles list, which finished, advanced; the projects list
+        let routes: Vec<(String, Reply)> = (1..=7u8)
+            .map(|n| {
+                let mut page = ok(&json!([repo("mnemra", &format!("repo-{n}"), json!("d"))]))
+                    .with_header("Link", r#"<https://x/>; rel="next""#);
+                page.head_delay = Duration::from_secs(18);
+                (page_target(ORG, n), page)
+            })
+            .collect();
+        let began = tokio::time::Instant::now();
+        let (running, log, _guard, _gh) =
+            started_within(&env, gh(routes).await, Duration::from_secs(140)).await;
+        let took = began.elapsed();
+        assert!(
+            took >= Duration::from_secs(120),
+            "the bound passed early, at {took:?}"
+        );
+        assert!(
+            took < Duration::from_secs(125),
+            "the bound passed late, at {took:?}"
+        );
+        // The articles list, which finished, advanced; the projects list
         // failed at the bound and kept its copy and time
         let fresh = running
             .get_json(&env, "/api/lists/freshness", StatusCode::OK)
@@ -1190,9 +1224,12 @@ mod tests {
         let line = log.one_line("live list refresh failed");
         assert!(line.contains(r#"reason="refresh_bound_passed""#), "{line}");
         assert!(line.contains(r#"list="projects""#), "{line}");
-        // and the page already fetched is in the summary: a cancelled fetch
-        // does not lose the requests it completed (R-30)
         let summary = log.one_line("live lists refresh");
-        assert!(summary.contains("projects:200"), "{summary}");
+        let six = vec!["projects:200"; 6].join(",");
+        assert!(summary.contains(&six), "{summary}");
+        assert!(
+            !summary.contains(&format!("{six},projects:200")),
+            "{summary}"
+        );
     }
 }

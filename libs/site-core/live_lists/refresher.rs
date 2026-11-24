@@ -29,19 +29,6 @@ pub const REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// fetch for that refresh.
 pub const REFRESH_BOUND: Duration = Duration::from_secs(120);
 
-#[cfg(test)]
-thread_local! {
-    static BOUND_FOR_TEST: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
-}
-
-/// Make this thread's refreshes use `bound` as the refresh bound. Test-only,
-/// per thread, so no test affects another; the refresher task of a
-/// current-thread test runtime runs on the test's thread.
-#[cfg(test)]
-pub(crate) fn set_bound_for_test(bound: Duration) {
-    BOUND_FOR_TEST.with(|b| b.set(Some(bound)));
-}
-
 /// A post a source rejected, by its item index and reason code only (R-30).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SkippedPost {
@@ -217,7 +204,7 @@ impl Refresher {
         //
         // Each fetch runs in a task of its own, so a source that panics fails
         // only its list (R-13): the panic ends that task, not this one.
-        let bound = refresh_bound();
+        let bound = REFRESH_BOUND;
         let fetch_of = |list: ListName| {
             let began = tokio::time::Instant::now();
             let task = tokio::spawn(fetch(
@@ -321,15 +308,6 @@ async fn fetch(
         Err(_elapsed) => Fetch::BoundPassed(source.cancelled_requests()),
     };
     (fetched, began.elapsed())
-}
-
-/// The bound a refresh uses: [`REFRESH_BOUND`], except in a test that set one.
-fn refresh_bound() -> Duration {
-    #[cfg(test)]
-    if let Some(bound) = BOUND_FOR_TEST.with(std::cell::Cell::get) {
-        return bound;
-    }
-    REFRESH_BOUND
 }
 
 /// What a list's fetch produced, before commit.
