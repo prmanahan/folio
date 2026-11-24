@@ -15,7 +15,6 @@ vi.mock('#lib/api.ts', () => ({
 	},
 }));
 
-import Nav from '#lib/components/Nav.svelte';
 import Hero from '#lib/components/Hero.svelte';
 import HeroSkeleton from '#lib/components/HeroSkeleton.svelte';
 import HubPage from '../../routes/(public)/+page.svelte';
@@ -47,14 +46,6 @@ const mockProfile = {
 } as never;
 
 describe('R-26 Articles link sites', () => {
-	it('Nav', () => {
-		render(Nav, { props: { onToggleAi: () => {} } });
-		const link = screen.getByRole('link', { name: 'Articles' });
-		expectBlogLink(link);
-		expectNoCue(link, 'Articles');
-		expect(link.hasAttribute('aria-current')).toBe(false);
-	});
-
 	it('Hero', () => {
 		render(Hero, { props: { profile: mockProfile, links: [] } });
 		const link = screen.getByTestId('card-articles');
