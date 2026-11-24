@@ -1,12 +1,16 @@
-//! A valid list for integration tests that build an `AppState` and do not
-//! care what is in it. The in-crate copy lives in `libs/site-core/test_projects.rs`.
+//! Lists for integration tests that build an `AppState` or a prompt and do
+//! not care what is in them. The in-crate copy lives in `libs/site-core/test_projects.rs`.
+//!
+//! An integration test cannot write a held copy (the setters are crate-private,
+//! R-17), so these hold no data yet; a test that needs held lists is an in-crate test.
 
-use std::sync::Arc;
+use site_core::live_lists::LiveLists;
+use site_core::live_lists::held::Snapshot;
 
-use site_core::projects_list::{self, ProjectsList};
+pub fn lists() -> LiveLists {
+    LiveLists::new("2026-11-13T11:00:00.000Z".to_string())
+}
 
-const MINIMAL: &str = r#"{"fetched_at":"2026-11-13T12:00:00.000Z","groups":[{"owner":"mnemra","repos":[{"name":"alpha","description":""}]},{"owner":"prmanahan","repos":[{"name":"beta","description":""}]}]}"#;
-
-pub fn projects() -> Arc<ProjectsList> {
-    Arc::new(projects_list::parse(MINIMAL).expect("minimal test list is valid"))
+pub fn snapshot() -> Snapshot {
+    Snapshot::default()
 }

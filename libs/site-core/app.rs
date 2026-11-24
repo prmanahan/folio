@@ -248,7 +248,7 @@ mod tests {
             rig_client: None,
             trusted_ip_header: None,
             page_hit_salt: "test-salt".to_string(),
-            projects: crate::test_projects::projects(),
+            lists: crate::test_projects::lists(),
         });
         let app = build_app(
             state,

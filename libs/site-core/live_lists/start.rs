@@ -228,7 +228,7 @@ where
         rig_client,
         trusted_ip_header: config.trusted_ip_header.clone(),
         page_hit_salt: config.page_hit_salt.clone(),
-        projects,
+        lists: live_lists.clone(),
     });
 
     // LLM-audit Nit / R6: CORS_ORIGIN fail-loud. The old silent

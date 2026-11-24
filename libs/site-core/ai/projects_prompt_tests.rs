@@ -1,18 +1,10 @@
 //! R-12 (#4726): the prompt's projects section is built from the loaded list
 //! only. Written for plan T6 (anchor D8), before the go-live code.
 //!
-//! SEAM (the spec names none; this file assumed it and T8 adopted it): the two public prompt
-//! builders in `site_core::ai::context` take the loaded list as a second argument:
-//!
-//! ```text
-//! build_system_prompt(conn: &Connection, list: &ProjectsList) -> Result<String, AppError>
-//! build_fit_prompt(conn: &Connection, list: &ProjectsList) -> Result<String, AppError>
-//! ```
-//!
-//! with `ProjectsList` from T4's `site_core::projects_list::load`. Both builders have this
-//! signature now, so the file compiles and runs. If the list is plumbed differently later (a field
-//! on a state, a different argument type), only the two call sites in `chat_prompt` and
-//! `fit_prompt` below change.
+//! Moved in-crate by plan T11 (D5): an integration test cannot write a held
+//! copy (R-17), and the builders now take a `Snapshot` of the held lists.
+//! The expected file is loaded as the projects copy through the held copy's
+//! own validator.
 //!
 //! Sanctioned reads, declared: `ai/prompt_templates.rs` for the security
 //! block's heading line (`## SECURITY`, ended by the next `## ` heading), and `ai/context.rs` for the builder
@@ -28,11 +20,13 @@
 //!
 //! Scenario names are `<chat|fit>::r12_<behaviour>`; one scenario per test.
 
-mod common;
-
 use rusqlite::Connection;
-use site_core::ai::context::{build_fit_prompt, build_system_prompt};
-use site_core::projects_list::{self, ProjectsList};
+
+use crate::ai::context::{build_fit_prompt, build_system_prompt};
+use crate::live_lists::held::{Held, Snapshot};
+use crate::live_lists::LiveLists;
+use crate::projects_list::ProjectsList;
+use std::sync::Arc;
 
 const EXPECTED_FILE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -69,14 +63,28 @@ fn expected_repos() -> Vec<Expected> {
     out
 }
 
-fn loaded_list() -> ProjectsList {
-    projects_list::load(std::path::Path::new(EXPECTED_FILE)).expect("expected file loads")
+/// A snapshot holding R-8's expected file as the projects copy. Built through
+/// the held copy's own validator, as a fetch's document is.
+fn loaded_snapshot() -> Snapshot {
+    let text = std::fs::read_to_string(EXPECTED_FILE).expect("expected file reads");
+    let lists = LiveLists::new("2026-11-13T11:00:00.000Z".to_string());
+    lists.set_projects(Arc::new(
+        Held::<ProjectsList>::new(text).expect("expected file validates"),
+    ));
+    lists.snapshot()
+}
+
+fn seeded_db() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    crate::db::migrate(&conn).unwrap();
+    crate::db::seed::seed_test_data(&conn).unwrap();
+    conn
 }
 
 /// A seeded database with a published `Puck Playbook` project row (the
 /// table keeps its rows; the prompt must not read them).
 fn db_with_published_playbook() -> Connection {
-    let conn = common::seeded_db();
+    let conn = seeded_db();
     conn.execute(
         "INSERT INTO projects (title, slug, summary, description, tech_stack, url, sort_order, published)
          VALUES ('Puck Playbook', 'puck-playbook', 'A playbook', 'Playbook details', '[]', '', 99, 1)",
@@ -88,12 +96,12 @@ fn db_with_published_playbook() -> Connection {
 
 fn chat_prompt() -> String {
     let conn = db_with_published_playbook();
-    build_system_prompt(&conn, &loaded_list()).expect("chat prompt builds")
+    build_system_prompt(&conn, &loaded_snapshot()).expect("chat prompt builds")
 }
 
 fn fit_prompt() -> String {
     let conn = db_with_published_playbook();
-    build_fit_prompt(&conn, &loaded_list()).expect("fit prompt builds")
+    build_fit_prompt(&conn, &loaded_snapshot()).expect("fit prompt builds")
 }
 
 /// Characters that can occur in a repo name, so a URL is matched as a whole

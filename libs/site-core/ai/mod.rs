@@ -1,5 +1,7 @@
 pub mod anthropic_stream;
 pub mod context;
+#[cfg(test)]
+mod projects_prompt_tests;
 mod invisible_table;
 pub mod prompt_templates;
 pub mod prompts;
