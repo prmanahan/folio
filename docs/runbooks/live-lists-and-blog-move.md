@@ -8,7 +8,7 @@ Source: `docs/specs/2026-11-18-live-lists-and-blog-move.md`, blob `4e8af5ed0aa02
 
 **Unpublished at first run** (Peter, 2026-11-20: "Unpublish at first run"; review finding ACTOR-6). After merge 1 nothing in the app can unpublish an article, and `libs/site-core/ai/context.rs` still puts every `articles` row with `published = 1`, full text included, into the chat and fit prompts until merge 2's T11 (R-20) moves them to mnemra.dev's RSS feed. This step sets "The Workflow Didn't Change" unpublished in the production DB so the prompts stop quoting it.
 
-**Draft, not run.** No step here has been executed against production. The first execution is Peter's attended stop, and the operator records the actual output of each command in the T6 report.
+**Draft, not run, except Route B.** Route B ran on 2026-11-20 (see the route choice above). No other step here has been executed against production. The first execution of each is Peter's attended stop, and the operator records the actual output of each command in the T6 report.
 
 **Output hygiene (both routes).** Record command output only. Do not run `env` or `printenv`, and do not paste terminal scrollback, the admin session cookie or a HAR.
 
@@ -75,6 +75,8 @@ Expect `1` (a "database is locked" error is safe to retry), then re-run B4's SEL
 
 ## Rollback, merge 1
 
+**This section applies only until merge 2 deploys.** After that, use "Rollback, merge 2".
+
 **Rollback, merge 1.** `fly.toml` still runs `./folio check-projects` after merge 1.
 - **Primary:** revert through `main`, which deploys and fetches a fresh list in CI. It needs GitHub up. The revert must cover all of merge 1's commits, which are the commits PR #80 landed. Merge 1 lands by rebase-merge, so their SHAs on main differ from the branch's: take the range from the PR's merge record, not from branch history.
 - **Fast path.** Recorded image, verbatim: `registry.fly.io/folio-prmanahan:deployment-01M7TFD33NVDSNFFY340FW1KA9` (release v81, re-recorded 2026-11-20, confirmed running by `fly status`). Re-run `fly releases --image -a folio-prmanahan` immediately before the merge; the T6 report carries the final value.
@@ -82,26 +84,30 @@ Expect `1` (a "database is locked" error is safe to retry), then re-run B4's SEL
   - **Run**, from a checkout root that holds `fly.toml`: `fly deploy --image <recorded image> --skip-release-command -a folio-prmanahan`. The recorded image's baked `projects.json` is past its 30-minute bound, so without that flag the release command refuses the deploy.
   - **Post-check:** `fly releases --image -a folio-prmanahan` shows a new top release with the recorded image. Then run `curl -sS -o /dev/null -w '%{http_code}\n' https://peter.manahan.io/api/health` (this wakes the auto-stopped machine; `fly status` may show it stopped), expecting `200`, and `curl -sS -o /dev/null -w '%{http_code}\n' https://peter.manahan.io/articles`, expecting `200` from the old release. `--fail` is not used: it exits 0 on a 3xx, so the printed code is the check. A `301` on `/articles` means the new release is still serving.
 - **After either,** the old release serves its own `/articles` pages again.
-- **Rolled-back state (fast path).** `main` still contains merge 1 and CI deploys every push to main. Merge nothing else until the revert PR is open and merged. A later `fly deploy --image <recorded image>` without `--skip-release-command` fails the release command on the stale baked list. This is expected and safe. The CI deploy is unaffected, since it fetches a fresh list first.
+- **Rolled-back state (fast path).** `main` still contains merge 1 and CI deploys every push to main. Merge nothing else until the revert PR is open and merged. A later `fly deploy --image <recorded image>` without `--skip-release-command` fails the release command on the stale baked list. This is expected and safe.
 
 ## Rollback, merge 2
 
 **Rollback, merge 2.**
 - **Primary:** redeploy merge 1's recorded image with `fly deploy --image <recorded image> -a folio-prmanahan`, from a post-merge-2 checkout. A pre-merge-2 checkout's `fly.toml` still runs `./folio check-projects`, and the image's baked `projects.json` is past its 30-minute bound, so the release command refuses the deploy.
+  - **Recorded image, verbatim:** `registry.fly.io/folio-prmanahan:deployment-01M7WSJ49A5MFBY90G3GZCF5KE` (release v82, merge 1, read 2026-11-24). Re-run `fly releases --image -a folio-prmanahan` immediately before the merge; the T18 report carries the final value. Do not use the v81 image in the merge-1 section.
+  - **Post-check:** `fly releases --image -a folio-prmanahan` shows a new top release with that image. Then `curl -sS -o /dev/null -w '%{http_code}\n' https://peter.manahan.io/api/health` returns `200` (this wakes the auto-stopped machine), and `curl -sS -o /dev/null -w '%{http_code}\n' https://peter.manahan.io/api/lists/freshness` returns `404`.
 - **Slow path:** revert merge 2 through `main`, which deploys. It needs GitHub up, because the reverted code fetches the list in CI.
 - **After either,** the old release ignores the `live_lists` table and serves its own baked list, and its prompt reads the `articles` table. `/api/lists/freshness` answers the JSON 404, so the daily check is red every day; that is expected.
 - **Rolled-back state (image rollback).** `main` still contains merge 2 and CI deploys every push to main. Merge nothing else until the revert PR is open and merged: the next push to main redeploys merge 2 through CI and undoes the rollback.
 - **Rolling back for bad content:** set `LIVE_LISTS_DISABLED` for that list before rolling forward. Otherwise the poisoned row loads and is served from the first request.
 
+**Triage: a red post-deploy check after merge 2.** Run `fly logs -a folio-prmanahan --no-tail`. If a `live lists refresh` line shows `requests=` containing `:403` or `:429`, or `ratelimit_remaining=` ending `:0`, the cause is the parked GitHub rate budget (Frame FQ-2), not a defect, and the check will go green once the budget resets and a refresh succeeds. The check's own output shows only `RED: <list> has no time` with the freshness status, so the log line is how to tell. Fly's egress to GitHub was not measured, so this rule rests on the log line alone.
+
 ## Break-glass runbook
 
 **Break-glass runbook** (final wording; steps locked at Frame D-10):
 1. `fly secrets set LIVE_LISTS_DISABLED=<projects|articles|projects,articles> -a folio-prmanahan`. If the machine does not restart on its own, restart it. At start the server deletes that list's stored row.
-2. **Stop unless both hold:**
+2. First wake the machine: `curl -sS -o /dev/null -w '%{http_code}\n' https://peter.manahan.io/api/health`, expecting `200`. Then read the start line: `fly logs -a folio-prmanahan --no-tail | grep 'live lists start'`. **Stop unless both hold:**
    - The start log line names the list with outcome `deleted` or `absent`. If it says `failed`, do not go on to step 5: the bad row is still stored.
    - `https://peter.manahan.io/api/lists/freshness` reports that list as `null`. For projects, `/api/lists/projects` also answers 503.
 
-   If the list is not named, check the secret's name.
+   If the list is not named, check the secret's name. A misspelled or miscased value names both lists and deletes the other list's row too; step 5's refresh restores it.
 3. While the switch is set, the daily check goes red, and so does the post-deploy check on every deploy. That is the switch working. A misspelled value disables both lists and logs at `error`.
 4. Correct the text at its source: the GitHub description, or the mnemra.dev post.
-5. `fly secrets unset LIVE_LISTS_DISABLED -a folio-prmanahan`, restarting if needed. Confirm the list's time in the freshness read is later than the unset.
+5. `fly secrets unset LIVE_LISTS_DISABLED -a folio-prmanahan`, restarting if needed. Confirm the list's time in the freshness read is later than the unset. If freshness reads `null` right after the restart, re-read for up to 150 s before treating it as a failure.
