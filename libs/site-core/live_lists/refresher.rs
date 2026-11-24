@@ -89,6 +89,14 @@ impl FetchReport {
 
 /// A list's source: GitHub for projects, the feed for articles.
 pub trait ListSource: Send + Sync {
+    /// The requests a fetch had completed when the refresh bound cancelled
+    /// it, so the summary line still carries them (R-30). A source that makes
+    /// more than one request overrides this; one request cannot outlast the
+    /// bound, so the default is none.
+    fn cancelled_requests(&self) -> Vec<RequestNote> {
+        Vec::new()
+    }
+
     /// Fetch the list once. `now` is the wall clock's instant, for the
     /// document's `fetched_at`. There is no retry inside a refresh (R-4).
     fn fetch(&self, now: OffsetDateTime) -> BoxFuture<'_, FetchReport>;
@@ -217,7 +225,7 @@ impl Refresher {
         let (document, skipped, requests) = match fetch {
             Fetch::Disabled => return ListOutcome::idle(list, Outcome::Disabled),
             Fetch::NoSource => return ListOutcome::idle(list, Outcome::NoSource),
-            Fetch::BoundPassed => (Err(ReasonCode::RefreshBoundPassed), vec![], vec![]),
+            Fetch::BoundPassed(notes) => (Err(ReasonCode::RefreshBoundPassed), vec![], notes),
             Fetch::Reported(r) => (r.document, r.skipped, r.requests),
         };
         let result = document.and_then(|text| match list {
@@ -276,18 +284,28 @@ async fn fetch(
         return (Fetch::NoSource, Duration::ZERO);
     };
     let began = tokio::time::Instant::now();
-    let fetched = match tokio::time::timeout(REFRESH_BOUND, source.fetch(now)).await {
+    let fetched = match tokio::time::timeout(refresh_bound(), source.fetch(now)).await {
         Ok(report) => Fetch::Reported(report),
-        Err(_elapsed) => Fetch::BoundPassed,
+        Err(_elapsed) => Fetch::BoundPassed(source.cancelled_requests()),
     };
     (fetched, began.elapsed())
+}
+
+/// The bound a refresh uses: [`REFRESH_BOUND`], except in a test that set one.
+fn refresh_bound() -> Duration {
+    #[cfg(test)]
+    if let Some(bound) = BOUND_FOR_TEST.with(std::cell::Cell::get) {
+        return bound;
+    }
+    REFRESH_BOUND
 }
 
 /// What a list's fetch produced, before commit.
 enum Fetch {
     Disabled,
     NoSource,
-    BoundPassed,
+    /// The bound passed; the requests the cancelled fetch had completed.
+    BoundPassed(Vec<RequestNote>),
     Reported(FetchReport),
 }
 

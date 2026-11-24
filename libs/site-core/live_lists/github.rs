@@ -9,6 +9,8 @@
 //! Every failure is a [`ReasonCode`]; no response byte reaches a log line
 //! (R-30).
 
+use std::sync::{Mutex, PoisonError};
+
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -40,34 +42,49 @@ const OWNERS: [Owner; 2] = [
 /// Fetches the projects document from GitHub.
 pub struct GithubProjectsSource {
     client: OutboundClient,
+    /// The requests the fetch in flight has completed. Written as each
+    /// completes, so the refresher can read them when the refresh bound
+    /// cancels the fetch and drops its future. One fetch runs at a time (the
+    /// refresher is single-flight), and the lock is never held across an await.
+    progress: Mutex<Vec<RequestNote>>,
 }
 
 impl GithubProjectsSource {
     pub fn new(client: OutboundClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            progress: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn note(&self, note: RequestNote) {
+        self.progress
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(note);
+    }
+
+    fn take_notes(&self) -> Vec<RequestNote> {
+        std::mem::take(&mut *self.progress.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     async fn run(&self, now: OffsetDateTime) -> FetchReport {
-        let mut requests = Vec::new();
-        let document = self.document(now, &mut requests).await;
+        self.take_notes();
+        let document = self.document(now).await;
         FetchReport {
             document,
             skipped: Vec::new(),
-            requests,
+            requests: self.take_notes(),
         }
     }
 
     /// Each owner in turn: its pages, then R-4's checks, R-3's exclusions and
     /// R-8's order. The first failure ends the fetch, so no later owner is
     /// requested (one request per URL attempted, R-4).
-    async fn document(
-        &self,
-        now: OffsetDateTime,
-        requests: &mut Vec<RequestNote>,
-    ) -> Result<String, ReasonCode> {
+    async fn document(&self, now: OffsetDateTime) -> Result<String, ReasonCode> {
         let mut groups = Vec::with_capacity(OWNERS.len());
         for owner in &OWNERS {
-            let elements = self.owner_elements(owner, requests).await?;
+            let elements = self.owner_elements(owner).await?;
             let repos = repos_of(owner.name, &elements)?;
             groups.push(json!({ "owner": owner.name, "repos": repos }));
         }
@@ -79,33 +96,33 @@ impl GithubProjectsSource {
     }
 
     /// Every element of every page of one owner (R-1, R-4).
-    async fn owner_elements(
-        &self,
-        owner: &Owner,
-        requests: &mut Vec<RequestNote>,
-    ) -> Result<Vec<Value>, ReasonCode> {
+    async fn owner_elements(&self, owner: &Owner) -> Result<Vec<Value>, ReasonCode> {
         let mut elements = Vec::new();
         let mut page = Page::FIRST;
         loop {
             let fetched = match self.client.fetch((owner.target)(page)).await {
                 Ok(fetched) => fetched,
                 Err(FetchFailure { reason, note }) => {
-                    requests.extend(note);
+                    note.into_iter().for_each(|n| self.note(n));
                     return Err(reason);
                 }
             };
-            requests.push(fetched.note);
+            self.note(fetched.note);
             // The parse error is dropped: its text may quote the body (R-30).
             match serde_json::from_slice::<Value>(&fetched.body) {
                 Ok(Value::Array(items)) => elements.extend(items),
                 Ok(_) | Err(_) => return Err(ReasonCode::ProjectsBodyNotArray),
             }
-            let next = fetched
+            match fetched
                 .link
                 .as_deref()
-                .map_or(LinkNext::NoNext, has_rel_next);
-            if next != LinkNext::Next {
-                return Ok(elements);
+                .map_or(LinkNext::NoNext, has_rel_next)
+            {
+                LinkNext::Next => {}
+                LinkNext::NoNext => return Ok(elements),
+                // Whether another page exists is unknown: fail, never end the
+                // list early.
+                LinkNext::Malformed => return Err(ReasonCode::LinkMalformed),
             }
             // The next page's URL is the fixed one plus `&page=N`, never the
             // URL in the header. At the cap, a further `next` is a failure.
@@ -117,6 +134,10 @@ impl GithubProjectsSource {
 impl ListSource for GithubProjectsSource {
     fn fetch(&self, now: OffsetDateTime) -> BoxFuture<'_, FetchReport> {
         Box::pin(self.run(now))
+    }
+
+    fn cancelled_requests(&self) -> Vec<RequestNote> {
+        self.take_notes()
     }
 }
 
@@ -195,58 +216,94 @@ fn repos_of(owner: &str, elements: &[Value]) -> Result<Vec<Value>, ReasonCode> {
         .collect())
 }
 
-/// Whether a `Link` header value carries a link whose `rel` names `next`
-/// (R-1). The URL inside the angle brackets is never read, and a `rel` inside
-/// one is not a relation. An unterminated target is no link.
+/// What a `Link` header says about the next page (R-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkNext {
+    Next,
+    NoNext,
+    /// The header cannot be read unambiguously, so whether a next page exists
+    /// is unknown.
+    Malformed,
+}
+
+/// Read a `Link` header value (RFC 8288) for a link whose `rel` names `next`.
+/// The URL inside the angle brackets is never read, and a quoted string may
+/// hold `,` `;` `<` and `>`. An unterminated target or quoted string, or text
+/// outside a link-value, is [`LinkNext::Malformed`]: guessing would end the
+/// list early or invent a page.
 pub(crate) fn has_rel_next(link: &str) -> LinkNext {
-    if next_relation(link) {
+    let is_space = |c: char| c.is_ascii_whitespace();
+    let mut rest = link;
+    let mut next = false;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c == ',' || is_space(c));
+        if rest.is_empty() {
+            break;
+        }
+        let Some(target) = rest.strip_prefix('<') else {
+            return LinkNext::Malformed;
+        };
+        let Some(close) = target.find('>') else {
+            return LinkNext::Malformed;
+        };
+        rest = &target[close + 1..];
+        // This link-value's parameters, up to the `,` that ends it.
+        loop {
+            rest = rest.trim_start_matches(is_space);
+            match rest.chars().next() {
+                None | Some(',') => break,
+                Some(';') => {}
+                Some(_) => return LinkNext::Malformed,
+            }
+            rest = rest[1..].trim_start_matches(is_space);
+            let name_end = rest.find(['=', ';', ',']).unwrap_or(rest.len());
+            let name = rest[..name_end].trim();
+            rest = &rest[name_end..];
+            let Some(after_equals) = rest.strip_prefix('=') else {
+                continue;
+            };
+            let after_equals = after_equals.trim_start_matches(is_space);
+            let value = if let Some(quoted) = after_equals.strip_prefix('"') {
+                let Some((value, after)) = quoted_string(quoted) else {
+                    return LinkNext::Malformed;
+                };
+                rest = after;
+                value
+            } else {
+                let end = after_equals.find([';', ',']).unwrap_or(after_equals.len());
+                rest = &after_equals[end..];
+                after_equals[..end].trim().to_string()
+            };
+            if name.eq_ignore_ascii_case("rel")
+                && value
+                    .split_ascii_whitespace()
+                    .any(|token| token.eq_ignore_ascii_case("next"))
+            {
+                next = true;
+            }
+        }
+    }
+    if next {
         LinkNext::Next
     } else {
         LinkNext::NoNext
     }
 }
 
-/// What a `Link` header says about the next page (R-1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LinkNext {
-    Next,
-    NoNext,
-    /// The header cannot be read unambiguously: whether a next page exists is unknown.
-    Malformed,
-}
-
-fn next_relation(link: &str) -> bool {
-    let mut rest = link;
-    while let Some(open) = rest.find('<') {
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('>') else {
-            return false;
-        };
-        let tail = &after[close + 1..];
-        let params_end = tail.find('<').unwrap_or(tail.len());
-        if params_name_next(&tail[..params_end]) {
-            return true;
+/// The text of a quoted string whose opening `"` is already consumed, and what
+/// follows its closing `"`. `\` escapes the next character. `None` when it is
+/// never closed.
+fn quoted_string(after_open: &str) -> Option<(String, &str)> {
+    let mut value = String::new();
+    let mut chars = after_open.char_indices();
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '"' => return Some((value, &after_open[at + 1..])),
+            '\\' => value.push(chars.next()?.1),
+            other => value.push(other),
         }
-        rest = &tail[params_end..];
     }
-    false
-}
-
-/// Whether the `;`-separated parameters hold `rel=` with `next` among its
-/// space-separated tokens.
-fn params_name_next(params: &str) -> bool {
-    params.split(';').any(|param| {
-        let Some((name, value)) = param.split_once('=') else {
-            return false;
-        };
-        name.trim().eq_ignore_ascii_case("rel")
-            && value
-                .trim()
-                .trim_end_matches(|c: char| c == ',' || c.is_whitespace())
-                .trim_matches('"')
-                .split_ascii_whitespace()
-                .any(|token| token.eq_ignore_ascii_case("next"))
-    })
+    None
 }
 
 #[cfg(test)]
