@@ -402,6 +402,7 @@ Every merge to `main` deploys (`.github/workflows/deploy.yml`, no path filter). 
   - [ ] R-4's cases pass: connect, total and refresh-bound timing, the 2 MiB cap both sides, the 10-page cap both sides, 403 and 429, and one request per URL attempted.
     - Each two-sided timing case is first run repeatedly on paused tokio time against the `rcgen` server, and the run count and result are recorded.
     - A case that is not deterministic stops at level 3 with the row's three options. (R-4; Decision levels row "Test clock for R-4's timing cases"; carried DD-review F-1 and G-3)
+    - [ ] held: level 3 (2026-11-24). Run 50 times each on paused tokio time against the rcgen server, the R-4 two-sided timing cases were not deterministic: connect-just-before-5s 38/50, total-just-before-20s 24/50, total-stalled-body 38/50 (connect-never-completes 50/50). The four tests are #[ignore]d in libs/site-core/live_lists/outbound.rs. Waiting on Peter's choice of the row's (a), (b) or (c).
   - [ ] Every R-2, R-3 and R-4 case runs through the production constructor against the local TLS server. Only the trust root, the name map and the clock differ.
     - A request for a name outside the test's map fails with a resolution error.
     - The one-constructor and `#[cfg(test)]` seam clauses are review-checked (signed known gap "TLS test hook by review"). (R-5, D12)
