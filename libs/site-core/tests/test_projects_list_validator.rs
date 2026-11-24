@@ -378,3 +378,94 @@ fn nested_duplicate_repos_key_is_rejected() {
     );
     assert!(matches!(parse(&text), Err(ListError::Json(_))));
 }
+
+// ---- carried from the retired `folio check-projects` black-box suite (T14) ----
+// The validator stays live for the refresher and the store load, so the
+// R-10 wire-shape cases that suite drove through the binary are pinned here
+// at the unit level. The wire shape is `deny_unknown_fields` at every level,
+// and `description` is a required string.
+
+/// An unknown field spliced into the object at `level`, with a range of
+/// value shapes so the rejection does not depend on the value's type.
+#[test]
+fn r10_unknown_field_is_rejected_at_the_top_group_and_repo_level() {
+    let base = doc(&repo("fixture-a", "first"), &repo("fixture-c", "c"));
+    // Control: the unspliced doc is valid, so the splice is what rejects it.
+    assert!(parse(&base).is_ok());
+    let splices = [
+        ("top", r#"{"fetched_at""#),
+        ("group", r#"{"owner":"mnemra""#),
+        ("repo", r#"{"name":"fixture-a""#),
+    ];
+    let values = [
+        "1",
+        "null",
+        r#""https://github.com/mnemra/fixture-a""#,
+        "[]",
+        "{}",
+        "true",
+    ];
+    for (level, anchor) in splices {
+        assert_eq!(base.matches(anchor).count(), 1, "{level} anchor is unique");
+        for value in values {
+            // Insert the key right after the object's opening brace.
+            let spliced =
+                base.replacen(anchor, &format!(r#"{{"extra":{value},{}"#, &anchor[1..]), 1);
+            match parse(&spliced) {
+                Err(ListError::Json(e)) => assert!(
+                    e.to_string().contains("unknown field `extra`"),
+                    "{level}/{value}: rejected for the wrong reason: {e}"
+                ),
+                other => panic!("{level}/{value}: expected ListError::Json, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn r10_description_must_be_a_string_present_and_not_null() {
+    let valid = r#"{"name":"fixture-a","description":"first"}"#.to_string();
+    let bad = [
+        (
+            "missing",
+            r#"{"name":"fixture-a"}"#,
+            "missing field `description`",
+        ),
+        (
+            "null",
+            r#"{"name":"fixture-a","description":null}"#,
+            "invalid type: null",
+        ),
+        (
+            "number",
+            r#"{"name":"fixture-a","description":7}"#,
+            "invalid type: integer",
+        ),
+        (
+            "array",
+            r#"{"name":"fixture-a","description":["x"]}"#,
+            "invalid type: sequence",
+        ),
+        (
+            "object",
+            r#"{"name":"fixture-a","description":{}}"#,
+            "invalid type: map",
+        ),
+        (
+            "bool",
+            r#"{"name":"fixture-a","description":false}"#,
+            "invalid type: boolean",
+        ),
+    ];
+    // Control: the unmutated repo parses.
+    assert!(parse(&mnemra_of(std::slice::from_ref(&valid))).is_ok());
+    for (what, repo_json, reason) in bad {
+        match parse(&mnemra_of(&[repo_json.to_string()])) {
+            Err(ListError::Json(e)) => assert!(
+                e.to_string().contains(reason),
+                "description {what}: wrong reason: {e}"
+            ),
+            other => panic!("description {what}: expected ListError::Json, got {other:?}"),
+        }
+    }
+}
