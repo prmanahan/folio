@@ -7,7 +7,7 @@
 
 use axum::Router;
 use axum::extract::Extension;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
@@ -19,12 +19,34 @@ pub fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/lists/freshness", get(freshness))
 }
 
+/// `no-store` stops an edge-cached answer reporting a false green (R-21).
+const NO_STORE: (header::HeaderName, &str) = (header::CACHE_CONTROL, "no-store");
+const JSON: (header::HeaderName, &str) = (header::CONTENT_TYPE, "application/json");
+const UNAVAILABLE: &str = r#"{"error":"Projects list unavailable"}"#;
+
+/// R-21: the held projects document as stored, or 503 with the fixed body.
 async fn projects(Extension(lists): Extension<LiveLists>) -> Response {
-    StatusCode::NOT_IMPLEMENTED.into_response()
+    match lists.snapshot().projects {
+        Some(held) => (StatusCode::OK, [NO_STORE, JSON], held.json().to_owned()).into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [NO_STORE, JSON],
+            UNAVAILABLE,
+        )
+            .into_response(),
+    }
 }
 
+/// R-22: each list's refresh time (null for no data yet) and `started_at`.
+/// The keys are exactly these three, for the checks that parse them.
 async fn freshness(Extension(lists): Extension<LiveLists>) -> Response {
-    StatusCode::NOT_IMPLEMENTED.into_response()
+    let snapshot = lists.snapshot();
+    let body = serde_json::json!({
+        "projects": snapshot.projects.as_ref().map(|h| h.fetched_at()),
+        "articles": snapshot.articles.as_ref().map(|h| h.fetched_at()),
+        "started_at": lists.started_at(),
+    });
+    (StatusCode::OK, [NO_STORE], axum::Json(body)).into_response()
 }
 
 #[cfg(test)]
