@@ -60,13 +60,29 @@ pub struct RequestNote {
 }
 
 /// What one fetch of one list produced.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct FetchReport {
     /// The list's complete document as JSON text, `fetched_at` included, or
     /// why there is none. The refresher validates it; a source need not.
     pub document: Result<String, ReasonCode>,
     pub skipped: Vec<SkippedPost>,
     pub requests: Vec<RequestNote>,
+}
+
+/// The document text came from a response body, so it is never printed; its
+/// length stands in for it (R-30).
+impl std::fmt::Debug for FetchReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let document = match &self.document {
+            Ok(text) => format!("Ok({} bytes)", text.len()),
+            Err(reason) => format!("Err({reason:?})"),
+        };
+        f.debug_struct("FetchReport")
+            .field("document", &document)
+            .field("skipped", &self.skipped)
+            .field("requests", &self.requests)
+            .finish()
+    }
 }
 
 impl FetchReport {
@@ -88,7 +104,7 @@ impl FetchReport {
 }
 
 /// A list's source: GitHub for projects, the feed for articles.
-pub trait ListSource: Send + Sync {
+pub(crate) trait ListSource: Send + Sync {
     /// The requests a fetch had completed when the refresh bound cancelled
     /// it, so the summary line still carries them (R-30). A source that makes
     /// more than one request overrides this; one request cannot outlast the
@@ -104,7 +120,7 @@ pub trait ListSource: Send + Sync {
 
 /// The sources registered for a start. A list with none is never fetched.
 #[derive(Clone, Default)]
-pub struct Sources {
+pub(crate) struct Sources {
     pub projects: Option<Arc<dyn ListSource>>,
     pub articles: Option<Arc<dyn ListSource>>,
 }
@@ -134,7 +150,7 @@ impl Trigger {
     }
 }
 
-pub struct Refresher {
+pub(crate) struct Refresher {
     lists: LiveLists,
     clock: Arc<dyn WallClock>,
     sources: Sources,
@@ -198,12 +214,26 @@ impl Refresher {
         let now = self.clock.now();
         // Owned inputs, not `&self`: the store is `Send` but not `Sync`, so
         // a borrow of the whole refresher cannot cross an await in a task.
+        //
+        // Each fetch runs in a task of its own, so a source that panics fails
+        // only its list (R-13): the panic ends that task, not this one.
+        let bound = refresh_bound();
         let fetch_of = |list: ListName| {
-            fetch(
+            let began = tokio::time::Instant::now();
+            let task = tokio::spawn(fetch(
                 self.disabled.contains(list),
                 self.sources.get(list).cloned(),
                 now,
-            )
+                bound,
+            ));
+            async move {
+                match task.await {
+                    Ok(done) => done,
+                    // A JoinError is a panic or a cancellation. Its payload is
+                    // not read: it could hold response text (R-30).
+                    Err(_panicked) => (Fetch::SourcePanicked, began.elapsed()),
+                }
+            }
         };
         let (projects, articles) =
             futures::join!(fetch_of(ListName::Projects), fetch_of(ListName::Articles));
@@ -226,6 +256,7 @@ impl Refresher {
             Fetch::Disabled => return ListOutcome::idle(list, Outcome::Disabled),
             Fetch::NoSource => return ListOutcome::idle(list, Outcome::NoSource),
             Fetch::BoundPassed(notes) => (Err(ReasonCode::RefreshBoundPassed), vec![], notes),
+            Fetch::SourcePanicked => (Err(ReasonCode::SourcePanicked), vec![], vec![]),
             Fetch::Reported(r) => (r.document, r.skipped, r.requests),
         };
         let result = document.and_then(|text| match list {
@@ -276,6 +307,7 @@ async fn fetch(
     disabled: bool,
     source: Option<Arc<dyn ListSource>>,
     now: OffsetDateTime,
+    bound: Duration,
 ) -> (Fetch, Duration) {
     if disabled {
         return (Fetch::Disabled, Duration::ZERO);
@@ -284,7 +316,7 @@ async fn fetch(
         return (Fetch::NoSource, Duration::ZERO);
     };
     let began = tokio::time::Instant::now();
-    let fetched = match tokio::time::timeout(refresh_bound(), source.fetch(now)).await {
+    let fetched = match tokio::time::timeout(bound, source.fetch(now)).await {
         Ok(report) => Fetch::Reported(report),
         Err(_elapsed) => Fetch::BoundPassed(source.cancelled_requests()),
     };
@@ -306,6 +338,8 @@ enum Fetch {
     NoSource,
     /// The bound passed; the requests the cancelled fetch had completed.
     BoundPassed(Vec<RequestNote>),
+    /// The source panicked; the list fails for this refresh.
+    SourcePanicked,
     Reported(FetchReport),
 }
 

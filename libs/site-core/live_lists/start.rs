@@ -102,7 +102,7 @@ pub struct StartInputs {
     /// `LIVE_LISTS_DISABLED` as the raw OS value (R-5, R-18), `None` when
     /// unset. A value that is not Unicode must reach the parser as such.
     pub switch: Option<OsString>,
-    pub clock: Arc<dyn WallClock>,
+    pub(crate) clock: Arc<dyn WallClock>,
     /// `None` builds the production sources inside `start` (R-2). Only this
     /// crate's tests set it.
     pub(crate) sources: Option<Sources>,
@@ -158,14 +158,43 @@ impl StartError {
     /// bytes. `main.rs` calls this before it exits: with the payload-free
     /// panic hook installed, a failure must reach the operator through the log,
     /// not through a panic message.
-    pub fn log(&self) {}
+    pub fn log(&self) {
+        match self {
+            StartError::Database(e) => {
+                tracing::error!(error = %e, "Failed to connect to database");
+            }
+            StartError::Store(e) => {
+                tracing::error!(error = %e, "Failed to open the live lists store");
+            }
+            StartError::PasswordHash(e) => {
+                tracing::error!(error = ?e, "Failed to hash the admin password");
+            }
+            StartError::StartedAt(e) => {
+                tracing::error!(error = %e, "Failed to write started_at");
+            }
+            StartError::StaticDir(e) => {
+                tracing::error!(error = %e, "refusing to start: the static directory is unusable");
+            }
+            StartError::CorsOrigin => {
+                tracing::error!("CORS_ORIGIN is not a valid header value");
+            }
+            StartError::InMemoryDatabase => {
+                tracing::error!("DATABASE_URL names an in-memory database; live lists need a file");
+            }
+            // A bind failure's text, "Failed to bind to port", is in `e`.
+            StartError::Serve(e) => {
+                tracing::error!(error = %e, "the server ended");
+            }
+        }
+    }
 }
 
 /// Run the startup sequence, then `serve` the app.
 ///
 /// # Errors
-/// [`StartError`] for the step that failed; panics only where `main.rs`
-/// panicked before (an invalid static directory, a bad `CORS_ORIGIN`).
+/// [`StartError`] for the step that failed. Operator-configuration failures
+/// (static directory, `CORS_ORIGIN`, database, store, password hash, bind)
+/// are errors, never panics.
 pub async fn start<S, Fut>(inputs: StartInputs, serve: S) -> Result<(), StartError>
 where
     S: FnOnce(Router) -> Fut + Send,
@@ -183,14 +212,20 @@ where
     let sources = sources.unwrap_or_else(production_sources);
 
     // R-5 and R-17: a panic must never print its payload (it could hold
-    // response text, R-30). A test build keeps libtest's hook.
+    // response text, R-30). Startup failures that carry only operator
+    // configuration are `StartError`s the caller logs, so the hook hides
+    // nothing an operator needs. A test build keeps libtest's hook, so its
+    // failures stay readable, unless the hook test's child process asks for it.
     #[cfg(not(test))]
     super::panic_hook::install();
+    #[cfg(test)]
+    if std::env::var_os("FOLIO_TEST_PANIC_HOOK_CHILD").is_some() {
+        super::panic_hook::install();
+    }
 
     // The refresher's store is a second connection, so an in-memory database
     // would give it an empty database of its own. Refuse loudly.
     if is_in_memory(&config.database_url) {
-        tracing::error!("DATABASE_URL names an in-memory database; live lists need a file");
         return Err(StartError::InMemoryDatabase);
     }
 
@@ -274,6 +309,10 @@ where
             "http://localhost:3000".to_string()
         }
     };
+    // `build_app` would panic on a bad origin; refuse it here as an error.
+    if cors_origin.parse::<axum::http::HeaderValue>().is_err() {
+        return Err(StartError::CorsOrigin);
+    }
     let origin_lock_state = OriginLockState::new(&config.edge_auth_token);
 
     let global_rate_limit = GlobalRateLimitState::new();
@@ -415,12 +454,14 @@ fn load_enabled<L: ListDocument>(
 
 /// The production serve step: bind `0.0.0.0:port` and serve with connect info.
 ///
-/// # Panics
-/// When the port cannot be bound, as `main.rs` did.
+/// # Errors
+/// An error whose text starts "Failed to bind to port" when the port cannot be
+/// bound, or the server's own error. It never panics, so the process panic
+/// hook does not hide it.
 pub async fn serve_tcp(port: u16, app: Router) -> io::Result<()> {
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
-        .expect("Failed to bind to port");
+        .map_err(|e| io::Error::new(e.kind(), format!("Failed to bind to port {port}: {e}")))?;
     tracing::info!(port, "listening");
     axum::serve(
         listener,

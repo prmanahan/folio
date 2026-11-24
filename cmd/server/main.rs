@@ -76,7 +76,10 @@ async fn run_server() {
     let inputs = StartInputs::production(config, cors_origin, switch);
     match start(inputs, move |app| serve_tcp(port, app)).await {
         Ok(()) => {}
-        Err(e) => panic!("server start failed: {e:?}"),
+        Err(e) => {
+            e.log();
+            std::process::exit(1);
+        }
     }
 }
 

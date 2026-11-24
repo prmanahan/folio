@@ -4,8 +4,9 @@
 //! whatever the readers serve was validated, and the stored row, the held
 //! text and a 200 body are one string (R-15, R-21).
 //!
-//! The writers are the start-up load and the refresher, both inside this
-//! crate (the setters are `pub(crate)`); no request handler can write. A write
+//! The setters are `pub(crate)`: any code in this crate can call them, and
+//! none outside it can. In practice the writers are the start-up load and the
+//! refresher; no request handler calls them (review-checked). A write
 //! replaces one `Arc` under a lock held for that assignment alone, so no lock
 //! is held across a path that can panic (R-17).
 
@@ -76,10 +77,21 @@ impl ListDocument for ArticlesList {
 }
 
 /// A validated document and the exact text it was validated from.
-#[derive(Debug)]
 pub struct Held<L> {
     list: L,
     json: String,
+}
+
+/// The held text came from a response body, so it is never printed; its
+/// length stands in for it (R-30).
+impl<L: ListDocument> std::fmt::Debug for Held<L> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Held")
+            .field("list", &L::NAME.as_str())
+            .field("fetched_at", &self.list.fetched_at())
+            .field("json_bytes", &self.json.len())
+            .finish()
+    }
 }
 
 impl<L: ListDocument> Held<L> {
