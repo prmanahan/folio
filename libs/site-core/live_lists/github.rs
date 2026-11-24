@@ -1225,7 +1225,7 @@ mod tests {
         assert!(line.contains(r#"reason="refresh_bound_passed""#), "{line}");
         assert!(line.contains(r#"list="projects""#), "{line}");
         let summary = log.one_line("live lists refresh");
-        let six = vec!["projects:200"; 6].join(",");
+        let six = ["projects:200"; 6].join(",");
         assert!(summary.contains(&six), "{summary}");
         assert!(
             !summary.contains(&format!("{six},projects:200")),
